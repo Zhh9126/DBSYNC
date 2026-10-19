@@ -1,0 +1,30 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.sdk.plugin;
+
+import org.dbdatasync.common.util.StringUtil;
+
+import java.util.List;
+
+/**
+ * @Author 穿云
+ * @Version 1.0.0
+ * @Date 2024-12-05 00:28
+ */
+public interface ReaderContext extends BaseContext {
+
+    boolean isSupportedCursor();
+
+    List<Object> getArgs();
+
+    Object[] getCursors();
+
+    int getPageIndex();
+
+    int getPageSize();
+
+    default String getCommandKey(){
+        return StringUtil.EMPTY;
+    }
+}

@@ -1,0 +1,119 @@
+/**
+ * DBDataSync Copyright 2020-2026 All Rights Reserved.
+ */
+package org.dbdatasync.biz.checker.impl.tablegroup;
+
+import org.dbdatasync.common.model.ConfigModel;
+import org.dbdatasync.common.util.JsonUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.parser.TableGroupProfile;
+import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.util.ConnectorInstanceUtil;
+import org.dbdatasync.parser.util.ConnectorServiceContextUtil;
+import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.model.Filter;
+import org.dbdatasync.sdk.model.Table;
+import org.dbdatasync.sdk.model.ValidateSyncTask;
+import org.dbdatasync.sdk.spi.TaskService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.util.Assert;
+
+import javax.annotation.Resource;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * @author 穿云
+ * @version 1.0.0
+ * @date 2026-03-30 20:00
+ */
+@Component
+public class ValidateSyncTableGroupChecker extends TableGroupChecker {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private TableGroupProfile tableGroupProfile;
+
+    @Resource
+    private TaskService<ValidateSyncTask> taskService;
+
+    @Override
+    public ConfigModel checkAddConfigModel(Map<String, String> params) {
+        logger.info("params:{}", params);
+        String taskId = params.get("taskId");
+        String sourceTable = params.get("sourceTable");
+        String targetTable = params.get("targetTable");
+        String sourceType = params.get("sourceType");
+        String targetType = params.get("targetType");
+        String sourceTablePK = params.get("sourceTablePK");
+        String targetTablePK = params.get("targetTablePK");
+        String fieldMappings = params.get("fieldMappings");
+        Assert.hasText(taskId, "tableGroup taskId is empty.");
+        Assert.hasText(sourceTable, "tableGroup sourceTable is empty.");
+        Assert.hasText(targetTable, "tableGroup targetTable is empty.");
+        Assert.hasText(sourceType, "tableGroup sourceType is empty.");
+        Assert.hasText(targetType, "tableGroup targetType is empty.");
+        ValidateSyncTask task = taskService.get(taskId);
+        Assert.notNull(task, "task can not be null.");
+
+        // 检查是否存在重复映射关系
+        checkRepeatedTable(taskId, sourceTable, targetTable);
+
+        // 获取连接器信息
+        TableGroup tableGroup = new TableGroup();
+        tableGroup.setTaskId(taskId);
+        Table source = findTable(task.getSourceTable(), sourceTable, sourceType);
+        Table target = findTable(task.getTargetTable(), targetTable, targetType);
+        tableGroup.setSourceTable(updateTableColumn(task, ConnectorInstanceUtil.SOURCE_SUFFIX, sourceTablePK, source));
+        tableGroup.setTargetTable(updateTableColumn(task, ConnectorInstanceUtil.TARGET_SUFFIX, targetTablePK, target));
+
+        // 修改基本配置
+        this.modifyConfigModel(tableGroup, params);
+
+        // 匹配相似字段映射关系
+        if (StringUtil.isNotBlank(fieldMappings)) {
+            matchFieldMapping(tableGroup, fieldMappings);
+        } else {
+            matchFieldMapping(tableGroup);
+        }
+
+        return tableGroup;
+    }
+
+    @Override
+    public ConfigModel checkEditConfigModel(Map<String, String> params) {
+        logger.info("params:{}", params);
+        Assert.notEmpty(params, "TableGroupChecker check params is null.");
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        TableGroup tableGroup = tableGroupProfile.getTableGroup(id);
+        Assert.notNull(tableGroup, "Can not find tableGroup.");
+        String fieldMappingJson = params.get("fieldMapping");
+        Assert.hasText(fieldMappingJson, "TableGroupChecker check params fieldMapping is empty");
+
+        // 修改基本配置
+        this.modifyConfigModel(tableGroup, params);
+
+        // 过滤条件
+        String filterJson = params.get("filter");
+        if (StringUtil.isNotBlank(filterJson)) {
+            List<Filter> list = JsonUtil.jsonToArray(filterJson, Filter.class);
+            tableGroup.setFilter(list);
+        }
+
+        // 字段映射关系
+        setFieldMapping(tableGroup, fieldMappingJson);
+
+        return tableGroup;
+    }
+
+    public Table updateTableColumn(ValidateSyncTask task, String suffix, String primaryKeyStr, Table table) {
+        boolean isSource = StringUtil.equals(ConnectorInstanceUtil.SOURCE_SUFFIX, suffix);
+        DefaultConnectorServiceContext context = ConnectorServiceContextUtil.buildConnectorServiceContext(task, isSource);
+        return this.updateTableColumn(context, primaryKeyStr, table);
+    }
+
+}

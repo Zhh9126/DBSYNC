@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<!-- 全局同步数据明细：仪表盘统计卡片下钻目标 -->
+<div th:fragment="content" id="monitorDataPage" th:attr="data-status=${drillStatus},data-event=${drillEvent}">
+    <div class="form-container">
+        <div class="card-header flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i class="fa fa-database text-primary"></i>
+                <h3 class="card-title">同步数据明细</h3>
+                <span class="text-xs text-tertiary ml-2">所有任务的同步记录明细，可按事件类型与结果过滤</span>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" onclick="doLoader('/index')">
+                <i class="fa fa-arrow-left"></i> 返回仪表盘
+            </button>
+        </div>
+        <div class="card-body">
+            <!-- 过滤栏 -->
+            <div class="grid grid-cols-12 items-center gap-3 mb-4">
+                <div class="lg:col-span-3 flex items-center gap-2">
+                    <label class="text-xs text-secondary whitespace-nowrap">事件类型</label>
+                    <select id="eventFilter" class="form-control">
+                        <option value="">全部事件</option>
+                        <option value="INSERT">新增</option>
+                        <option value="UPDATE">修改</option>
+                        <option value="UPSERT">Upsert</option>
+                        <option value="DELETE">删除</option>
+                        <option value="ALTER">DDL</option>
+                    </select>
+                </div>
+                <div class="lg:col-span-3 flex items-center gap-2">
+                    <label class="text-xs text-secondary whitespace-nowrap">同步结果</label>
+                    <select id="statusFilter" class="form-control">
+                        <option value="">全部</option>
+                        <option value="1">成功</option>
+                        <option value="0">失败</option>
+                    </select>
+                </div>
+                <div class="lg:col-span-6 flex items-center justify-end gap-2">
+                    <button type="button" class="btn btn-primary" onclick="window.dataListSearch && window.dataListSearch(1)">
+                        <i class="fa fa-search"></i> 查询
+                    </button>
+                </div>
+            </div>
+
+            <!-- 表格 -->
+            <table class="table">
+                <thead>
+                <tr>
+                    <th class="w-40">任务</th>
+                    <th class="w-56">表映射</th>
+                    <th class="w-24">事件</th>
+                    <th class="w-24">结果</th>
+                    <th>失败原因</th>
+                    <th class="w-44">时间</th>
+                    <th class="w-32">操作</th>
+                </tr>
+                </thead>
+                <tbody id="dataDetailTableBody"></tbody>
+            </table>
+            <div class="blank-block"></div>
+            <!-- 分页 -->
+            <div id="dataDetailPagination" class="mt-3"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 页面 JS -->
+<script type="text/javascript" th:src="@{/js/monitor/data-list.js}"></script>
+</html>

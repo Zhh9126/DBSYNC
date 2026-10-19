@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<div class="form-container">
+    <form id="validate-sync-modify-form" method="post">
+        <div class="card-header">
+            <div class="grid grid-cols-6 items-center">
+                <div class="lg:col-span-2"></div>
+                <div class="lg:col-span-2 card-title text-center">
+                    <span id="task-name-modify" class="text-xxl">[[${task?.name}]]</span>
+                    <i class="fa fa-edit text-info text-xl cursor-pointer" th:title="点击修改名称" th:onclick="taskModifyName()"></i>
+                    <!-- 隐藏表单值 -->
+                    <div class="hidden">
+                        <input id="taskId" name="id" type="text" th:value="${task?.id}"/>
+                        <input name="name" type="text" th:value="${task?.name}"/>
+                    </div>
+                </div>
+                <div class="lg:col-span-2"></div>
+            </div>
+        </div>
+        <div class="card-body">
+            <!-- 校验关系 -->
+            <div class="grid grid-cols-3">
+                <div class="flex items-center">
+                    <img draggable="false" class="connector-logo-lg" th:src="@{'/img/'+ ${task?.sourceConnector?.config?.connectorType} + '.png'}" alt="" />
+                    <div class="ml-2">
+                        <p class="text-md">[[${task?.sourceConnector?.name}]]</p>
+                        <p class="text-sm">
+                            源库：[[${task?.sourceDatabase}]]
+                            <span th:if="${!#strings.isEmpty(task?.sourceDatabase) and !#strings.isEmpty(task?.sourceSchema)}"> (</span>
+                            [[${task?.sourceSchema}]]
+                            <span th:if="${!#strings.isEmpty(task?.sourceDatabase) and !#strings.isEmpty(task?.sourceSchema)}"> )</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="text-info items-center text-center">
+                    <p></p>
+                    <i class="fa fa-arrow-right fa-3x"></i>
+                </div>
+                <div class="flex items-center">
+                    <img draggable="false" class="connector-logo-lg" th:src="@{'/img/'+ ${task?.targetConnector?.config?.connectorType} + '.png'}" alt="" />
+                    <div class="ml-2">
+                        <p class="text-md">[[${task?.targetConnector?.name}]]</p>
+                        <p class="text-sm">
+                            目标库：[[${task?.targetDatabase}]]
+                            <span th:if="${!#strings.isEmpty(task?.targetDatabase) and !#strings.isEmpty(task?.targetSchema)}"> (</span>
+                            [[${task?.targetSchema}]]
+                            <span th:if="${!#strings.isEmpty(task?.targetDatabase) and !#strings.isEmpty(task?.targetSchema)}"> )</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 同步模式选择 -->
+            <div class="flex items-center justify-end mt-4">
+                <div class="form-actions">
+                    <span th:if="${task?.metaState eq 1 or task?.metaState eq 2}">
+                        <button type="button" class="btn btn-info" disabled>
+                            <i class="fa fa-save"></i> 运行中
+                        </button>
+                    </span>
+                    <button th:if="${task?.metaState eq null or task?.metaState eq 0 or task?.metaState eq 3}"
+                            id="task-submit-btn"
+                            type="button"
+                            class="btn btn-primary">
+                        <i class="fa fa-save"></i> 保存
+                    </button>
+                    <button type="button" class="btn btn-outline" onclick="backIndexPage()">
+                        <i class="fa fa-reply"></i> 返回
+                    </button>
+                </div>
+            </div>
+
+            <!-- 映射关系区域 -->
+            <h3><i class="fa fa-table text-success"></i> 映射关系</h3>
+            <div th:replace="validate-sync/editTable :: content"></div>
+
+            <!-- 高级配置区域 -->
+            <h3><i class="fa fa-table text-info"></i> 高级配置</h3>
+            <p class="text-xs text-tertiary">对所有表映射关系都生效</p>
+              <!-- 全量配置 -->
+             <div th:replace="validate-sync/editSetting :: content"></div>
+
+            <!-- 执行策略选择 -->
+            <p><i class="fa fa-history text-success"></i> 执行策略</p>
+            <div class="grid grid-cols-4">
+                <div id="task-trigger" class="radio-group">
+                    <input type="radio" name="trigger" value="once" th:checked="${'once' eq task?.trigger}" />
+                    <label>执行一次</label>
+                    <input type="radio" name="trigger" value="timing" th:checked="${'timing' eq task?.trigger}" />
+                    <label>定时</label>
+                </div>
+            </div>
+
+            <!-- Cron配置 -->
+            <div th:id="trigger-cron" class="hidden">
+                <div class="grid grid-cols-3 mt-4">
+                    <div class="form-item">
+                        <label class="form-label">Cron<strong class="text-primary">*</strong></label>
+                        <input class="form-control" required name="cron" th:value="${task?.cron}?:'*/30 * * * * ?'" type="text" placeholder="*/30 * * * * ?" />
+                    </div>
+                </div>
+            </div>
+
+            <p><i class="fa fa-database text-success"></i> 校验范围</p>
+            <div id="validate-sync-scope" class="checkbox-group mt-4"
+                 th:with="schemaUnsupported=${#strings.equalsIgnoreCase(#strings.defaultString(task?.sourceConnector?.config?.connectorType, ''), 'elasticsearch') or #strings.equalsIgnoreCase(#strings.defaultString(task?.sourceConnector?.config?.connectorType, ''), 'sqlite') or #strings.equalsIgnoreCase(#strings.defaultString(task?.targetConnector?.config?.connectorType, ''), 'elasticsearch') or #strings.equalsIgnoreCase(#strings.defaultString(task?.targetConnector?.config?.connectorType, ''), 'sqlite')}">
+                <input type="checkbox" name="enableSync" value="true" th:checked="${task?.enableSync}" />
+                <label>订正</label>
+
+                <input type="checkbox" name="enableRowData" value="true" th:checked="${task?.enableRowData}" />
+                <label>行数据</label>
+
+                <input type="checkbox" name="enableSchema" value="true"
+                       th:disabled="${schemaUnsupported}"
+                       th:checked="${!schemaUnsupported and task?.enableSchema}" />
+                <label>表结构</label>
+<!--                <input type="checkbox" name="enableIndex" value="true" th:checked="${task?.enableIndex}" />-->
+<!--                <label>索引</label>-->
+<!--                <input type="checkbox" name="enableTrigger" value="true" th:checked="${task?.enableTrigger}" />-->
+<!--                <label>触发器</label>-->
+<!--                <input type="checkbox" name="enableFunction" value="true" th:checked="${task?.enableFunction}" />-->
+<!--                <label>函数</label>-->
+            </div>
+
+            <p><i class="fa fa-database text-success"></i> 目标策略</p>
+            <p class="text-xs text-tertiary">反向校验，对比源表，目标表多余的行</p>
+            <div id="validate-sync-target-strategy" class="grid grid-cols-2 gap-4 mt-4">
+                <div class="form-item mb-0">
+                    <label class="form-label">
+                        反向校验
+                        <i class="fa fa-question-circle text-tertiary" title="开启扫描目标表，记录源表不存在的多余行"></i>
+                    </label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableReverseScan" type="checkbox" value="true"
+                                   th:checked="${task?.enableReverseScan}" />
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div id="validate-sync-delete-extra-wrap" class="form-item mb-0 hidden">
+                    <label class="form-label">
+                        反向订正
+                        <i class="fa fa-question-circle text-tertiary" title="任务执行时自动删除源表不存在的多余行，不可恢复；须开启行数据与反向校验"></i>
+                    </label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableReverseSync" type="checkbox" value="true"
+                                   th:checked="${task?.enableReverseSync}" />
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 过滤条件 -->
+            <div th:replace="validate-sync/editFilter :: content"></div>
+
+            <!-- 空白块 -->
+            <div class="blank-block"></div>
+
+        </div>
+    </form>
+</div>
+
+<script type="text/javascript">
+    // 修改驱动名称
+    function taskModifyName() {
+        const $name = $("#task-name-modify");
+        const tmp = $name.text();
+        $name.text("");
+        $name.append("<input type='text' class='form-control text-md'/>");
+        const $input = $name.find("input");
+        $input.focus().val(tmp);
+        $input.blur(function () {
+            $name.text($(this).val());
+            $("#validate-sync-modify-form input[name='name']").val($(this).val());
+            $input.unbind();
+        });
+    }
+
+    function showTriggerConfig(model) {
+        const cron = $("#trigger-cron");
+        if ('once' === model) {
+            cron.addClass("hidden");
+        } else {
+            cron.removeClass("hidden");
+        }
+    }
+
+    // 绑定执行一次+定时切换事件
+    function bindTriggerChange() {
+        const trigger = $('#task-trigger').radioGroup({
+            theme: 'info',
+            size: 'md',
+            onChange: function (value, label) {
+                showTriggerConfig(value);
+            }
+        });
+        // 渲染选择radio配置
+        showTriggerConfig(trigger.getValue());
+    }
+
+    /**
+     * 「行数据」与「表结构」至少勾选一个方可保存。
+     * @param {JQuery} $form 表单
+     * @returns {boolean}
+     */
+    function validateValidateSyncScope($form) {
+        var rowData = $form.find('input[name="enableRowData"]').is(':checked');
+        var schema = $form.find('input[name="enableSchema"]').is(':checked');
+        if (!rowData && !schema) {
+            bootGrowl('请至少勾选「行数据」或「表结构」中的一项。', 'danger');
+            return false;
+        }
+        return true;
+    }
+
+    function setSwitchEnabled($input, enabled) {
+        $input.prop('disabled', !enabled);
+        $input.closest('.form-switch').toggleClass('disabled', !enabled);
+    }
+
+    function syncTargetStrategyState() {
+        var $form = $('#validate-sync-modify-form');
+        var rowData = $form.find('input[name="enableRowData"]').is(':checked');
+        var $reverseScan = $form.find('input[name="enableReverseScan"]');
+        var $reverseSync = $form.find('input[name="enableReverseSync"]');
+        var $deleteWrap = $('#validate-sync-delete-extra-wrap');
+
+        var reverseAllowed = rowData;
+        var reverseChecked = reverseAllowed && $reverseScan.is(':checked');
+
+        if (!reverseAllowed) {
+            $reverseScan.prop('checked', false);
+        }
+        setSwitchEnabled($reverseScan, reverseAllowed);
+
+        $deleteWrap.toggleClass('hidden', !reverseChecked);
+
+        if (!reverseChecked) {
+            $reverseSync.prop('checked', false);
+            setSwitchEnabled($reverseSync, false);
+            return;
+        }
+
+        setSwitchEnabled($reverseSync, true);
+    }
+
+    function validateTargetStrategy($form) {
+        var reverseScan = $form.find('input[name="enableReverseScan"]').is(':checked');
+        var reverseSync = $form.find('input[name="enableReverseSync"]').is(':checked');
+        if (!reverseSync) {
+            return true;
+        }
+        if (!reverseScan) {
+            bootGrowl('反向订正须先开启反向校验。', 'danger');
+            return false;
+        }
+        if (!$form.find('input[name="enableRowData"]').is(':checked')) {
+            bootGrowl('反向订正须同时开启行数据。', 'danger');
+            return false;
+        }
+        return true;
+    }
+
+    function showReverseSyncConfirm(onConfirm) {
+        showConfirm({
+            title: '确定开启反向订正？',
+            message: '以源库为权威基准，删除目标库内源库不存在的冗余记录，删除操作不可恢复，请确认源库数据完整无误后继续。',
+            size: 'large',
+            icon: 'warning',
+            confirmType: 'danger',
+            onConfirm: onConfirm
+        });
+    }
+
+    function bindReverseSyncConfirm() {
+        $('#validate-sync-modify-form input[name="enableReverseSync"]').on('change', function () {
+            var $input = $(this);
+            if ($input.is(':checked')) {
+                $input.prop('checked', false);
+                syncTargetStrategyState();
+                showReverseSyncConfirm(function () {
+                    $input.prop('checked', true);
+                    syncTargetStrategyState();
+                });
+                return;
+            }
+            syncTargetStrategyState();
+        });
+    }
+
+    function submitValidateSyncForm() {
+        var $form = $('#validate-sync-modify-form');
+        if (!validateValidateSyncScope($form)) {
+            return;
+        }
+        if (!validateTargetStrategy($form)) {
+            return;
+        }
+        if (!validateForm($form)) {
+            return;
+        }
+        var saveTask = function () {
+            var $btn = $('#task-submit-btn');
+            var originalText = $btn.html();
+            $btn.html('<i class="fa fa-spinner fa-spin"></i> 保存中...').prop('disabled', true);
+            doPoster('/validate-sync/edit', $form.serializeJson(), function (response) {
+                $btn.html(originalText).prop('disabled', false);
+                if (response.success === true) {
+                    bootGrowl('保存成功!', 'success');
+                    var rawStr = localStorage.getItem('dbdatasync.pagination.validate-sync-list');
+                    var raw = JSON.parse(rawStr);
+                    raw.pageNum = 1;
+                    localStorage.setItem('dbdatasync.pagination.validate-sync-list', JSON.stringify(raw));
+                    backIndexPage();
+                } else {
+                    bootGrowl(response.message, 'danger');
+                }
+            });
+        };
+        saveTask();
+    }
+
+    $(function () {
+        window.backIndexPage = function () {
+            doLoader("/validate-sync/list");
+        };
+
+        bindTriggerChange();
+
+        $('#validate-sync-scope').checkboxGroup({
+            theme: 'info',
+            size: 'md',
+            onChange: function () {
+                syncTargetStrategyState();
+            }
+        });
+        $('#validate-sync-modify-form input[name="enableReverseScan"]').on('change', syncTargetStrategyState);
+        bindReverseSyncConfirm();
+        syncTargetStrategyState();
+
+        // 保存
+        $('#task-submit-btn').click(function () {
+            submitValidateSyncForm();
+        });
+    });
+</script>
+
+</html>

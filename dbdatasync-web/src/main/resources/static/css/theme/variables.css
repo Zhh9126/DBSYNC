@@ -1,0 +1,108 @@
+/**
+ * DBDataSync 设计系统变量
+ * 设计规范：Slate + Teal 专业克制体系（禁止蓝紫渐变 / Ant Blue）
+ */
+
+:root {
+  /* 主色调（Teal） */
+  --primary-color: #0D9488;        /* teal-600 */
+  --primary-hover: #0F766E;        /* teal-700 */
+  --primary-active: #115E59;       /* teal-800 */
+  --primary-light: #CCFBF1;        /* teal-100 浅色高亮底 */
+  --primary-lighter: #F0FDFA;      /* teal-50 极浅底色 */
+  --primary-border: #5EEAD4;       /* teal-300 主色边框 */
+
+  /* 状态色 */
+  --success-color: #059669;        /* emerald-600 */
+  --success-hover: #10B981;
+  --success-light: #D1FAE5;
+  --warning-color: #D97706;        /* amber-600 */
+  --warning-hover: #F59E0B;
+  --warning-light: #FEF3C7;
+  --error-color: #DC2626;          /* red-600 */
+  --error-hover: #EF4444;
+  --error-light: #FEE2E2;
+  --info-color: #0D9488;
+  --info-light: #F0FDFA;
+  --violet-color: #0F766E;         /* 弃用紫色，统一为 teal-700 */
+
+  /* 中性色（Slate） */
+  --text-primary: #0F172A;         /* slate-900 */
+  --text-secondary: #475569;       /* slate-600 */
+  --text-tertiary: #94A3B8;        /* slate-400 */
+  --text-disabled: #CBD5E1;        /* slate-300 */
+
+  /* 背景色 */
+  --bg-primary: #FFFFFF;           /* 卡片/面板 */
+  --bg-secondary: #F8FAFC;         /* 主内容区背景 slate-50 */
+  --bg-tertiary: #F1F5F9;          /* slate-100 */
+  --bg-quaternary: #E2E8F0;        /* slate-200 */
+
+  /* 边框色 */
+  --border-primary: #CBD5E1;       /* slate-300 */
+  --border-secondary: #E2E8F0;     /* slate-200 */
+  --border-tertiary: #F1F5F9;      /* slate-100 */
+
+  /* 侧边栏（深色 Slate） */
+  --sidebar-bg: #1E293B;           /* slate-800 */
+  --sidebar-hover: #334155;        /* slate-700 */
+  --sidebar-active: #0D9488;       /* teal-600 */
+  --sidebar-text: #CBD5E1;         /* slate-300 */
+  --sidebar-text-muted: #64748B;   /* slate-500 */
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 2px 8px 0 rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 4px 12px 0 rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  --shadow-sidebar: 2px 0 8px 0 rgba(0, 0, 0, 0.15);
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-round: 50%;
+
+  /* 间距 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-xxl: 48px;
+
+  /* 字体大小 */
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 18px;
+  --font-size-xl: 20px;
+  --font-size-xxl: 24px;
+  --font-size-xxxl: 32px;
+
+  /* 行高 */
+  --line-height-sm: 1.2;
+  --line-height-md: 1.4;
+  --line-height-lg: 1.6;
+
+  /* 布局尺寸 */
+  --header-height: 64px;
+  --sidebar-width: 240px;
+  --sidebar-collapsed-width: 80px;
+
+  /* 过渡动画 */
+  --transition-fast: 0.2s ease;
+  --transition-normal: 0.3s ease;
+  --transition-slow: 0.5s ease;
+
+  /* Z-index层级 */
+  --z-dropdown: 1000;
+  --z-sticky: 1020;
+  --z-fixed: 1030;
+  --z-modal-backdrop: 1040;
+  --z-modal: 1050;
+  --z-popover: 1060;
+  --z-tooltip: 1070;
+  --z-confirm: 1080;
+}

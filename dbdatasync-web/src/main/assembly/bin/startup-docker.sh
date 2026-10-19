@@ -1,0 +1,124 @@
+#!/bin/bash
+
+# 获取目录路径
+SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
+DBS_HOME=$(cd "$SCRIPT_DIR/.."; pwd)
+echo "DBS_HOME=$DBS_HOME"
+
+# 确保 conf 目录存在
+if [ ! -d "$DBS_HOME/conf" ]; then
+  mkdir -p "$DBS_HOME/conf"
+fi
+
+# 确保 logs 目录存在
+if [ ! -d "$DBS_HOME/logs" ]; then
+  mkdir -p "$DBS_HOME/logs"
+fi
+
+# application.properties
+CONFIG_PATH="$DBS_HOME/conf/application.properties"
+if [ ! -f "$CONFIG_PATH" ]; then
+  echo "The conf/application.properties doesn't exist, please check it first!" >&2
+  exit 1
+fi
+
+###########################################################################
+# JRE 扩展目录：必须包含 sunjce_provider 等，否则 TLS/HTTPS 会报
+# SunTls12RsaPremasterSecret KeyGenerator not available（java.ext.dirs 不能只指向应用 lib）
+resolve_jre_ext_dir() {
+  local java_home_prop
+  if ! command -v java >/dev/null 2>&1; then
+    echo ""
+    return
+  fi
+  java_home_prop=$(java -XshowSettings:properties -version 2>&1 | tr -d '\r' | sed -n 's/^ *java\.home = //p' | head -1)
+  if [[ -n "$java_home_prop" && -d "$java_home_prop/lib/ext" ]]; then
+    echo "$java_home_prop/lib/ext"
+    return
+  fi
+  if [[ -n "${JAVA_HOME:-}" ]]; then
+    if [[ -d "$JAVA_HOME/jre/lib/ext" ]]; then
+      echo "$JAVA_HOME/jre/lib/ext"
+      return
+    fi
+    if [[ -d "$JAVA_HOME/lib/ext" ]]; then
+      echo "$JAVA_HOME/lib/ext"
+      return
+    fi
+  fi
+  echo ""
+}
+
+JAVA_EXT_DIR=$(resolve_jre_ext_dir)
+if [[ -z "$JAVA_EXT_DIR" ]]; then
+  echo "ERROR: Cannot find JRE lib/ext (JCE required for SSL). Set JAVA_HOME or fix PATH to java." >&2
+  exit 1
+fi
+echo "JAVA_EXT_DIR=$JAVA_EXT_DIR"
+
+# set up environment for Java
+#JAVA_HOME=/opt/jdk1.8.0_202
+# 构建 JVM 参数
+JAVA_OPTS=()
+
+ENCRYPT_FILE=''
+if [[ $(uname -m) == "aarch64"* ]]; then
+   ENCRYPT_FILE='libDBDataSync_aarch64.so'
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+   ENCRYPT_FILE='libdbdatasync.so'
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+   ENCRYPT_FILE='libdbdatasync.dylib'
+else
+  echo "Unsupported OS." >&2
+  exit 1
+fi
+
+if [ -e "$DBS_HOME/bin/$ENCRYPT_FILE" ]; then
+  JAVA_OPTS+=("-agentpath:$DBS_HOME/bin/$ENCRYPT_FILE")
+fi
+
+# 1. 内存与基础配置 (放在最前面)
+# 堆：固定 2g，避免无界增长；若容器限 5g 且希望堆外/系统内存可控，可设 JAVA_OPTS="-Xmx3500m" 等覆盖
+JAVA_OPTS+=("-Xms2g")
+JAVA_OPTS+=("-Xmx2g")
+JAVA_OPTS+=("-Xss512k")
+JAVA_OPTS+=("-XX:MetaspaceSize=256m")
+JAVA_OPTS+=("-XX:MaxMetaspaceSize=384m")
+# 直接内存：限制 NIO 等堆外占用
+JAVA_OPTS+=("-XX:MaxDirectMemorySize=256m")
+JAVA_OPTS+=("-XX:+DisableAttachMechanism")
+JAVA_OPTS+=("-XX:NativeMemoryTracking=summary")
+# 允许通过环境变量追加 JVM 参数（如 JAVA_OPTS_EXT="-Xmx3500m -XX:MaxDirectMemorySize=512m"）
+if [[ -n "${JAVA_OPTS_EXT:-}" ]]; then
+  for opt in $JAVA_OPTS_EXT; do JAVA_OPTS+=("$opt"); done
+fi
+
+# 2. GC 配置
+JAVA_OPTS+=("-XX:+UseG1GC")
+JAVA_OPTS+=("-XX:G1HeapRegionSize=16m")
+JAVA_OPTS+=("-XX:MaxGCPauseMillis=200")
+JAVA_OPTS+=("-XX:+HeapDumpOnOutOfMemoryError")
+JAVA_OPTS+=("-XX:HeapDumpPath=$DBS_HOME/logs/heapdump.hprof")
+JAVA_OPTS+=("-XX:ErrorFile=$DBS_HOME/logs/hs_err_pid_%p.log")
+# GC 日志已关闭，需要时可取消下面三行注释
+# JAVA_OPTS+=("-verbose:gc")
+# JAVA_OPTS+=("-XX:+PrintGCDetails")
+# JAVA_OPTS+=("-XX:+PrintGCDateStamps")
+
+# 4. 系统属性
+JAVA_OPTS+=("-Djava.ext.dirs=$JAVA_EXT_DIR:$DBS_HOME/lib")
+JAVA_OPTS+=("-Dspring.config.location=$CONFIG_PATH")
+JAVA_OPTS+=("-DLOG_HOME=$DBS_HOME/logs")
+JAVA_OPTS+=("-Dsun.stdout.encoding=UTF-8")
+JAVA_OPTS+=("-Dfile.encoding=UTF-8")
+JAVA_OPTS+=("-Duser.dir=$DBS_HOME")
+# --- 注意：这里不要再加任何 -XX 参数了 ---
+
+# 5. 主类 (放在最后)
+APP="org.dbdatasync.web.Application"
+
+###########################################################################
+# execute command
+echo "Starting DBDataSync Application..."
+
+nohup java "${JAVA_OPTS[@]}" "$APP"

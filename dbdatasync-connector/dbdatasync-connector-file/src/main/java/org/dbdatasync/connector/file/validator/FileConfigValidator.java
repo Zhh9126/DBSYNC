@@ -1,0 +1,53 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.connector.file.validator;
+
+import org.dbdatasync.common.util.JsonUtil;
+import org.dbdatasync.connector.file.FileConnector;
+import org.dbdatasync.connector.file.config.FileConfig;
+import org.dbdatasync.sdk.connector.ConfigValidator;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.model.Table;
+
+import org.springframework.util.Assert;
+
+import java.io.File;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 文件连接配置校验器实现
+ *
+ * @Author AE86
+ * @Version 1.0.0
+ * @Date 2022-05-06 00:04
+ */
+public class FileConfigValidator implements ConfigValidator<FileConnector, FileConfig> {
+
+    @Override
+    public void modify(FileConnector connectorService, FileConfig fileConfig, Map<String, String> params) {
+        String fileDir = params.get("fileDir");
+        Assert.hasText(fileDir, "fileDir is empty.");
+        Assert.isTrue(new File(fileDir).exists(), String.format("路径无效 '%s'", fileDir));
+        fileConfig.setFileDir(fileDir);
+    }
+
+    @Override
+    public Table modifyExtendedTable(FileConnector connectorService, Map<String, String> params) {
+        Table table = new Table();
+        String tableName = params.get("tableName");
+        String columnList = params.get("columnList");
+        String separator = params.get("separator");
+        Assert.hasText(tableName, "TableName is empty");
+        Assert.hasText(columnList, "ColumnList is empty");
+        Assert.hasText(separator, "分割符不能为空");
+        List<Field> fields = JsonUtil.jsonToArray(columnList, Field.class);
+        Assert.notEmpty(fields, "字段不能为空.");
+        table.setName(tableName);
+        table.setColumn(fields);
+        table.setType(connectorService.getExtendedTableType().getCode());
+        table.getExtInfo().put(FileConnector.FILE_SEPARATOR, separator);
+        return table;
+    }
+}

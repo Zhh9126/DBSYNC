@@ -1,0 +1,317 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.biz.impl;
+
+import com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.lucene.index.IndexableField;
+import org.dbdatasync.biz.DataSyncService;
+import org.dbdatasync.biz.model.DataSyncEvent;
+import org.dbdatasync.biz.model.DataSyncRequest;
+import org.dbdatasync.biz.vo.BinlogColumnVO;
+import org.dbdatasync.biz.vo.MessageVO;
+import org.dbdatasync.common.binlog.proto.BinlogMap;
+import org.dbdatasync.common.model.Paging;
+import org.dbdatasync.common.util.CollectionUtils;
+import org.dbdatasync.common.util.DateFormatUtil;
+import org.dbdatasync.common.util.JsonUtil;
+import org.dbdatasync.common.util.NumberUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.connector.base.ConnectorFactory;
+import org.dbdatasync.parser.ProfileComponent;
+import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.Meta;
+import org.dbdatasync.parser.model.Picker;
+import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.util.ConnectorInstanceUtil;
+import org.dbdatasync.parser.TableGroupProfile;
+import org.dbdatasync.parser.MetaProfile;
+import org.dbdatasync.sdk.connector.ConnectorInstance;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.constant.ConnectorConstant;
+import org.dbdatasync.sdk.enums.StorageEnum;
+import org.dbdatasync.sdk.filter.FieldResolver;
+import org.dbdatasync.sdk.filter.Query;
+import org.dbdatasync.sdk.listener.event.RowChangedEvent;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.model.MetaIncrement;
+import org.dbdatasync.sdk.schema.SchemaResolver;
+import org.dbdatasync.sdk.spi.BufferActuatorRouterService;
+import org.dbdatasync.sdk.spi.ConnectorService;
+import org.dbdatasync.sdk.storage.StorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.util.Assert;
+
+import javax.annotation.Resource;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+
+/**
+ * 数据同步服务
+ *
+ * @author AE86
+ * @version 1.0.0
+ * @date 2022/12/19 23:56
+ */
+@Service
+public class DataSyncServiceImpl implements DataSyncService {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private BufferActuatorRouterService bufferActuatorRouter;
+
+    @Resource
+    private ProfileComponent profileComponent;
+
+    @Resource
+    private MetaProfile metaProfile;
+
+    @Resource
+    private TableGroupProfile tableGroupProfile;
+
+    @Resource
+    private StorageService storageService;
+
+    @Resource
+    private ConnectorFactory connectorFactory;
+
+    @Override
+    public MessageVO getMessageVo(String metaId, String messageId) {
+        Assert.hasText(metaId, "The metaId is null.");
+        Assert.hasText(messageId, "The messageId is null.");
+        MessageVO messageVo = new MessageVO();
+        try {
+            Map row = getData(metaId, messageId);
+            Map binlogData = getBinlogData(row, true);
+            String tableGroupId = (String) row.get(ConfigConstant.DATA_TABLE_GROUP_ID);
+            TableGroup tableGroup = tableGroupProfile.getTableGroup(tableGroupId);
+            messageVo.setSourceTableName(tableGroup.getSourceTable().getName());
+            messageVo.setTargetTableName(tableGroup.getTargetTable().getName());
+            messageVo.setId(messageId);
+
+            if (!CollectionUtils.isEmpty(binlogData)) {
+                Map<String, String> columnMap = tableGroup.getTargetTable().getColumn().stream().collect(Collectors.toMap(Field::getName, Field::getTypeName));
+                List<BinlogColumnVO> columns = new ArrayList<>();
+                binlogData.forEach((k, v) -> columns.add(new BinlogColumnVO((String) k, v, columnMap.get(k))));
+                messageVo.setColumns(columns);
+            }
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage());
+        }
+        return messageVo;
+    }
+
+    @Override
+    public Map getBinlogData(Map row, boolean prettyBytes) throws InvalidProtocolBufferException {
+        String tableGroupId = (String) row.get(ConfigConstant.DATA_TABLE_GROUP_ID);
+        // 1、获取配置信息
+        final TableGroup tableGroup = tableGroupProfile.getTableGroup(tableGroupId);
+        if (tableGroup == null) {
+            return Collections.EMPTY_MAP;
+        }
+        // 2、获取记录的数据
+        byte[] bytes = (byte[]) row.get(ConfigConstant.BINLOG_DATA);
+        if (null == bytes) {
+            if (prettyBytes) {
+                String json = (String) row.get(ConfigConstant.CONFIG_MODEL_JSON);
+                return JsonUtil.parseMap(json);
+            }
+            return Collections.EMPTY_MAP;
+        }
+        // 3、获取DDL
+        Map<String, Object> target = new HashMap<>();
+        BinlogMap message = BinlogMap.parseFrom(bytes);
+        String event = (String) row.get(ConfigConstant.CONFIG_MODEL_TYPE);
+        if (StringUtil.equals(event, ConnectorConstant.OPERTION_ALTER)) {
+            message.getRowMap().forEach((k, v) -> target.put(k, v.toStringUtf8()));
+            return target;
+        }
+
+        // 4、获取连接器服务
+        Mapping mapping = profileComponent.getMapping(tableGroup.getTaskId());
+        String targetInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getTargetConnectorId(), ConnectorInstanceUtil.TARGET_SUFFIX);
+        ConnectorInstance connectorInstance = connectorFactory.connect(targetInstanceId);
+        ConnectorService sourceConnector = connectorFactory.getConnectorService(connectorInstance.getConfig());
+        SchemaResolver schemaResolver = sourceConnector.getSchemaResolver();
+        if (schemaResolver == null) {
+            logger.warn("反序列化失败，没有实现SchemaResolver");
+            return target;
+        }
+        // 5、反序列
+        final Picker picker = new Picker(tableGroup);
+        final Map<String, Field> fieldMap = picker.getTargetFieldMap();
+        message.getRowMap().forEach((k, v) -> {
+            if (fieldMap.containsKey(k)) {
+                try {
+                    Object val = schemaResolver.deserialize(v, fieldMap.get(k));
+                    // 处理二进制对象显示
+                    if (prettyBytes) {
+                        if (val instanceof byte[]) {
+                            byte[] b = (byte[]) val;
+                            if (b.length > 128) {
+                                target.put(k, String.format("byte[%d]", b.length));
+                                return;
+                            }
+                            target.put(k, Arrays.toString(b));
+                            return;
+                        }
+                    }
+                    target.put(k, val);
+                } catch (Exception e) {
+                    logger.warn("解析Binlog数据类型异常：typeName=[{}], valueType=[{}], value=[{}]", fieldMap.get(k).getTypeName(), (v == null ? null : v.getClass().getName()), v);
+                }
+            }
+        });
+        return target;
+    }
+
+    @Override
+    public String sync(Map<String, String> params) throws InvalidProtocolBufferException {
+        String metaId = params.get("metaId");
+        String messageId = params.get("messageId");
+        Assert.hasText(metaId, "The metaId is null.");
+        Assert.hasText(messageId, "The messageId is null.");
+
+        Map row = getData(metaId, messageId);
+        Map binlogData = getBinlogData(row, false);
+        if (CollectionUtils.isEmpty(binlogData)) {
+            return messageId;
+        }
+        String tableGroupId = (String) row.get(ConfigConstant.DATA_TABLE_GROUP_ID);
+        String event = (String) row.get(ConfigConstant.CONFIG_MODEL_TYPE);
+        // 有修改同步值
+        String retryDataParams = params.get("retryDataParams");
+        if (StringUtil.isNotBlank(retryDataParams)) {
+            JsonUtil.parseMap(retryDataParams).forEach((k, v) -> binlogData.put(k, convertValue(binlogData.get(k), (String) v)));
+        }
+        TableGroup tableGroup = tableGroupProfile.getTableGroup(tableGroupId);
+        String sourceTableName = tableGroup.getSourceTable().getName();
+
+        // 转换为源字段
+        final Picker picker = new Picker(tableGroup);
+        List<Object> changedRow = picker.pickSourceData(tableGroup.getSourceTable().getColumn(), binlogData);
+        RowChangedEvent changedEvent = new RowChangedEvent(sourceTableName, event, changedRow, null, null);
+
+        // 执行同步是否成功
+        bufferActuatorRouter.execute(metaId, changedEvent);
+        // 明细分表：从该任务分表(DBDataSync_task_detail_{taskId})删除该条同步数据
+        Meta meta = metaProfile.getMeta(metaId);
+        Assert.notNull(meta, "Meta can not be null.");
+        String shardId = StringUtil.isNotBlank(meta.getTaskId()) ? meta.getTaskId() : metaId;
+        storageService.remove(StorageEnum.TASK_DETAIL, shardId, messageId);
+        if (!StringUtil.equals(shardId, metaId)) {
+            storageService.remove(StorageEnum.TASK_DETAIL, metaId, messageId);
+        }
+        // 更新失败数：fail 为库侧增量列，原子自减(同时刷新 updateTime)
+        metaProfile.incrementMeta(MetaIncrement.of(metaId).fail(-1L));
+        return messageId;
+    }
+
+    @Override
+    public void syncBatch(DataSyncRequest request) {
+        Mapping mapping = profileComponent.getMapping(request.getMappingId());
+        Assert.notNull(mapping, "Mapping can not be null.");
+        TableGroup tableGroup = tableGroupProfile.getTableGroup(request.getTableGroupId());
+        Assert.notNull(tableGroup, "Meta can not be null.");
+        Meta meta = metaProfile.getMeta(mapping.getMetaId());
+        Assert.notNull(meta, "Meta can not be null.");
+        List<DataSyncEvent> dataList = request.getDataList();
+        Assert.notEmpty(dataList, "DataList can not be null.");
+
+        for (DataSyncEvent changedData : dataList) {
+            String sourceTableName = tableGroup.getSourceTable().getName();
+            RowChangedEvent changedEvent = new RowChangedEvent(sourceTableName, changedData.getEvent(), changedData.getData(), null, null);
+            // 执行同步是否成功
+            bufferActuatorRouter.execute(meta.getId(), changedEvent);
+        }
+    }
+
+    private Map getData(String metaId, String messageId) {
+        Query query = new Query(1, 1);
+        Map<String, FieldResolver> fieldResolvers = new ConcurrentHashMap<>();
+        fieldResolvers.put(ConfigConstant.BINLOG_DATA, (FieldResolver<IndexableField>) field -> field.binaryValue().bytes);
+        query.setFieldResolverMap(fieldResolvers);
+        // 明细分表：定位到该任务分表(DBDataSync_task_detail_{taskId})，按 ID 命中同步数据
+        Meta meta = metaProfile.getMeta(metaId);
+        String shardId = meta != null && StringUtil.isNotBlank(meta.getTaskId()) ? meta.getTaskId() : metaId;
+        query.setMetaId(shardId);
+        query.addFilter(ConfigConstant.CONFIG_MODEL_ID, messageId);
+        query.setType(StorageEnum.TASK_DETAIL);
+        Paging paging = storageService.query(query);
+        if (!CollectionUtils.isEmpty(paging.getData())) {
+            List<Map> data = (List<Map>) paging.getData();
+            return data.get(0);
+        }
+        // 兼容历史雪花主键分表
+        if (!StringUtil.equals(shardId, metaId)) {
+            query.setMetaId(metaId);
+            paging = storageService.query(query);
+            if (!CollectionUtils.isEmpty(paging.getData())) {
+                List<Map> data = (List<Map>) paging.getData();
+                return data.get(0);
+            }
+        }
+        return Collections.EMPTY_MAP;
+    }
+
+    private Object convertValue(Object oldValue, String newValue) {
+        if (oldValue == null) {
+            return newValue;
+        }
+
+        Object newVal;
+        String type = oldValue.getClass().getName();
+        switch (type) {
+            case "java.sql.Date":
+                newVal = DateFormatUtil.stringToDate(newValue);
+                break;
+            case "java.sql.Timestamp":
+                newVal = DateFormatUtil.stringToTimestamp(newValue);
+                break;
+            case "java.lang.Integer":
+            case "java.lang.Short":
+                newVal = NumberUtil.toInt(newValue);
+                break;
+            case "java.lang.Long":
+                newVal = NumberUtil.toLong(newValue);
+                break;
+            case "java.lang.Float":
+                newVal = Float.valueOf(newValue);
+                break;
+            case "java.lang.Double":
+                newVal = Double.valueOf(newValue);
+                break;
+            case "[B":
+                newVal = stringToBytes(newValue);
+                break;
+            default:
+                newVal = newValue;
+        }
+
+        return newVal;
+    }
+
+    private byte[] stringToBytes(String s) {
+        byte[] b = null;
+        if (s.startsWith("[") && s.endsWith("]")) {
+            s = StringUtil.substring(s, 1, s.length() - 1);
+            String[] split = StringUtil.split(s, StringUtil.COMMA);
+            int length = split.length;
+            b = new byte[length];
+            for (int i = 0; i < length; i++) {
+                b[i] = Byte.valueOf(split[i].trim());
+            }
+        }
+        return b;
+    }
+
+}

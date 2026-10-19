@@ -1,0 +1,340 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.manager.impl;
+
+import org.dbdatasync.common.config.IncrementRecoveryConfig;
+import org.dbdatasync.common.rsa.RsaManager;
+import org.dbdatasync.common.scheduled.ScheduledTaskJob;
+import org.dbdatasync.common.scheduled.ScheduledTaskService;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.connector.base.ConnectorFactory;
+import org.dbdatasync.manager.AbstractPuller;
+import org.dbdatasync.manager.ManagerException;
+import org.dbdatasync.parser.LogService;
+import org.dbdatasync.parser.LogType;
+import org.dbdatasync.parser.MetaProfile;
+import org.dbdatasync.parser.ProfileComponent;
+import org.dbdatasync.parser.TableGroupContext;
+import org.dbdatasync.parser.TableGroupProfile;
+import org.dbdatasync.parser.consumer.ParserConsumer;
+import org.dbdatasync.parser.enums.ParserEnum;
+import org.dbdatasync.parser.event.RefreshOffsetEvent;
+import org.dbdatasync.parser.model.Connector;
+import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.Meta;
+import org.dbdatasync.parser.model.Picker;
+import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.util.ConnectorInstanceUtil;
+import org.dbdatasync.parser.util.FullTableProgressUtil;
+import org.dbdatasync.parser.util.PickerUtil;
+import org.dbdatasync.plugin.PluginFactory;
+import org.dbdatasync.sdk.config.ListenerConfig;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.constant.ConnectorConstant;
+import org.dbdatasync.sdk.enums.ListenerTypeEnum;
+import org.dbdatasync.sdk.enums.ModelEnum;
+import org.dbdatasync.sdk.enums.TableTypeEnum;
+import org.dbdatasync.sdk.listener.AbstractListener;
+import org.dbdatasync.sdk.listener.AbstractQuartzListener;
+import org.dbdatasync.sdk.listener.Listener;
+import org.dbdatasync.sdk.model.ChangedOffset;
+import org.dbdatasync.sdk.model.ConnectorConfig;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.model.Table;
+import org.dbdatasync.sdk.model.TableGroupQuartzCommand;
+import org.dbdatasync.sdk.spi.BufferActuatorRouterService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationListener;
+import org.springframework.stereotype.Component;
+import org.springframework.util.Assert;
+
+import javax.annotation.PostConstruct;
+import javax.annotation.Resource;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+/**
+ * 增量同步
+ *
+ * @Version 1.0.0
+ * @Author AE86
+ * @Date 2020-04-26 15:28
+ */
+@Component
+public final class IncrementPuller extends AbstractPuller implements ApplicationListener<RefreshOffsetEvent>, ScheduledTaskJob {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private BufferActuatorRouterService bufferActuatorRouter;
+
+    @Resource
+    private ScheduledTaskService scheduledTaskService;
+
+    @Resource
+    private RsaManager rsaManager;
+
+    @Resource
+    private ConnectorFactory connectorFactory;
+
+    @Resource
+    private ProfileComponent profileComponent;
+
+    @Resource
+    private TableGroupProfile tableGroupProfile;
+
+    @Resource
+    private MetaProfile metaProfile;
+
+    @Resource
+    private PluginFactory pluginFactory;
+
+    @Resource
+    private LogService logService;
+
+    @Resource
+    private TableGroupContext tableGroupContext;
+
+    @Resource
+    private IncrementRecoveryConfig incrementRecoveryConfig;
+
+    private final Map<String, Listener> map = new ConcurrentHashMap<>();
+
+    @PostConstruct
+    private void init() {
+        scheduledTaskService.start(3000, this);
+    }
+
+    @Override
+    public void start(Mapping mapping) {
+        start(mapping, false);
+    }
+
+    @Override
+    public void start(Mapping mapping, boolean autoRecovery) {
+        final String mappingId = mapping.getId();
+        final String metaId = mapping.getMetaId();
+        Connector connector = profileComponent.getConnector(mapping.getSourceConnectorId());
+        Assert.notNull(connector, "连接器不能为空.");
+        Connector targetConnector = profileComponent.getConnector(mapping.getTargetConnectorId());
+        Assert.notNull(targetConnector, "目标连接器不能为空.");
+        Assert.isTrue(tableGroupProfile.getTableGroupCount(mappingId) > 0, "表映射关系不能为空，请先添加源表到目标表关系.");
+        List<TableGroup> list = loadSortedTableGroups(mappingId);
+        Meta meta = metaProfile.getMeta(metaId);
+        Assert.notNull(meta, "Meta不能为空.");
+
+        Thread worker = new Thread(() -> {
+            try {
+                Listener listener = map.computeIfAbsent(metaId, k -> {
+                    logger.info("开始增量同步：{}, {}", metaId, mapping.getName());
+                    long now = Instant.now().toEpochMilli();
+                    meta.setBeginTime(now);
+                    meta.setEndTime(now);
+                    profileComponent.editConfigModel(meta);
+                    tableGroupContext.put(mapping, list);
+                    return buildListener(mapping, connector, targetConnector, list, meta);
+                });
+                startListener(mapping, metaId, listener, autoRecovery);
+            } catch (Exception e) {
+                close(metaId);
+                logService.log(LogType.TableGroupLog.INCREMENT_FAILED, String.format("启动驱动失败：[%s], %s", mapping.getName(), e.getMessage()));
+                logger.error("运行异常，结束增量同步：{}", metaId, e);
+            }
+        });
+        worker.setName("increment-worker-" + mapping.getId());
+        worker.setDaemon(false);
+        worker.start();
+    }
+
+    /**
+     * 启动监听。自动恢复（服务重启）时，为避免数据库晚于本服务启动导致 CDC 监听连接失败，
+     * 按 {@link IncrementRecoveryConfig} 配置的次数与间隔重试；手动启动仅尝试一次。
+     */
+    private void startListener(Mapping mapping, String metaId, Listener listener, boolean autoRecovery) throws Exception {
+        int maxAttempts = autoRecovery ? incrementRecoveryConfig.getRetryTimes() : 1;
+        for (int i = 1; i <= maxAttempts; i++) {
+            try {
+                listener.start();
+                if (i > 1) {
+                    logger.info("增量同步重试启动成功，任务名称:{}, 第{}次", mapping.getName(), i);
+                }
+                return;
+            } catch (Exception e) {
+                // 最后一次仍失败，或等待期间任务已关闭，则不再重试
+                if (i >= maxAttempts) {
+                    throw e;
+                }
+                logger.error("增量同步启动失败，任务名称:{} {}ms后重试", mapping.getName(), incrementRecoveryConfig.getRetryInterval(), e);
+                TimeUnit.MILLISECONDS.sleep(incrementRecoveryConfig.getRetryInterval());
+                if (!map.containsKey(metaId)) {
+                    logger.info("增量同步任务已关闭，终止重试：{}, {}", metaId, mapping.getName());
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * 捕获并保存当前增量位点，同时重置全量进度（全量+增量模式使用）
+     *
+     * @param mapping 驱动
+     */
+    public void captureAndSaveOffset(Mapping mapping) {
+        final String metaId = mapping.getMetaId();
+        Connector connector = profileComponent.getConnector(mapping.getSourceConnectorId());
+        Assert.notNull(connector, "连接器不能为空.");
+        Connector targetConnector = profileComponent.getConnector(mapping.getTargetConnectorId());
+        Assert.notNull(targetConnector, "目标连接器不能为空.");
+        Assert.isTrue(tableGroupProfile.getTableGroupCount(mapping.getId()) > 0, "表映射关系不能为空，请先添加源表到目标表关系.");
+        List<TableGroup> list = loadSortedTableGroups(mapping.getId());
+        Meta meta = metaProfile.getMeta(metaId);
+        Assert.notNull(meta, "Meta不能为空.");
+        Listener listener = buildListener(mapping, connector, targetConnector, list, meta);
+        Map<String, String> snapshot = meta.getSnapshot();
+        snapshot.putAll(listener.captureSnapshot());
+        snapshot.put(ParserEnum.FULL_INCREMENT_PHASE.getCode(), ModelEnum.FULL.getCode());
+        snapshot.put(ParserEnum.PAGE_INDEX.getCode(), String.valueOf(ParserEnum.PAGE_INDEX.getDefaultValue()));
+        snapshot.put(ParserEnum.CURSOR.getCode(), StringUtil.EMPTY);
+        snapshot.put(ParserEnum.TABLE_GROUP_INDEX.getCode(), String.valueOf(ParserEnum.TABLE_GROUP_INDEX.getDefaultValue()));
+        FullTableProgressUtil.clear(snapshot);
+        meta.getSuccess().set(0);
+        meta.getFail().set(0);
+        profileComponent.editConfigModel(meta);
+        logger.info("全量+增量模式已保存增量位点：{}, {}", metaId, snapshot);
+    }
+
+    @Override
+    public void close(String metaId) {
+        map.compute(metaId, (k, listener) -> {
+            if (listener != null) {
+                listener.close();
+            }
+            bufferActuatorRouter.unbind(metaId);
+            tableGroupContext.clear(metaId);
+            publishClosedEvent(metaId);
+            logger.info("关闭成功:{}", metaId);
+            return null;
+        });
+    }
+
+    @Override
+    public void onApplicationEvent(RefreshOffsetEvent event) {
+        ChangedOffset offset = event.getChangedOffset();
+        if (offset != null && map.containsKey(offset.getMetaId())) {
+            map.get(offset.getMetaId()).refreshEvent(offset);
+        }
+    }
+
+    @Override
+    public void run() {
+        // 定时同步增量信息
+        map.values().forEach(Listener::flushEvent);
+    }
+
+    private Listener buildListener(Mapping mapping, Connector connector, Connector targetConnector, List<TableGroup> list, Meta meta) {
+        ConnectorConfig connectorConfig = connector.getConfig();
+        ListenerConfig listenerConfig = mapping.getListener();
+        String listenerType = listenerConfig.getListenerType();
+
+        Listener listener = connectorFactory.getListener(connectorConfig.getConnectorType(), listenerType);
+        if (null == listener) {
+            throw new ManagerException(String.format("Unsupported listener type \"%s\".", connectorConfig.getConnectorType()));
+        }
+        listener.register(new ParserConsumer(bufferActuatorRouter, metaProfile, profileComponent, pluginFactory, logService, meta.getId(),
+                list, mapping.getChannelSize()));
+
+        // 默认定时抽取
+        if (ListenerTypeEnum.isTiming(listenerType) && listener instanceof AbstractQuartzListener) {
+            AbstractQuartzListener quartzListener = (AbstractQuartzListener) listener;
+            List<TableGroupQuartzCommand> quartzCommands = list.stream().map(t -> {
+                final TableGroup group = PickerUtil.mergeTableGroupConfig(mapping, t);
+                final Picker picker = new Picker(group);
+                List<Field> fields = picker.getSourceFields();
+                Assert.notEmpty(fields, "表字段映射关系不能为空：" + group.getSourceTable().getName() + " > " + group.getTargetTable().getName());
+                return new TableGroupQuartzCommand(t.getSourceTable(), fields, t.getTargetTable(), t.getCommand(), group.getPlugin(), group.getPluginExtInfo());
+            }).collect(Collectors.toList());
+            quartzListener.setMappingName(mapping.getName());
+            quartzListener.setReadNum(mapping.getReadNum());
+            quartzListener.setCommands(quartzCommands);
+        }
+
+        if (listener instanceof AbstractListener) {
+            AbstractListener abstractListener = (AbstractListener) listener;
+            Set<String> filterTable = new HashSet<>();
+            List<Table> sourceTable = new ArrayList<>();
+            List<Table> customTable = new ArrayList<>();
+            list.forEach(t -> addSourceTable(sourceTable, customTable, filterTable, t.getSourceTable()));
+            abstractListener.setDatabase(mapping.getSourceDatabase());
+            abstractListener.setSchema(mapping.getSourceSchema());
+            abstractListener.setConnectorService(connectorFactory.getConnectorService(connectorConfig.getConnectorType()));
+            String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), connector.getId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+            String targetInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), targetConnector.getId(), ConnectorInstanceUtil.TARGET_SUFFIX);
+            abstractListener.setConnectorInstance(connectorFactory.connect(sourceInstanceId));
+            abstractListener.setTargetConnectorInstance(connectorFactory.connect(targetInstanceId));
+            abstractListener.setScheduledTaskService(scheduledTaskService);
+            setRsaConfig(abstractListener);
+            abstractListener.setConnectorConfig(connectorConfig);
+            abstractListener.setListenerConfig(listenerConfig);
+            abstractListener.setFilterTable(filterTable);
+            abstractListener.setSourceTable(sourceTable);
+            abstractListener.setCustomTable(customTable);
+            abstractListener.setSnapshot(meta.getSnapshot());
+            abstractListener.setMetaId(meta.getId());
+        }
+
+        listener.init();
+        return listener;
+    }
+
+    private void setRsaConfig(AbstractListener listener) {
+        if (profileComponent.getSystemConfig().isEnableOpenAPI()) {
+            listener.setRsaManager(rsaManager);
+            listener.setRsaConfig(profileComponent.getSystemConfig().getRsaConfig());
+        }
+    }
+
+    private void addSourceTable(List<Table> sourceTable, List<Table> customTable, Set<String> filterTable, Table table) {
+        switch (TableTypeEnum.getTableType(table.getType())) {
+            case TABLE:
+            case VIEW:
+            case MATERIALIZED_VIEW:
+                if (!filterTable.contains(table.getName())) {
+                    sourceTable.add(table);
+                    filterTable.add(table.getName());
+                }
+                break;
+            case SQL:
+            case SEMI:
+                if (!filterTable.contains(table.getName())) {
+                    customTable.add(table);
+                    filterTable.add(table.getName());
+                    Object mainTable = table.getExtInfo().get(ConnectorConstant.CUSTOM_TABLE_MAIN);
+                    if (mainTable instanceof String) {
+                        filterTable.add(String.valueOf(mainTable));
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    /**
+     * 按页拉取表映射（sortIndex 降序），供监听器注册使用。
+     */
+    private List<TableGroup> loadSortedTableGroups(String mappingId) {
+        List<TableGroup> list = new ArrayList<>();
+        tableGroupProfile.pageScanTableGroups(mappingId, ConfigConstant.PAGE_SIZE, list::addAll);
+        return list;
+    }
+
+}

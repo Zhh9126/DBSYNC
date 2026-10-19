@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 数据血缘列表 -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">数据血缘</h3>
+    </div>
+    <div class="card-body">
+        <div class="mini-stats-grid grid grid-cols-3 gap-3 mb-4">
+            <div class="mini-stat-card mini-stat-card--primary">
+                <div class="mini-stat-info">
+                    <p class="mini-stat-title"><i class="fa fa-sitemap"></i> 血缘关系</p>
+                </div>
+                <span class="mini-stat-number" id="statEdge">0</span>
+            </div>
+            <div class="mini-stat-card mini-stat-card--info">
+                <div class="mini-stat-info">
+                    <p class="mini-stat-title"><i class="fa fa-tasks"></i> 同步任务</p>
+                </div>
+                <span class="mini-stat-number" id="statMapping">0</span>
+            </div>
+            <div class="mini-stat-card mini-stat-card--violet">
+                <div class="mini-stat-info">
+                    <p class="mini-stat-title"><i class="fa fa-server"></i> 连接器</p>
+                </div>
+                <span class="mini-stat-number" id="statConnector">0</span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-6 items-center mb-3">
+            <div class="lg:col-span-2 flex items-center">
+                <select id="granularityFilter" class="form-control mr-2" style="max-width: 140px;">
+                    <option value="">全部粒度</option>
+                    <option value="DATABASE">库级</option>
+                    <option value="TABLE">表级</option>
+                </select>
+                <select id="connectorFilter" class="form-control" style="max-width: 200px;">
+                    <option value="">全部连接器</option>
+                </select>
+            </div>
+            <div></div>
+            <div class="lg:col-span-3 flex items-center justify-end">
+                <button class="btn btn-outline mr-2" onclick="loadLineage()">
+                    <i class="fa fa-refresh"></i> 刷新
+                </button>
+            </div>
+        </div>
+
+        <table class="table">
+            <thead>
+            <tr>
+                <th>序号</th>
+                <th>源连接器</th>
+                <th>源对象</th>
+                <th>流向</th>
+                <th>目标连接器</th>
+                <th>目标对象</th>
+                <th>粒度</th>
+                <th>同步任务</th>
+                <th>更新时间</th>
+                <th style="width:140px;">操作</th>
+            </tr>
+            </thead>
+            <tbody id="lineageTableBody"></tbody>
+        </table>
+        <div class="blank-block"></div>
+        <div id="lineagePagination" class="mt-3">
+            <div class="pagination-bar"></div>
+        </div>
+    </div>
+
+    <!-- 字段映射下钻抽屉 -->
+    <div id="lineageDrawer" class="lineage-drawer" aria-hidden="true">
+        <div class="lineage-drawer-mask"></div>
+        <div class="lineage-drawer-panel">
+            <div class="lineage-drawer-header">
+                <div class="lineage-drawer-title">
+                    <i class="fa fa-exchange text-primary"></i>
+                    <span id="lineageDrawerTitle">字段映射明细</span>
+                </div>
+                <button class="lineage-drawer-close" onclick="closeLineageDrawer()" title="关闭">
+                    <i class="fa fa-times"></i>
+                </button>
+            </div>
+            <div class="lineage-drawer-body">
+                <div class="lineage-drawer-summary">
+                    <div class="lineage-summary-item">
+                        <span class="lineage-summary-label">源表</span>
+                        <span class="lineage-summary-value mono-text" id="lineageDrawerSource">-</span>
+                    </div>
+                    <div class="lineage-summary-arrow"><i class="fa fa-long-arrow-right"></i></div>
+                    <div class="lineage-summary-item">
+                        <span class="lineage-summary-label">目标表</span>
+                        <span class="lineage-summary-value mono-text" id="lineageDrawerTarget">-</span>
+                    </div>
+                    <div class="lineage-summary-item">
+                        <span class="lineage-summary-label">同步任务</span>
+                        <span class="lineage-summary-value" id="lineageDrawerMapping">-</span>
+                    </div>
+                    <div class="lineage-summary-item">
+                        <span class="lineage-summary-label">字段数</span>
+                        <span class="lineage-summary-value badge badge-info" id="lineageDrawerCount">0</span>
+                    </div>
+                </div>
+
+                <div id="lineageDrawerLoading" class="lineage-drawer-loading">
+                    <i class="fa fa-spinner fa-spin"></i> 正在加载字段映射…
+                </div>
+
+                <table class="table lineage-fields-table hidden" id="lineageFieldsTable">
+                    <thead>
+                    <tr>
+                        <th style="width:42px;">序号</th>
+                        <th>源字段</th>
+                        <th>源类型</th>
+                        <th style="width:60px;">主键</th>
+                        <th style="width:60px;">映射</th>
+                        <th>目标字段</th>
+                        <th>目标类型</th>
+                        <th style="width:60px;">主键</th>
+                    </tr>
+                    </thead>
+                    <tbody id="lineageFieldsBody"></tbody>
+                </table>
+
+                <div id="lineageDrawerEmpty" class="lineage-drawer-empty hidden">
+                    <i class="fa fa-info-circle text-muted"></i>
+                    暂无字段映射，可能尚未配置该表映射，或同步任务尚未生成字段映射。
+                </div>
+            </div>
+            <div class="lineage-drawer-footer">
+                <button class="btn btn-outline" onclick="closeLineageDrawer()">
+                    <i class="fa fa-times"></i> 关闭
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// 连接器名称映射与血缘数据缓存
+let lineageConnectorMap = {};
+let lineageEdgesCache = [];
+
+// 页面初始化
+$(document).ready(function() {
+    loadLineage();
+    // 粒度/连接器筛选变更后回到第 1 页重新渲染
+    $('#granularityFilter,#connectorFilter').change(function() {
+        renderLineageTable(lineageEdgesCache);
+    });
+});
+
+// 入口：缓存全量血缘并按当前筛选条件分页渲染
+function renderLineageTable(edges) {
+    const granularity = $('#granularityFilter').val();
+    const connectorId = $('#connectorFilter').val();
+
+    lineageFilteredCache = (edges || []).filter(function(e) {
+        if (granularity && e.granularity !== granularity) {
+            return false;
+        }
+        if (connectorId && e.sourceConnectorId !== connectorId && e.targetConnectorId !== connectorId) {
+            return false;
+        }
+        return true;
+    });
+    goLineagePage(1);
+}
+
+// 加载血缘数据
+function loadLineage() {
+    doPoster('/lineage/query', {}, function (response) {
+        if (!response.success) {
+            bootGrowl('加载失败: ' + response.message, 'danger');
+            return;
+        }
+        const data = response.data || {};
+        const edges = data.edges || [];
+        const connectors = data.connectors || [];
+        lineageEdgesCache = edges;
+
+        // 构建连接器映射
+        lineageConnectorMap = {};
+        connectors.forEach(function(c) {
+            lineageConnectorMap[c.id] = c.name || c.id;
+        });
+
+        // 统计卡片
+        const mappingIds = {};
+        edges.forEach(function(e) {
+            if (e.mappingId) {
+                mappingIds[e.mappingId] = true;
+            }
+        });
+        $('#statEdge').text(edges.length);
+        $('#statMapping').text(Object.keys(mappingIds).length);
+        $('#statConnector').text(connectors.length);
+
+        // 连接器下拉
+        const $connectorFilter = $('#connectorFilter');
+        $connectorFilter.html('<option value="">全部连接器</option>');
+        connectors.forEach(function(c) {
+            $connectorFilter.append('<option value="' + escapeHtml(c.id) + '">' + escapeHtml(c.name) + '</option>');
+        });
+
+        // 渲染表格
+        renderLineageTable(edges);
+    });
+}
+
+// 渲染血缘表格（客户端分页：10 行/页）
+const LINEAGE_PAGE_SIZE = 10;
+let lineageCurrentPage = 1;
+let lineageFilteredCache = [];
+
+function renderLineagePager(totalPages, onPageChange) {
+    const $bar = $('#lineagePagination .pagination-bar');
+    $bar.empty();
+    if (!totalPages || totalPages <= 0) {
+        return;
+    }
+    const btn = function(title, icon, disabled, page) {
+        const $b = $('<button type="button" class="pagination-btn pagination-btn-nav" title="' + title + '"' + (disabled ? ' disabled' : '') + '><i class="fa ' + icon + '"></i></button>');
+        if (!disabled) $b.on('click', function() { onPageChange(page); });
+        $bar.append($b);
+    };
+    btn('首页', 'fa-angle-double-left', lineageCurrentPage === 1, 1);
+    btn('上一页', 'fa-angle-left', lineageCurrentPage === 1, lineageCurrentPage - 1);
+    let start = lineageCurrentPage - 1, end = start + 2; // 3 个页码窗口
+    if (start < 1) { start = 1; end = Math.min(3, totalPages); }
+    if (end > totalPages) { end = totalPages; start = Math.max(1, totalPages - 2); }
+    for (let i = start; i <= end; i++) {
+        const $p = $('<button type="button" class="pagination-page-btn ' + (i === lineageCurrentPage ? 'active' : '') + '">' + i + '</button>');
+        $p.on('click', function() { if (i !== lineageCurrentPage) onPageChange(i); });
+        $bar.append($p);
+    }
+    btn('下一页', 'fa-angle-right', lineageCurrentPage === totalPages, lineageCurrentPage + 1);
+    btn('末页', 'fa-angle-double-right', lineageCurrentPage === totalPages, totalPages);
+}
+
+function goLineagePage(page) {
+    const totalPages = Math.ceil(lineageFilteredCache.length / LINEAGE_PAGE_SIZE) || 1;
+    lineageCurrentPage = Math.min(Math.max(page, 1), totalPages);
+    paintLineageRows(lineageFilteredCache);
+    renderLineagePager(totalPages, goLineagePage);
+}
+
+function paintLineageRows(filtered) {
+    const from = (lineageCurrentPage - 1) * LINEAGE_PAGE_SIZE;
+    const to = Math.min(from + LINEAGE_PAGE_SIZE, filtered.length);
+    const pageRows = filtered.slice(from, to);
+
+    const $body = $('#lineageTableBody');
+    if (!filtered.length) {
+        $body.html('<tr><td colspan="10" class="text-center"><i class="fa fa-sitemap empty-icon"></i><p class="empty-text">暂无血缘关系</p><p class="empty-description">创建数据同步任务后自动生成数据血缘</p></td></tr>');
+        return;
+    }
+
+    let html = '';
+    pageRows.forEach(function(edge, index) {
+        const seq = from + index + 1;
+        const sourceConnector = lineageConnectorMap[edge.sourceConnectorId] || edge.sourceConnectorId || '-';
+        const targetConnector = lineageConnectorMap[edge.targetConnectorId] || edge.targetConnectorId || '-';
+        const granularityLabel = edge.granularity === 'DATABASE' ? '<span class="badge badge-warning">库级</span>'
+            : (edge.granularity === 'TABLE' ? '<span class="badge badge-info">表级</span>' : escapeHtml(edge.granularity || '-'));
+        const updateTime = edge.updateTime ? formatTime(edge.updateTime) : '-';
+        const isTable = edge.granularity === 'TABLE';
+        const edgeData = encodeURIComponent(JSON.stringify({
+            mappingId: edge.mappingId || '',
+            source: edge.source || '',
+            target: edge.target || '',
+            mappingName: edge.mappingName || ''
+        }));
+
+        const sourceCell = isTable
+            ? '<a href="javascript:void(0);" class="lineage-cell-link" data-edge="' + edgeData + '" onclick="openLineageDrawer(this)"><span class="mono-text">' + escapeHtml(edge.source || '-') + '</span> <i class="fa fa-level-down text-primary"></i></a>'
+            : '<span class="mono-text">' + escapeHtml(edge.source || '-') + '</span>';
+        const targetCell = isTable
+            ? '<a href="javascript:void(0);" class="lineage-cell-link" data-edge="' + edgeData + '" onclick="openLineageDrawer(this)"><span class="mono-text">' + escapeHtml(edge.target || '-') + '</span> <i class="fa fa-level-down text-primary"></i></a>'
+            : '<span class="mono-text">' + escapeHtml(edge.target || '-') + '</span>';
+        const actionBtn = isTable
+            ? '<button class="btn btn-info btn-sm" data-edge="' + edgeData + '" onclick="openLineageDrawer(this)" title="查看字段映射"><i class="fa fa-indent"></i> 字段映射</button>'
+            : '<span class="text-muted text-xs">库级不可下钻</span>';
+
+        html += `
+            <tr>
+                <td>${seq}</td>
+                <td>${escapeHtml(sourceConnector)}<br><span class="text-muted small">${escapeHtml(edge.sourceType || '')}</span></td>
+                <td>${sourceCell}</td>
+                <td><i class="fa fa-long-arrow-right text-primary"></i></td>
+                <td>${escapeHtml(targetConnector)}<br><span class="text-muted small">${escapeHtml(edge.targetType || '')}</span></td>
+                <td>${targetCell}</td>
+                <td>${granularityLabel}</td>
+                <td>${escapeHtml(edge.mappingName || '-')}</td>
+                <td>${updateTime}</td>
+                <td>${actionBtn}</td>
+            </tr>
+        `;
+    });
+    $body.html(html);
+}
+
+// 时间格式化（毫秒时间戳）
+function formatTime(ts) {
+    if (!ts) {
+        return '-';
+    }
+    const date = new Date(Number(ts));
+    const pad = function(n) {
+        return n < 10 ? '0' + n : n;
+    };
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+        + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+}
+
+// 打开字段映射下钻抽屉
+function openLineageDrawer(el) {
+    let edge;
+    try {
+        edge = JSON.parse(decodeURIComponent($(el).data('edge')));
+    } catch (e) {
+        bootGrowl('血缘数据解析失败', 'danger');
+        return;
+    }
+    if (!edge || !edge.mappingId) {
+        bootGrowl('血缘记录缺少同步任务ID，无法下钻', 'warning');
+        return;
+    }
+    $('#lineageDrawerTitle').text('字段映射明细');
+    $('#lineageDrawerSource').text(edge.source || '-');
+    $('#lineageDrawerTarget').text(edge.target || '-');
+    $('#lineageDrawerMapping').text(edge.mappingName || '-');
+    $('#lineageDrawerCount').text('0');
+    $('#lineageDrawerLoading').removeClass('hidden');
+    $('#lineageFieldsTable').addClass('hidden');
+    $('#lineageDrawerEmpty').addClass('hidden');
+    $('#lineageFieldsBody').empty();
+    $('#lineageDrawer').addClass('open').attr('aria-hidden', 'false');
+
+    doPoster('/lineage/fields', {
+        mappingId: edge.mappingId,
+        sourceTable: edge.source,
+        targetTable: edge.target
+    }, function(response) {
+        $('#lineageDrawerLoading').addClass('hidden');
+        if (!response.success) {
+            bootGrowl('加载字段映射失败: ' + (response.message || ''), 'danger');
+            return;
+        }
+        const rows = response.data || [];
+        $('#lineageDrawerCount').text(rows.length);
+        if (!rows.length) {
+            $('#lineageDrawerEmpty').removeClass('hidden');
+            return;
+        }
+        let html = '';
+        rows.forEach(function(r, idx) {
+            html += '<tr>';
+            html += '<td>' + (idx + 1) + '</td>';
+            html += '<td><span class="mono-text">' + escapeHtml(r.sourceName || '-') + '</span></td>';
+            html += '<td><span class="badge badge-outline">' + escapeHtml(r.sourceType || '-') + '</span></td>';
+            html += '<td>' + (r.sourcePk ? '<span class="badge badge-warning"><i class="fa fa-key"></i></span>' : '') + '</td>';
+            html += '<td><i class="fa fa-long-arrow-right text-primary"></i></td>';
+            html += '<td><span class="mono-text">' + escapeHtml(r.targetName || '-') + '</span></td>';
+            html += '<td><span class="badge badge-outline">' + escapeHtml(r.targetType || '-') + '</span></td>';
+            html += '<td>' + (r.targetPk ? '<span class="badge badge-warning"><i class="fa fa-key"></i></span>' : '') + '</td>';
+            html += '</tr>';
+        });
+        $('#lineageFieldsBody').html(html);
+        $('#lineageFieldsTable').removeClass('hidden');
+    });
+}
+
+// 关闭抽屉
+function closeLineageDrawer() {
+    $('#lineageDrawer').removeClass('open').attr('aria-hidden', 'true');
+}
+
+// 点击遮罩关闭
+$(document).ready(function() {
+    $(document).on('click', '.lineage-drawer-mask', function() {
+        closeLineageDrawer();
+    });
+    $(document).on('keyup', function(e) {
+        if (e.key === 'Escape') {
+            closeLineageDrawer();
+        }
+    });
+});
+
+// 监听过滤条件变化（基于缓存渲染，不发请求）
+$(document).ready(function() {
+    $('#granularityFilter, #connectorFilter').change(function() {
+        renderLineageTable(lineageEdgesCache);
+    });
+});
+
+// 注册到全局定时刷新管理器
+$(document).ready(function() {
+    PageRefreshManager.register(function() {
+        loadLineage();
+    });
+});
+</script>
+
+</html>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.ghi</groupId>
+        <artifactId>DBDataSync</artifactId>
+        <version>2.1.4</version>
+    </parent>
+    <artifactId>DBDataSync-connector</artifactId>
+    <packaging>pom</packaging>
+    <modules>
+        <module>DBDataSync-connector-base</module>
+        <module>DBDataSync-connector-clickhouse</module>
+        <module>DBDataSync-connector-dameng</module>
+        <module>DBDataSync-connector-doris</module>
+        <module>DBDataSync-connector-duckdb</module>
+        <module>DBDataSync-connector-elasticsearch</module>
+        <module>DBDataSync-connector-file</module>
+        <module>DBDataSync-connector-h2</module>
+        <module>DBDataSync-connector-http</module>
+        <module>DBDataSync-connector-kafka</module>
+        <module>DBDataSync-connector-kingbase</module>
+        <module>DBDataSync-connector-mongodb</module>
+        <module>DBDataSync-connector-mysql</module>
+        <module>DBDataSync-connector-oceanbase</module>
+        <module>DBDataSync-connector-oceanbase-oracle</module>
+        <module>DBDataSync-connector-oracle</module>
+        <module>DBDataSync-connector-postgresql</module>
+        <module>DBDataSync-connector-redis</module>
+        <module>DBDataSync-connector-rocketmq</module>
+        <module>DBDataSync-connector-sqlite</module>
+        <module>DBDataSync-connector-sqlserver</module>
+        <module>DBDataSync-connector-starrocks</module>
+        <module>DBDataSync-connector-tidb</module>
+    </modules>
+</project>

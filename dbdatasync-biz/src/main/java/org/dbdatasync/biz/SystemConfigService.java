@@ -1,0 +1,103 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.biz;
+
+import org.dbdatasync.biz.vo.SystemConfigVO;
+import org.dbdatasync.common.model.ConfigModel;
+import org.dbdatasync.common.model.RsaVersion;
+import org.dbdatasync.parser.model.SystemConfig;
+
+import java.io.File;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 系统配置
+ *
+ * @author AE86
+ * @version 1.0.0
+ * @date 2020/5/30 23:14
+ */
+public interface SystemConfigService {
+
+    /**
+     * 修改系统配置
+     *
+     * @param params
+     */
+    String edit(Map<String, String> params);
+
+    /**
+     * 修改通知配置
+     *
+     * @param params
+     */
+    String editNoticeConfig(Map<String, String> params);
+
+    /**
+     * 获取系统配置
+     *
+     * @return
+     */
+    SystemConfigVO getSystemConfigVo();
+
+    /**
+     * 获取系统配置
+     *
+     * @return
+     */
+    SystemConfig getSystemConfig();
+
+    /**
+     * 获取所有配置（system、user、connector、mapping、tableGroup、meta）
+     *
+     * @return
+     */
+    List<ConfigModel> getConfigModelAll();
+
+    /**
+     * 校验文件格式
+     *
+     * @param filename
+     */
+    void checkFileSuffix(String filename);
+
+    /**
+     * 更新配置（仅支持 .zip）
+     *
+     * @param file
+     */
+    void refreshConfig(File file);
+
+    /**
+     * 粗估导出配置体积（字节），供列表页提示，避免全量序列化。
+     *
+     * @return 估算字节数
+     */
+    long estimateExportSize();
+
+    /**
+     * 获取水印信息
+     *
+     * @param systemConfig
+     * @return
+     */
+    String getWatermark(SystemConfig systemConfig);
+
+    /**
+     * 生成RSA配置
+     *
+     * @param keyLength
+     * @return
+     */
+    RsaVersion createRSAConfig(int keyLength);
+
+    /**
+     * 生成并保存 API 密钥（OpenAPI 登录凭证）
+     * 返回明文密钥，仅展示一次，请妥善保管
+     *
+     * @return 新生成的 API 密钥
+     */
+    String generateApiSecret();
+}

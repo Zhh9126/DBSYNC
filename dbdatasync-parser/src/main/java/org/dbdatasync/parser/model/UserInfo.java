@@ -1,0 +1,175 @@
+package org.dbdatasync.parser.model;
+
+/**
+ * @author AE86
+ * @version 1.0.0
+ * @date 2022/11/17 23:09
+ */
+public class UserInfo {
+
+    /**
+     * 唯一ID
+     */
+    private String id;
+
+    /**
+     * 创建时间
+     */
+    private Long createTime;
+
+    /**
+     * 更新时间
+     */
+    private Long updateTime;
+
+    /**
+     * 账号
+     */
+    private String username;
+
+    /**
+     * 昵称
+     */
+    private String nickname;
+
+    /**
+     * 密码（历史兼容：SHA1 哈希）
+     */
+    private String password;
+
+    /**
+     * 密码（BCrypt 强哈希，优先使用）
+     */
+    private String passwordHash;
+
+    /**
+     * 角色
+     */
+    private String roleCode;
+
+    /**
+     * 邮箱(多个邮箱使用逗号拼接)
+     */
+    private String email;
+
+    /**
+     * 手机
+     */
+    private String phone;
+
+    public UserInfo() {
+    }
+
+    public UserInfo(String username, String nickname, String password, String roleCode, String email, String phone) {
+        this.username = username;
+        this.nickname = nickname;
+        this.password = password;
+        this.roleCode = roleCode;
+        this.email = email;
+        this.phone = phone;
+    }
+
+    public UserInfo(String username, String nickname, String password, String passwordHash, String roleCode, String email, String phone) {
+        this.username = username;
+        this.nickname = nickname;
+        this.password = password;
+        this.passwordHash = passwordHash;
+        this.roleCode = roleCode;
+        this.email = email;
+        this.phone = phone;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public Long getCreateTime() {
+        return createTime;
+    }
+
+    public void setCreateTime(Long createTime) {
+        this.createTime = createTime;
+    }
+
+    public Long getUpdateTime() {
+        return updateTime;
+    }
+
+    public void setUpdateTime(Long updateTime) {
+        this.updateTime = updateTime;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getNickname() {
+        return nickname;
+    }
+
+    public void setNickname(String nickname) {
+        this.nickname = nickname;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
+    public String getRoleCode() {
+        return roleCode;
+    }
+
+    public void setRoleCode(String roleCode) {
+        this.roleCode = roleCode;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
+    public String getPhone() {
+        return phone;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof UserInfo) {
+            UserInfo userInfo = (UserInfo) obj;
+            return userInfo.username.equals(this.username);
+        }
+        return false;
+    }
+
+    @Override
+    public int hashCode() {
+        return username.hashCode();
+    }
+}

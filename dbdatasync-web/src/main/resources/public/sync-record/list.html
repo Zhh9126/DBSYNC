@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<!-- 数据同步记录：展示所有数据同步任务的执行状态 -->
+<div th:fragment="content">
+    <div class="form-container">
+        <div class="card-header flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i class="fa fa-history text-primary"></i>
+                <h3 class="card-title">数据同步记录</h3>
+                <span class="text-xs text-tertiary ml-2">查看所有数据同步任务的执行状态，支持导出迁移记录与清单</span>
+            </div>
+        </div>
+        <div class="card-body">
+            <!-- 工具栏：搜索 + 筛选 + 导出 -->
+            <div class="grid grid-cols-12 items-center gap-3 mb-4">
+                <div id="searchSyncRecord" class="lg:col-span-4">
+                    <input id="searchKey" type="text"
+                           class="form-control"
+                           placeholder="按任务名称搜索…" />
+                </div>
+                <div class="lg:col-span-3 flex items-center gap-2">
+                    <label class="text-xs text-secondary whitespace-nowrap">连接器</label>
+                    <select id="connectorTypeFilter" class="form-control">
+                        <option value="">全部类型</option>
+                        <option th:each="t : ${connectorTypes}"
+                                th:value="${t}"
+                                th:text="${t}"></option>
+                    </select>
+                </div>
+                <div class="lg:col-span-3 flex items-center gap-2">
+                    <label class="text-xs text-secondary whitespace-nowrap">同步方案</label>
+                    <select id="modelFilter" class="form-control">
+                        <option value="">全部方案</option>
+                        <option value="full">全量同步</option>
+                        <option value="increment">增量同步</option>
+                        <option value="fullIncrement">全量+增量</option>
+                    </select>
+                </div>
+                <div class="lg:col-span-2 flex items-center justify-end gap-2">
+                    <button type="button" class="btn btn-primary"
+                            onclick="exportRecords()">
+                        <i class="fa fa-download"></i> 导出迁移记录
+                    </button>
+                </div>
+            </div>
+            <div class="grid grid-cols-12 items-center justify-end gap-3 mb-3">
+                <div class="lg:col-span-12 flex justify-end gap-2">
+                    <button type="button" class="btn btn-info"
+                            onclick="exportManifest()">
+                        <i class="fa fa-file-text-o"></i> 导出迁移清单
+                    </button>
+                </div>
+            </div>
+
+            <!-- 表格 -->
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th class="w-16">序号</th>
+                        <th class="w-44">任务名称</th>
+                        <th class="w-40">来源</th>
+                        <th class="w-40">目标</th>
+                        <th class="w-28">同步方案</th>
+                        <th class="w-32">执行模式</th>
+                        <th class="w-32">增量策略</th>
+                        <th>同步结果</th>
+                        <th class="w-24">状态</th>
+                        <th class="w-40">最后同步</th>
+                        <th class="w-32">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="syncRecordTableBody"></tbody>
+            </table>
+            <div class="blank-block"></div>
+            <!-- 分页 -->
+            <div id="syncRecordPagination" class="mt-3"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 页面 JS -->
+<script type="text/javascript" th:src="@{/js/sync-record/sync-record.js}"></script>
+</html>

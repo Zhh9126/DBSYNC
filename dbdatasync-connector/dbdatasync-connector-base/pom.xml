@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.ghi</groupId>
+        <artifactId>DBDataSync-connector</artifactId>
+        <version>2.1.4</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>DBDataSync-connector-base</artifactId>
+
+    <dependencies>
+        <!-- sdk -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-sdk</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-clickhouse -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-clickhouse</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-dameng -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-dameng</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-doris -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-doris</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-elasticsearch -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-elasticsearch</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-file -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-file</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-h2 -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-h2</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-http -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-http</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-kafka -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-kafka</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-mysql -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-mysql</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-oceanbase -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-oceanbase</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-oceanbase-oracle -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-oceanbase-oracle</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-oracle -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-oracle</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-postgresql -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-postgresql</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-kingbase</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-mongodb -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-mongodb</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-redis -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-redis</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-rocketmq -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-rocketmq</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-duckdb -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-duckdb</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-sqlite -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-sqlite</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-sqlserver -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-sqlserver</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-starrocks -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-starrocks</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- DBDataSync-connector-tidb -->
+        <dependency>
+            <groupId>org.ghi</groupId>
+            <artifactId>DBDataSync-connector-tidb</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!-- Log4j2 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-log4j2</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>

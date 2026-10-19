@@ -1,0 +1,34 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.sdk.schema.support;
+
+import org.dbdatasync.sdk.enums.DataTypeEnum;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.schema.AbstractDataType;
+
+import java.sql.Time;
+
+/**
+ * @Author 穿云
+ * @Version 1.0.0
+ * @Date 2024-11-21 23:56
+ */
+public abstract class TimeType extends AbstractDataType<Time> {
+
+    @Override
+    public DataTypeEnum getType() {
+        return DataTypeEnum.TIME;
+    }
+
+    @Override
+    protected Object convert(Object val, Field field) {
+        if (val instanceof Time) {
+            return val;
+        }
+        if (val instanceof String) {
+            return Time.valueOf(((String) val).trim());
+        }
+        return throwUnsupportedException(val, field);
+    }
+}

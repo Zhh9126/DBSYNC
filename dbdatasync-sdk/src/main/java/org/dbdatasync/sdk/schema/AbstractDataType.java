@@ -1,0 +1,73 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.sdk.schema;
+
+import org.dbdatasync.sdk.SdkException;
+import org.dbdatasync.sdk.model.Field;
+
+import java.lang.reflect.ParameterizedType;
+
+/**
+ * @author 穿云
+ * @version 1.0.0
+ * @date 2024-11-24 20:58
+ */
+public abstract class AbstractDataType<T> implements DataType {
+
+    private final Class<T> parameterClazz;
+
+    public AbstractDataType() {
+        parameterClazz = (Class<T>) ((ParameterizedType) getClass().getSuperclass().getGenericSuperclass()).getActualTypeArguments()[0];
+    }
+
+    /**
+     * 转换为标准数据类型
+     */
+    protected abstract T merge(Object val, Field field);
+
+    /**
+     * 获取默认合并值
+     */
+    protected T getDefaultMergedVal(Field field) {
+        return null;
+    }
+
+    /**
+     * 转换为指定数据类型
+     */
+    protected abstract Object convert(Object val, Field field);
+
+    /**
+     * 获取默认转换值
+     */
+    protected Object getDefaultConvertedVal(Field field) {
+        return null;
+    }
+
+    @Override
+    public Object mergeValue(Object val, Field field) {
+        if (val == null) {
+            return getDefaultMergedVal(field);
+        }
+        // 数据类型匹配
+        if (val.getClass().equals(parameterClazz)) {
+            return val;
+        }
+        // 异构数据类型转换
+        return merge(val, field);
+    }
+
+    @Override
+    public Object convertValue(Object val, Field field) {
+        if (val == null) {
+            return getDefaultConvertedVal(field);
+        }
+        // 异构数据类型转换
+        return convert(val, field);
+    }
+
+    protected T throwUnsupportedException(Object val, Field field) {
+        throw new SdkException(String.format("%s does not support type [%s] convert to %s(%s), val [%s]", getClass().getSimpleName(), val.getClass(), field.getName(), field.getTypeName(), val));
+    }
+}

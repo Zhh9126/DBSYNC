@@ -1,0 +1,74 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.connector.kafka.validator;
+
+import org.dbdatasync.common.util.JsonUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.connector.kafka.KafkaConnector;
+import org.dbdatasync.connector.kafka.config.KafkaConfig;
+import org.dbdatasync.connector.kafka.util.KafkaUtil;
+import org.dbdatasync.sdk.connector.ConfigValidator;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.model.Table;
+
+import org.springframework.stereotype.Component;
+import org.springframework.util.Assert;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+/**
+ * Kafka连接配置校验器实现
+ *
+ * @Author AE86
+ * @Version 1.0.0
+ * @Date 2021-11-22 23:55
+ */
+@Component
+public class KafkaConfigValidator implements ConfigValidator<KafkaConnector, KafkaConfig> {
+
+    @Override
+    public void modify(KafkaConnector connectorService, KafkaConfig connectorConfig, Map<String, String> params) {
+        String url = params.get("url");
+        String properties = params.get("properties");
+        String producerProperties = params.get(KafkaUtil.PRODUCER_PROPERTIES);
+        String consumerProperties = params.get(KafkaUtil.CONSUMER_PROPERTIES);
+        if (producerProperties == null && consumerProperties == null) {
+            String extInfo = params.get("extInfo");
+            Assert.hasText(extInfo, "扩展参数不能为空");
+            Properties props = JsonUtil.jsonToObj(extInfo, Properties.class);
+            connectorConfig.getExtInfo().putAll(props);
+        } else {
+            Assert.hasText(producerProperties, "生产者参数不能为空");
+            Assert.hasText(consumerProperties, "消费者参数不能为空");
+            connectorConfig.getExtInfo().put(KafkaUtil.PRODUCER_PROPERTIES, producerProperties);
+            connectorConfig.getExtInfo().put(KafkaUtil.CONSUMER_PROPERTIES, consumerProperties);
+        }
+        Assert.hasText(url, "url is empty.");
+        Assert.hasText(properties, "properties is empty.");
+        connectorConfig.setUrl(url);
+        connectorConfig.getProperties().putAll(KafkaUtil.parse(properties));
+    }
+
+    @Override
+    public Table modifyExtendedTable(KafkaConnector connectorService, Map<String, String> params) {
+        Table table = new Table();
+        String tableName = params.get("tableName");
+        String columnList = params.get("columnList");
+        String groupId = params.get("groupId");
+        Assert.hasText(tableName, "TableName is empty");
+        Assert.hasText(columnList, "ColumnList is empty");
+        List<Field> fields = JsonUtil.jsonToArray(columnList, Field.class);
+        Assert.notEmpty(fields, "字段不能为空.");
+        table.setName(tableName);
+        table.setColumn(fields);
+        table.setType(connectorService.getExtendedTableType().getCode());
+        // 消费者配置
+        if (StringUtil.isNotBlank(groupId)) {
+            table.getExtInfo().put("groupId", groupId);
+        }
+        return table;
+    }
+}

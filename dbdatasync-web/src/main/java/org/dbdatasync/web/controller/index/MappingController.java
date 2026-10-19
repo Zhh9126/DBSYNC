@@ -1,0 +1,313 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.web.controller.index;
+
+import org.dbdatasync.biz.DataSyncService;
+import org.dbdatasync.biz.MappingService;
+import org.dbdatasync.biz.model.DataSyncRequest;
+import org.dbdatasync.biz.vo.MappingVO;
+import org.dbdatasync.biz.vo.RestResult;
+import org.dbdatasync.common.util.JsonUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.sdk.enums.DataTypeEnum;
+import org.dbdatasync.web.controller.BaseController;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+
+@Controller
+@RequestMapping("/mapping")
+public class MappingController extends BaseController {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @Resource
+    private MappingService mappingService;
+
+    @Resource
+    private DataSyncService dataSyncService;
+
+    @Resource
+    private org.dbdatasync.biz.precheck.PreCheckService preCheckService;
+
+    /**
+     * 同步任务列表页面
+     */
+    @GetMapping("/list")
+    public String list(ModelMap model) {
+        return "mapping/list";
+    }
+
+    /**
+     * 添加同步任务页面
+     */
+    @GetMapping("/pageAdd")
+    public String page(ModelMap model) {
+        return "mapping/add";
+    }
+
+    @GetMapping("/page/{page}")
+    public String page(ModelMap model, @PathVariable("page") String page, @RequestParam(value = "id") String id,
+                       @RequestParam(value = "detailStatus", required = false) String detailStatus,
+                       @RequestParam(value = "tableGroupId", required = false) String tableGroupId,
+                       @RequestParam(value = "status", required = false) String status) {
+        if (StringUtil.equals("detail", page)) {
+            model.put("mappingId", id);
+            model.put("mapping", mappingService.getMapping(id));
+            model.put("detailStatus", detailStatus == null ? "" : detailStatus.trim());
+            return "mapping/detail";
+        }
+        if (StringUtil.equals("events", page)) {
+            MappingVO mapping = mappingService.getMapping(id);
+            model.put("mappingId", id);
+            model.put("mapping", mapping);
+            model.put("metaId", mapping.getMetaId());
+            model.put("tableGroupId", tableGroupId == null ? "" : tableGroupId.trim());
+            String dataStatus = status;
+            if (StringUtil.isBlank(dataStatus)) {
+                if (StringUtil.equals("fail", detailStatus)) {
+                    dataStatus = "0";
+                } else if (StringUtil.equals("success", detailStatus)) {
+                    dataStatus = "1";
+                } else {
+                    dataStatus = "-1";
+                }
+            }
+            model.put("dataStatus", dataStatus);
+            return "mapping/events";
+        }
+        model.put("mapping", mappingService.getMapping(id));
+        if (StringUtil.equals("edit", page)) {
+            org.dbdatasync.biz.vo.MappingVO m = (org.dbdatasync.biz.vo.MappingVO) model.get("mapping");
+            try {
+                model.put("paramsJson", m == null || m.getParams() == null ? "{}" : objectMapper.writeValueAsString(m.getParams()));
+            } catch (Exception e) {
+                model.put("paramsJson", "{}");
+            }
+        }
+        initConfig(model);
+        initEditionInfo(model);
+        return "mapping/" + page;
+    }
+
+    @GetMapping("/pageCustomTable")
+    public String page(ModelMap model, @RequestParam(value = "id") String id, @RequestParam(value = "type") String type) {
+        model.put("mapping", mappingService.getMappingCustomTable(id, type));
+        model.put("type", type);
+        List<DataTypeEnum> dataTypeEnums = Arrays.asList(DataTypeEnum.values());
+        Collections.sort(dataTypeEnums, Comparator.comparing(DataTypeEnum::name));
+        model.put("dataType", dataTypeEnums);
+        return "mapping/customTable";
+    }
+
+    @RequestMapping("/get")
+    @ResponseBody
+    public RestResult get(@RequestParam(value = "id") String id) {
+        try {
+            return RestResult.restSuccess(mappingService.getMapping(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/search")
+    @ResponseBody
+    public RestResult search(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.search(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 同步任务详情：按表映射汇总成功/失败数
+     */
+    @PostMapping("/searchResult")
+    @ResponseBody
+    public RestResult searchResult(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.searchTableGroupResult(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/copy")
+    @ResponseBody
+    public RestResult add(@RequestParam("id") String id) {
+        try {
+            return RestResult.restSuccess(mappingService.copy(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping(value = "/add")
+    @ResponseBody
+    public RestResult add(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.add(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping(value = "/edit")
+    @ResponseBody
+    public RestResult edit(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.edit(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/remove")
+    @ResponseBody
+    public RestResult remove(@RequestParam(value = "id") String id) {
+        try {
+            return RestResult.restSuccess(mappingService.remove(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/start")
+    @ResponseBody
+    public RestResult start(@RequestParam(value = "id") String id) {
+        try {
+            return RestResult.restSuccess(mappingService.start(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/stop")
+    @ResponseBody
+    public RestResult stop(@RequestParam(value = "id") String id) {
+        try {
+            return RestResult.restSuccess(mappingService.stop(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/precheck")
+    @ResponseBody
+    public RestResult precheck(@RequestParam(value = "id") String id) {
+        try {
+            return RestResult.restSuccess(preCheckService.preCheckMapping(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping(value = "/refreshTables")
+    @ResponseBody
+    public RestResult refreshTables(@RequestParam(value = "id") String id) {
+        try {
+            return RestResult.restSuccess(mappingService.refreshMappingTables(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/searchTables")
+    @ResponseBody
+    public RestResult searchTables(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.searchTables(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/searchCustomTable")
+    @ResponseBody
+    public RestResult searchCustomTable(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.searchCustomTable(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping(value = "/saveCustomTable")
+    @ResponseBody
+    public RestResult saveCustomTable(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.saveCustomTable(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping(value = "/removeCustomTable")
+    @ResponseBody
+    public RestResult removeCustomTable(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(mappingService.removeCustomTable(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/sync")
+    @ResponseBody
+    public RestResult sync(HttpServletRequest request) {
+        try {
+            String requestBody = readRequestBody(request);
+            logger.info("接收同步数据：{}", requestBody);
+            DataSyncRequest syncRequest = JsonUtil.jsonToObj(requestBody, DataSyncRequest.class);
+            dataSyncService.syncBatch(syncRequest);
+            return RestResult.restSuccess(null);
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+}

@@ -1,0 +1,457 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.biz.impl;
+
+import org.dbdatasync.biz.enums.BufferActuatorMetricEnum;
+import org.dbdatasync.biz.enums.StatisticEnum;
+import org.dbdatasync.biz.enums.ThreadPoolMetricEnum;
+import org.dbdatasync.biz.model.AppReportMetric;
+import org.dbdatasync.biz.model.DashboardMetric;
+import org.dbdatasync.biz.model.MetricResponse;
+import org.dbdatasync.biz.model.MetricResponseInfo;
+import org.dbdatasync.biz.model.Sample;
+import org.dbdatasync.biz.vo.SyncTrendStackVO;
+import org.dbdatasync.biz.vo.TpsVO;
+import org.dbdatasync.common.metric.Bucket;
+import org.dbdatasync.common.metric.TimeRegistry;
+import org.dbdatasync.common.model.Paging;
+import org.dbdatasync.common.scheduled.ScheduledTaskJob;
+import org.dbdatasync.common.scheduled.ScheduledTaskService;
+import org.dbdatasync.common.util.CollectionUtils;
+import org.dbdatasync.common.util.DateFormatUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.parser.MetaProfile;
+import org.dbdatasync.parser.ProfileComponent;
+import org.dbdatasync.parser.TaskProfile;
+import org.dbdatasync.common.enums.CommonTaskStatusEnum;
+import org.dbdatasync.parser.flush.BufferActuator;
+import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.Meta;
+import org.dbdatasync.sdk.model.BufferActuatorMetric;
+import org.dbdatasync.sdk.spi.BufferActuatorRouterService;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.constant.ConnectorConstant;
+import org.dbdatasync.sdk.enums.FilterEnum;
+import org.dbdatasync.sdk.enums.StorageEnum;
+import org.dbdatasync.sdk.filter.BooleanFilter;
+import org.dbdatasync.sdk.filter.Query;
+import org.dbdatasync.sdk.filter.impl.IntFilter;
+import org.dbdatasync.sdk.filter.impl.LongFilter;
+import org.dbdatasync.sdk.storage.StorageService;
+import org.dbdatasync.storage.enums.StorageDataStatusEnum;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.stereotype.Component;
+
+import javax.annotation.PostConstruct;
+import javax.annotation.Resource;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * @Author AE86
+ * @Version 1.0.0
+ * @Date 2020-04-23 11:30
+ */
+@Component
+public class MetricReporter implements ScheduledTaskJob {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private ProfileComponent profileComponent;
+
+    @Resource
+    private TaskProfile taskProfile;
+
+    @Resource
+    private MetaProfile metaProfile;
+
+    @Resource
+    private BufferActuator generalBufferActuator;
+
+    @Resource
+    private BufferActuator storageBufferActuator;
+
+    @Resource
+    private BufferActuatorRouterService bufferActuatorRouter;
+
+    @Resource
+    private ScheduledTaskService scheduledTaskService;
+
+    @Resource
+    private StorageService storageService;
+
+    @Resource
+    private TimeRegistry timeRegistry;
+
+    private volatile boolean running;
+
+    private LocalDateTime queryTime;
+
+    private final DashboardMetric dashboardMetric = new DashboardMetric();
+
+    private final AppReportMetric report = new AppReportMetric();
+
+    private final static int SHOW_REPORT_DAYS = 30;
+
+    @PostConstruct
+    private void init() {
+        scheduledTaskService.start(5000, this);
+    }
+
+    public List<MetricResponse> getMetricInfo() {
+        List<MetricResponseInfo> list = new ArrayList<>();
+        BufferActuatorMetricEnum general = BufferActuatorMetricEnum.GENERAL;
+        BufferActuatorMetricEnum storage = BufferActuatorMetricEnum.STORAGE;
+        list.add(collect(generalBufferActuator, general.getCode(), general.getGroup(), general.getMetricName()));
+        list.add(collect(storageBufferActuator, storage.getCode(), storage.getGroup(), storage.getMetricName()));
+        return list.stream().map(MetricResponseInfo::getResponse).collect(Collectors.toList());
+    }
+
+    public Paging<MetricResponse> queryActuator(String searchMetaId, String searchKey, int pageNum, int pageSize) {
+        Paging<MetricResponse> paging = new Paging<>(pageNum, pageSize);
+        List<BufferActuatorMetric> metrics = bufferActuatorRouter.listMetrics();
+        if (!CollectionUtils.isEmpty(metrics)) {
+            List<MetricResponseInfo> tableList = new ArrayList<>();
+            String tableGroupCode = BufferActuatorMetricEnum.TABLE_GROUP.getCode();
+            for (BufferActuatorMetric metric : metrics) {
+                if (StringUtil.isNotBlank(searchMetaId) && !StringUtil.equals(searchMetaId, metric.getMetaId())) {
+                    continue;
+                }
+                if (StringUtil.isNotBlank(searchKey) && !StringUtil.contains(metric.getName(), searchKey)) {
+                    continue;
+                }
+                tableList.add(collect(metric, tableGroupCode));
+            }
+            if (!CollectionUtils.isEmpty(tableList)) {
+                int offset = (pageNum * pageSize) - pageSize;
+                paging.setData(tableList.stream().sorted(Comparator.comparing(MetricResponseInfo::getQueueUp).reversed()).map(MetricResponseInfo::getResponse).skip(offset).limit(pageSize)
+                        .collect(Collectors.toList()));
+                paging.setTotal(tableList.size());
+            }
+        }
+        return paging;
+    }
+
+    private MetricResponseInfo collect(BufferActuatorMetric metric, String code) {
+        Meta meta = metaProfile.getMeta(metric.getMetaId());
+        String group = StringUtil.EMPTY;
+        if (meta != null) {
+            Mapping mapping = profileComponent.getMapping(meta.getTaskId());
+            if (mapping != null) {
+                group = mapping.getName();
+            }
+        }
+        MetricResponseInfo info = new MetricResponseInfo();
+        info.setQueueUp(metric.getQueueSize());
+        String msg = "堆积" + StringUtil.COLON + info.getQueueUp() + StringUtil.FORWARD_SLASH + metric.getQueueCapacity() + StringUtil.SPACE
+                + ThreadPoolMetricEnum.CORE_SIZE.getMetricName() + StringUtil.COLON + metric.getActiveCount() + StringUtil.FORWARD_SLASH
+                + metric.getMaxPoolSize() + StringUtil.SPACE + ThreadPoolMetricEnum.COMPLETED.getMetricName() + StringUtil.COLON
+                + metric.getCompletedTaskCount();
+        info.setResponse(new MetricResponse(code, group, metric.getName(), Collections.singletonList(new Sample(StatisticEnum.COUNT.getTagValueRepresentation(), msg))));
+        return info;
+    }
+
+    public AppReportMetric getAppReportMetric() {
+        queryTime = LocalDateTime.now();
+        // 堆积任务(通用执行器 + 表执行器)
+        report.setQueueUp(bufferActuatorRouter.getQueueSize() + generalBufferActuator.getQueue().size());
+        report.setQueueCapacity(bufferActuatorRouter.getQueueCapacity() + generalBufferActuator.getQueueCapacity());
+        // 持久化任务
+        report.setStorageQueueUp(storageBufferActuator.getQueue().size());
+        report.setStorageQueueCapacity(storageBufferActuator.getQueueCapacity());
+        // 执行器TPS
+        report.setTps(getOneMinBufferActuatorRate());
+        return report;
+    }
+
+    public DashboardMetric getMappingReportMetric() {
+        queryTime = LocalDateTime.now();
+        return dashboardMetric;
+    }
+
+    @Override
+    public void run() {
+        if (running || null == queryTime) {
+            return;
+        }
+        // 非活动时间范围(30s内)
+        if (LocalDateTime.now().minusSeconds(30).isAfter(queryTime)) {
+            return;
+        }
+
+        // 刷新报表
+        try {
+            running = true;
+            // 先分页扫描同步任务(Mapping)，再按任务 ID 批量 IN 查任务级 Meta
+            final List<Meta> metaAll = new ArrayList<>();
+            taskProfile.pageScanTasks(Mapping.class, ConfigConstant.PAGE_SIZE, mappings -> {
+                if (CollectionUtils.isEmpty(mappings)) {
+                    return;
+                }
+                List<String> taskIds = new ArrayList<>();
+                for (Mapping mapping : mappings) {
+                    if (mapping != null && StringUtil.isNotBlank(mapping.getId())) {
+                        taskIds.add(mapping.getId());
+                    }
+                }
+                Map<String, Meta> metaMap = metaProfile.getTaskMetaMap(taskIds);
+                if (!CollectionUtils.isEmpty(metaMap)) {
+                    metaAll.addAll(metaMap.values());
+                }
+            });
+            if (CollectionUtils.isEmpty(metaAll)) {
+                dashboardMetric.reset();
+                return;
+            }
+            dashboardMetric.setSuccess(getMappingSuccess(metaAll));
+            dashboardMetric.setFail(getMappingFail(metaAll));
+            dashboardMetric.setYesterdayData(getMappingYesterdayAll(metaAll));
+            dashboardMetric.setInsert(getMappingInsert(metaAll));
+            dashboardMetric.setUpdate(getMappingUpdate(metaAll));
+            dashboardMetric.setDelete(getMappingDelete(metaAll));
+            dashboardMetric.setDdl(getMappingDll(metaAll));
+            // 获取同步趋势数据
+            updateSyncTrendData(metaAll, dashboardMetric);
+
+            AtomicLong running = new AtomicLong();
+            AtomicLong fail = new AtomicLong();
+            AtomicLong lastWeek = new AtomicLong();
+            long lastWeekTime = Timestamp.valueOf(LocalDateTime.now().minusWeeks(1)).getTime();
+            metaAll.forEach(meta-> {
+                // 统计上周任务总数
+                if (meta.getCreateTime() <= lastWeekTime) {
+                    lastWeek.incrementAndGet();
+                }
+                // 统计运行中
+                if (CommonTaskStatusEnum.isRunning(meta.getState())) {
+                    running.incrementAndGet();
+                }
+                // 统计失败数
+                if (meta.getFail() != null && meta.getFail().get() > 0) {
+                    fail.incrementAndGet();
+                }
+            });
+            dashboardMetric.setTotalMeta(metaAll.size());
+            dashboardMetric.setLastWeekMeta(lastWeek.get());
+            dashboardMetric.setRunningMeta(running.get());
+            dashboardMetric.setFailMeta(fail.get());
+        } catch (Exception e) {
+            logger.error(e.getMessage(), e);
+        } finally {
+            running = false;
+        }
+    }
+
+    private void updateSyncTrendData(List<Meta> metaAll, DashboardMetric dashboardMetric) {
+        SyncTrendStackVO stack = dashboardMetric.getTrend();
+        LocalDateTime now = LocalDateTime.now();
+        Timestamp timestamp = Timestamp.valueOf(LocalDateTime.now());
+        String today = DateFormatUtil.timestampToString(timestamp, DateFormatUtil.MM_DD);
+        // 未加载数据
+        List<String> labels = stack.getLabels();
+        if (CollectionUtils.isEmpty(labels)) {
+            // 获取30天前的数据
+            for (int i = SHOW_REPORT_DAYS - 1; i > 0; i--) {
+                Timestamp time = Timestamp.valueOf(now.minusDays(i));
+                labels.add(DateFormatUtil.timestampToString(time, DateFormatUtil.MM_DD));
+                stack.getSuccess().add(getMappingDataCount(metaAll, time.getTime(), StorageDataStatusEnum.SUCCESS));
+                stack.getFail().add(getMappingDataCount(metaAll, time.getTime(), StorageDataStatusEnum.FAIL));
+            }
+            // 记录今日数据
+            labels.add(today);
+            stack.getSuccess().add(dashboardMetric.getSuccess());
+            stack.getFail().add(dashboardMetric.getFail());
+            return;
+        }
+
+        // 日期发生变更
+        if (!StringUtil.equals(today, labels.get(labels.size() - 1))) {
+            // 移除最早的日期
+            List<String> newLabels = labels.stream().skip(1).collect(Collectors.toList());
+            labels.clear();
+            labels.addAll(newLabels);
+            // 记录今日数据
+            labels.add(today);
+            stack.getSuccess().add(dashboardMetric.getSuccess());
+            stack.getFail().add(dashboardMetric.getFail());
+            return;
+        }
+
+        // 更新今日数据
+        stack.getSuccess().set(stack.getSuccess().size() - 1, dashboardMetric.getSuccess());
+        stack.getFail().set(stack.getFail().size() - 1, dashboardMetric.getFail());
+    }
+
+    /**
+     * 获取执行器TPS
+     *
+     * @return
+     */
+    public TpsVO getOneMinBufferActuatorRate() {
+        Bucket[] buckets = timeRegistry.meter(TimeRegistry.GENERAL_BUFFER_ACTUATOR_TPS).getBucketAll();
+        TpsVO vo = new TpsVO();
+        Instant now = Instant.now();
+        long oneMin = now.minus(1, ChronoUnit.MINUTES).toEpochMilli();
+        // 只显示1分钟内
+        Map<String, Long> map = new HashMap<>();
+        Stream.of(buckets).filter(b->b.getTime() >= oneMin).sorted(Comparator.comparing(Bucket::getTime))
+                .forEach(b->map.put(DateFormatUtil.timestampToString(new Timestamp(b.getTime()), DateFormatUtil.HH_MM_SS), b.get()));
+        for (int i = 0; i < buckets.length; i++) {
+            long milli = now.minus(buckets.length - i, ChronoUnit.SECONDS).toEpochMilli();
+            String key = DateFormatUtil.timestampToString(new Timestamp(milli), DateFormatUtil.HH_MM_SS);
+            vo.addName(key);
+            vo.addValue(map.getOrDefault(key, 0L));
+        }
+        vo.setAverage(Math.floor(map.values().stream().mapToInt(Long::intValue).average().orElse(0)));
+        return vo;
+    }
+
+    /**
+     * 获取所有驱动成功数
+     *
+     * 全量同步默认不写 task_detail 明细分表，因此成功/失败计数直接从任务级 Meta 的
+     * 实时累计值聚合（FlushStrategy.refreshTotal 每次同步都会累加），保证仪表盘准确。
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingSuccess(List<Meta> metaAll) {
+        if (CollectionUtils.isEmpty(metaAll)) {
+            return 0L;
+        }
+        return metaAll.stream().mapToLong(m -> m.getSuccess() != null ? m.getSuccess().get() : 0L).sum();
+    }
+
+    /**
+     * 获取所有驱动失败数
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingFail(List<Meta> metaAll) {
+        if (CollectionUtils.isEmpty(metaAll)) {
+            return 0L;
+        }
+        return metaAll.stream().mapToLong(m -> m.getFail() != null ? m.getFail().get() : 0L).sum();
+    }
+
+    /**
+     * 获取所有驱动数据
+     *
+     * @param metaAll
+     * @param time
+     * @param status
+     * @return
+     */
+    private long getMappingDataCount(List<Meta> metaAll, long time, StorageDataStatusEnum status) {
+        return queryMappingMetricCount(metaAll, (query)-> {
+            LongFilter filter = new LongFilter(ConfigConstant.CONFIG_MODEL_CREATE_TIME, FilterEnum.LT, time);
+            IntFilter success = new IntFilter(ConfigConstant.DETAIL_IS_SUCCESS, status.getValue());
+            query.setBooleanFilter(new BooleanFilter().add(filter).add(success));
+        });
+    }
+
+    /**
+     * 获取昨日驱动成功+失败数（仅统计昨天一天的数据区间）
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingYesterdayAll(List<Meta> metaAll) {
+        return queryMappingMetricCount(metaAll, (query)-> {
+            long yesterday = Timestamp.valueOf(LocalDateTime.now().minusDays(1)).getTime();
+            long today = Timestamp.valueOf(LocalDateTime.now()).getTime();
+            LongFilter start = new LongFilter(ConfigConstant.CONFIG_MODEL_CREATE_TIME, FilterEnum.GT_AND_EQUAL, yesterday);
+            LongFilter end = new LongFilter(ConfigConstant.CONFIG_MODEL_CREATE_TIME, FilterEnum.LT, today);
+            query.setBooleanFilter(new BooleanFilter().add(start).add(end));
+        });
+    }
+
+    /**
+     * 获取所有驱动事件插入数
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingInsert(List<Meta> metaAll) {
+        return queryMappingMetricCount(metaAll, (query)->query.addFilter(ConfigConstant.CONFIG_MODEL_TYPE, ConnectorConstant.OPERTION_INSERT));
+    }
+
+    /**
+     * 获取所有驱动事件更新数
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingUpdate(List<Meta> metaAll) {
+        return queryMappingMetricCount(metaAll, (query)->query.addFilter(ConfigConstant.CONFIG_MODEL_TYPE, ConnectorConstant.OPERTION_UPDATE));
+    }
+
+    /**
+     * 获取所有驱动事件删除数
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingDelete(List<Meta> metaAll) {
+        return queryMappingMetricCount(metaAll, (query)->query.addFilter(ConfigConstant.CONFIG_MODEL_TYPE, ConnectorConstant.OPERTION_DELETE));
+    }
+
+    /**
+     * 获取所有DDL事件数
+     *
+     * @param metaAll
+     * @return
+     */
+    private long getMappingDll(List<Meta> metaAll) {
+        return queryMappingMetricCount(metaAll, (query)->query.addFilter(ConfigConstant.CONFIG_MODEL_TYPE, ConnectorConstant.OPERTION_ALTER));
+    }
+
+    private long queryMappingMetricCount(List<Meta> metaAll, Consumer<Query> operation) {
+        if (CollectionUtils.isEmpty(metaAll)) {
+            return 0L;
+        }
+        // 明细分表：逐任务分表(DBDataSync_task_detail_{taskId})统计后累加
+        long total = 0L;
+        for (Meta meta : metaAll) {
+            Query query = new Query(1, 1);
+            query.setQueryTotal(true);
+            query.setType(StorageEnum.TASK_DETAIL);
+            query.setMetaId(StringUtil.isNotBlank(meta.getTaskId()) ? meta.getTaskId() : meta.getId());
+            operation.accept(query);
+            Paging paging = storageService.query(query);
+            total += paging.getTotal();
+        }
+        return total;
+    }
+
+    private MetricResponseInfo collect(BufferActuator bufferActuator, String code, String group, String metricName) {
+        MetricResponseInfo info = new MetricResponseInfo();
+        ThreadPoolTaskExecutor threadTask = (ThreadPoolTaskExecutor) bufferActuator.getExecutor();
+        ThreadPoolExecutor pool = threadTask.getThreadPoolExecutor();
+        info.setQueueUp(bufferActuator.getQueue().size());
+        String msg = "堆积" + StringUtil.COLON + info.getQueueUp() + StringUtil.FORWARD_SLASH + bufferActuator.getQueueCapacity() + StringUtil.SPACE + ThreadPoolMetricEnum.CORE_SIZE.getMetricName()
+                + StringUtil.COLON + pool.getActiveCount() + StringUtil.FORWARD_SLASH + pool.getMaximumPoolSize() + StringUtil.SPACE + ThreadPoolMetricEnum.COMPLETED.getMetricName() + StringUtil.COLON
+                + pool.getCompletedTaskCount();
+        info.setResponse(new MetricResponse(code, group, metricName, Collections.singletonList(new Sample(StatisticEnum.COUNT.getTagValueRepresentation(), msg))));
+        return info;
+    }
+
+}

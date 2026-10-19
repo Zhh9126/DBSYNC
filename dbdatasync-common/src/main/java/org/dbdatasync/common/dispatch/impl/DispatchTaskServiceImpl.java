@@ -1,0 +1,62 @@
+/**
+ * DBDataSync Copyright 2020-2025 All Rights Reserved.
+ */
+package org.dbdatasync.common.dispatch.impl;
+
+import org.dbdatasync.common.dispatch.DispatchTask;
+import org.dbdatasync.common.dispatch.DispatchTaskService;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.stereotype.Component;
+
+import javax.annotation.Resource;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 任务调度实现
+ *
+ * @Author 穿云
+ * @Version 1.0.0
+ * @Date 2025-06-12 23:45
+ */
+@Component
+public class DispatchTaskServiceImpl implements DispatchTaskService {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private ThreadPoolTaskExecutor dispatchTaskExecutor;
+
+    private final Map<String, DispatchTask> active = new ConcurrentHashMap<>();
+
+    @Override
+    public void execute(DispatchTask task) {
+        dispatchTaskExecutor.execute(active.compute(task.getUniqueId(), (k, t)-> {
+            if (t != null) {
+                t.destroy();
+                logger.warn("The dispatch task was terminated, {}", k);
+            }
+            // 按实例移除，避免同 uniqueId 替换任务后旧任务 finally 误删新任务
+            task.onDestroy(dispatchTask -> active.remove(task.getUniqueId(), dispatchTask));
+            return task;
+        }));
+    }
+
+    @Override
+    public void stop(String uniqueId) {
+        active.computeIfPresent(uniqueId, (k, t)-> {
+            t.destroy();
+            logger.info("The dispatch task has been stop, {}", k);
+            return null;
+        });
+    }
+
+    @Override
+    public boolean isRunning(String uniqueId) {
+        return active.containsKey(uniqueId);
+    }
+}

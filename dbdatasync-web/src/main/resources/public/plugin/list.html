@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<div class="form-container mb-5">
+    <div class="card-header">
+        <h3 class="card-title text-center">插件管理</h3>
+    </div>
+
+    <div class="card-body">
+        <h3 class="card-title">已支持的 JDBC 驱动</h3>
+        <p class="text-xs text-tertiary">以下驱动随系统内置，创建连接器时直接选择对应类型即可，无需上传。</p>
+        <table class="table">
+            <thead>
+            <tr>
+                <th>数据库</th>
+                <th>驱动类型</th>
+                <th>来源</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="c : ${connectors}">
+                <td>
+                    <div class="flex items-center" title="内置驱动">
+                        <i class="fa fa-database mr-2"></i>
+                        <span class="font-medium">[[${c.name}]]</span>
+                        <span class="badge badge-info ml-2 text-xs">内置</span>
+                    </div>
+                </td>
+                <td><code th:text="${c.type}"></code></td>
+                <td class="text-sm">系统内置</td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card-body">
+        <h3 class="card-title">数据转换插件</h3>
+        <p class="text-xs text-tertiary">数据转换插件用于在同步过程中对字段做二次处理，上传插件后选择同步任务，进入高级配置关联插件。</p>
+        <table class="table">
+            <thead>
+            <tr>
+                <th>名称</th>
+                <th>类名</th>
+                <th>版本</th>
+                <th>文件</th>
+            </tr>
+            </thead>
+            <tbody id="pluginList">
+            <tr th:id="${p?.name}" th:each="p,state : ${plugins}">
+                <td>
+                    <div th:if="${p?.unmodifiable}" class="flex items-center" title="内置插件">
+                        <i class="fa fa-plug mr-2"></i>
+                        <span class="font-medium">[[${p?.name}]]</span>
+                        <span class="badge badge-info ml-2 text-xs">内置</span>
+                    </div>
+                    <div th:if="${not p?.unmodifiable}" class="flex items-center" title="普通插件">
+                        <i class="fa fa-star text-warning mr-2"></i>
+                        <span class="font-medium">[[${p?.name}]]</span>
+                    </div>
+                </td>
+                <td th:text="${p?.className}" th:title="${p?.className}"/>
+                <td>
+                    <span class="badge badge-success" th:text="${p?.version}"></span>
+                </td>
+                <td class="text-sm" th:text="${p?.fileName}"/>
+            </tr>
+            <tr th:if="${#lists.isEmpty(plugins)}">
+                <td colspan="4">
+                    <div class="text-center text-tertiary py-2">
+                        <i class="fa fa-inbox fa-2x mb-2 block"></i>
+                        <span>暂无数据转换插件，可通过下方上传 JAR 包添加</span>
+                    </div>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card-body">
+        <div id="pluginUploader" class="upload-container">
+            <div class="upload-area" data-upload-area>
+                <div class="upload-icon">
+                    <i class="fa fa-plug"></i>
+                </div>
+                <div class="upload-text">点击或拖拽 JAR 文件到此处上传</div>
+                <div class="upload-hint">
+                    支持的文件类型：.jar<br>
+                    最多上传 5 个文件
+                </div>
+                <div class="upload-button">选择文件</div>
+                <input type="file"
+                       class="upload-input"
+                       id="filePlugin"
+                       accept=".jar"
+                       multiple>
+            </div>
+            <div class="upload-list" data-upload-list></div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    $(function() {
+        // 初始化文件上传组件
+        initFileUpload('#pluginUploader', {
+            uploadUrl: $basePath + '/plugin/upload',
+            maxFiles: 5,
+            maxSize: 50 * 1024 * 1024, // 50MB
+            acceptedFiles: '.jar',
+            autoUpload: true,
+            onSuccess: function(file, response) {
+                if (response.success) {
+                    bootGrowl("插件上传成功！", "success");
+                    doLoader("/plugin");
+                } else {
+                    bootGrowl(response.message || "上传失败", "danger");
+                }
+            },
+            onError: function(file, error) {
+                bootGrowl(error || "上传失败", "danger");
+            }
+        });
+    });
+</script>
+</html>

@@ -1,0 +1,211 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.sdk.connector.database.ds;
+
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.sdk.SdkException;
+import org.dbdatasync.sdk.util.DatabaseUtil;
+
+import javax.sql.DataSource;
+
+import java.io.PrintWriter;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
+import java.time.Instant;
+import java.util.Properties;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Logger;
+
+public class SimpleDataSource implements DataSource, AutoCloseable {
+
+    // 从缓存队列获取连接次数
+    private final int MAX_PULL_TIME = 20;
+    // 有效检测时间（秒），默认10s
+    private final int VALID_TIMEOUT_SECONDS = 10;
+    // 创建连接重试次数
+    private final int CREATE_RETRY_TIMES = 3;
+    // 创建连接重试间隔（毫秒）
+    private final long CREATE_RETRY_INTERVAL_MS = 500;
+    // 获取连接锁
+    private final ReentrantLock lock = new ReentrantLock();
+    private String driverClassName;
+    private String url;
+    private Properties properties;
+    // 连接池队列
+    private BlockingQueue<SimpleConnection> pool;
+    // 活跃连接数
+    private AtomicInteger activeNum;
+    // 最大连接数
+    private int maxActive;
+    // 连接有效期(ms)
+    private long keepAlive;
+    // 是否是Oracle连接
+    private boolean oracleDriver;
+
+    public SimpleDataSource(String driverClassName, String url, Properties properties, int maxActive, long keepAlive) {
+        this.driverClassName = driverClassName;
+        this.url = url;
+        this.properties = properties;
+        this.maxActive = maxActive;
+        this.keepAlive = keepAlive;
+        oracleDriver = StringUtil.equals(driverClassName, "oracle.jdbc.OracleDriver");
+        activeNum = new AtomicInteger(0);
+        pool = new LinkedBlockingQueue<>(maxActive);
+    }
+
+    @Override
+    public Connection getConnection() throws SQLException {
+        try {
+            lock.lock();
+            // 如果当前连接数大于或等于最大连接数
+            if (activeNum.get() >= maxActive) {
+                throw new SdkException(String.format("数据库连接数超过上限%d，url=%s", maxActive, url));
+            }
+            int time = MAX_PULL_TIME;
+            while (time-- > 0) {
+                SimpleConnection poll = pool.poll();
+                if (null == poll) {
+                    return createConnection();
+                }
+                // 连接无效或过期, 直接关闭连接
+                if (!poll.isValid(VALID_TIMEOUT_SECONDS) || isExpired(poll)) {
+                    closeQuietly(poll);
+                    continue;
+                }
+                // 返回缓存连接
+                return poll;
+            }
+
+            // 兜底方案，保证一定能获取连接
+            return createConnection();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public Connection getConnection(String username, String password) throws SQLException {
+        throw new SdkException("Unsupported method.");
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+        return null;
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        return false;
+    }
+
+    @Override
+    public PrintWriter getLogWriter() throws SQLException {
+        return null;
+    }
+
+    @Override
+    public void setLogWriter(PrintWriter out) throws SQLException {
+    }
+
+    @Override
+    public void setLoginTimeout(int seconds) throws SQLException {
+    }
+
+    @Override
+    public int getLoginTimeout() throws SQLException {
+        return 0;
+    }
+
+    @Override
+    public Logger getParentLogger() throws SQLFeatureNotSupportedException {
+        return null;
+    }
+
+    @Override
+    public void close() {
+        // 清空连接池并关闭所有连接，避免在遍历时修改集合
+        SimpleConnection connection;
+        while ((connection = pool.poll()) != null) {
+            try {
+                closeQuietly(connection);
+            } catch (Exception e) {
+                // 忽略关闭异常，确保所有连接都能尝试关闭
+            }
+        }
+    }
+
+    public void close(Connection connection) {
+        if (connection instanceof SimpleConnection) {
+            SimpleConnection simpleConnection = (SimpleConnection) connection;
+            if (isExpired(simpleConnection) || isUnavailable(simpleConnection)) {
+                closeQuietly(simpleConnection);
+                return;
+            }
+
+            // 回收连接
+            pool.offer(simpleConnection);
+        }
+    }
+
+    /**
+     * 丢弃不可用连接，避免回收到连接池
+     */
+    public void discard(Connection connection) {
+        if (connection instanceof SimpleConnection) {
+            closeQuietly((SimpleConnection) connection);
+        }
+    }
+
+    private void closeQuietly(SimpleConnection connection) {
+        if (connection != null) {
+            connection.close();
+            activeNum.decrementAndGet();
+        }
+    }
+
+    /**
+     * 连接是否过期
+     */
+    private boolean isExpired(SimpleConnection connection) {
+        return connection.getActiveTime() + keepAlive < Instant.now().toEpochMilli();
+    }
+
+    private boolean isUnavailable(SimpleConnection connection) {
+        try {
+            return connection.isClosed() || !connection.isValid(VALID_TIMEOUT_SECONDS);
+        } catch (SQLException e) {
+            return true;
+        }
+    }
+
+    /**
+     * 创建新连接
+     */
+    private SimpleConnection createConnection() {
+        SQLException lastException = null;
+        for (int i = 0; i < CREATE_RETRY_TIMES; i++) {
+            try {
+                SimpleConnection simpleConnection = new SimpleConnection(DatabaseUtil.getConnection(driverClassName, url, properties), oracleDriver);
+                activeNum.incrementAndGet();
+                return simpleConnection;
+            } catch (SQLException e) {
+                lastException = e;
+                if (i < CREATE_RETRY_TIMES - 1) {
+                    try {
+                        TimeUnit.MILLISECONDS.sleep(CREATE_RETRY_INTERVAL_MS);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new SdkException(e);
+                    }
+                }
+            }
+        }
+        throw new SdkException(lastException);
+    }
+}

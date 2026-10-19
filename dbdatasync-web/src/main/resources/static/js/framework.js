@@ -1,0 +1,1293 @@
+// ******************* 初始化 *****************************
+const $location = (window.location + '').split('/');
+const $path = document.location.pathname;
+const $basePath = $location[0] + '//' + $location[2] + $path.substr(0, $path.substr(1).indexOf("/") + 1);
+const $mainContent = $('#mainContent');
+
+// 工具函数
+function showLoading() {
+    $mainContent.html('<div class="loading"><div class="loading-spinner"></div>加载中...</div>');
+}
+function hideLoading() {
+    $mainContent.find('.loading').remove();
+}
+
+// HTML转义
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatDate(time) {
+    let timestamp = Number(time);
+    const date = new Date(timestamp);
+    const YY = date.getFullYear() + '-';
+    const MM = (date.getMonth() + 1 < 10 ? '0' + (date.getMonth() + 1) : date.getMonth() + 1) + '-';
+    const DD = (date.getDate() < 10 ? '0' + (date.getDate()) : date.getDate());
+    const hh = (date.getHours() < 10 ? '0' + date.getHours() : date.getHours()) + ':';
+    const mm = (date.getMinutes() < 10 ? '0' + date.getMinutes() : date.getMinutes()) + ':';
+    const ss = (date.getSeconds() < 10 ? '0' + date.getSeconds() : date.getSeconds());
+    return YY + MM + DD + " " + hh + mm + ss;
+}
+
+/**
+ * 计算相对时间文本
+ * @param {string|number} time - 时间字符串或时间戳
+ * @returns {string} 相对时间文本，如：30秒前、1分钟前、2小时前、昨天、2天前、3个月前、N个月前
+ */
+function formatRelativeTime(time) {
+    if (!time) {
+        return '';
+    }
+    
+    const now = new Date();
+    const targetTime = new Date(time);
+    
+    // 如果时间无效，返回空字符串
+    if (isNaN(targetTime.getTime())) {
+        return '';
+    }
+    
+    const diffMs = now.getTime() - targetTime.getTime();
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    // 小于1分钟：显示秒数
+    if (diffSeconds < 60) {
+        return diffSeconds <= 0 ? '刚刚' : diffSeconds + '秒前';
+    }
+    
+    // 小于1小时：显示分钟数
+    if (diffMinutes < 60) {
+        return diffMinutes + '分钟前';
+    }
+    
+    // 小于24小时：显示小时数
+    if (diffHours < 24) {
+        return diffHours + '小时前';
+    }
+    
+    // 判断是否是昨天（同一天）
+    const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const targetDate = new Date(targetTime.getFullYear(), targetTime.getMonth(), targetTime.getDate());
+    const daysDiff = Math.floor((nowDate.getTime() - targetDate.getTime()) / (1000 * 60 * 60 * 24));
+    
+    // 昨天
+    if (daysDiff === 1) {
+        return '昨天';
+    }
+    
+    // 小于30天：显示天数
+    if (diffDays < 30) {
+        return diffDays + '天前';
+    }
+    
+    // 计算月份差
+    const monthsDiff = (now.getFullYear() - targetTime.getFullYear()) * 12 + (now.getMonth() - targetTime.getMonth());
+    
+    // 小于12个月：显示月数
+    if (monthsDiff < 12) {
+        return monthsDiff + '个月前';
+    }
+    
+    // 大于等于12个月：显示年数
+    const yearsDiff = Math.floor(monthsDiff / 12);
+    return yearsDiff + '年前';
+}
+
+/**
+ * 判断字符串是否为空串
+ * @eg undefined true
+ * @eg null true
+ * @eg '' true
+ * @eg ' ' true
+ * @eg '1' false
+ * @return Boolean
+ */
+function isBlank(str) {
+    return str === undefined || str === null || str === false || str.length === 0;
+}
+
+// ******************* 水印 ***************************
+window.onresize = function () {
+    watermark();
+}
+window.onscroll = function () {
+    watermark();
+}
+//水印样式默认设置
+const settings = {
+    watermark_txt: "",
+    watermark_x: 50,//水印起始位置x轴坐标
+    watermark_y: 55,//水印起始位置Y轴坐标
+    watermark_rows: 2000,//水印行数
+    watermark_cols: 2000,//水印列数
+    watermark_x_space: 70,//水印x轴间隔
+    watermark_y_space: 30,//水印y轴间隔
+    watermark_color: '#aaaaaa',//水印字体颜色
+    watermark_alpha: 0.2,//水印透明度
+    watermark_fontsize: '15px',//水印字体大小
+    watermark_font: '微软雅黑',//水印字体
+    watermark_width: 210,//水印宽度
+    watermark_height: 80,//水印长度
+    watermark_angle: 15//水印倾斜度数
+};
+let timestampWatermark;
+
+function watermark() {
+    const now = Date.now();
+    if (timestampWatermark != null && now - timestampWatermark < 200) {
+        return;
+    }
+    if (isBlank(settings.watermark_txt)) {
+        return;
+    }
+    timestampWatermark = now;
+    $(".DBDataSync_mask").remove();
+
+    const water = document.body;
+    //获取页面最大宽度
+    const page_width = Math.max(water.scrollWidth, water.clientWidth);
+    //获取页面最大高度
+    const page_height = Math.max(water.scrollHeight, water.clientHeight);
+    //水印数量自适应元素区域尺寸
+    settings.watermark_cols = Math.ceil(page_width / (settings.watermark_x_space + settings.watermark_width));
+    settings.watermark_rows = Math.ceil(page_height / (settings.watermark_y_space + settings.watermark_height));
+    let x;
+    let y;
+    for (let i = 0; i < settings.watermark_rows; i++) {
+        y = settings.watermark_y + (settings.watermark_y_space + settings.watermark_height) * i;
+        for (let j = 0; j < settings.watermark_cols; j++) {
+            x = settings.watermark_x + (settings.watermark_width + settings.watermark_x_space) * j;
+            let mask_div = document.createElement('div');
+            mask_div.className = 'DBDataSync_mask';
+            mask_div.innerHTML = (settings.watermark_txt);
+            mask_div.style.webkitTransform = "rotate(-" + settings.watermark_angle + "deg)";
+            mask_div.style.MozTransform = "rotate(-" + settings.watermark_angle + "deg)";
+            mask_div.style.msTransform = "rotate(-" + settings.watermark_angle + "deg)";
+            mask_div.style.OTransform = "rotate(-" + settings.watermark_angle + "deg)";
+            mask_div.style.transform = "rotate(-" + settings.watermark_angle + "deg)";
+            mask_div.style.position = "absolute";
+            mask_div.style.left = x + 'px';
+            mask_div.style.top = y + 'px';
+            mask_div.style.overflow = "hidden";
+            mask_div.style.pointerEvents = 'none';
+            mask_div.style.opacity = settings.watermark_alpha;
+            mask_div.style.fontSize = settings.watermark_fontsize;
+            mask_div.style.fontFamily = settings.watermark_font;
+            mask_div.style.color = settings.watermark_color;
+            mask_div.style.textAlign = "center";
+            mask_div.style.width = settings.watermark_width + 'px';
+            mask_div.style.height = settings.watermark_height + 'px';
+            mask_div.style.display = "block";
+            water.appendChild(mask_div);
+        }
+    }
+}
+
+// ******************* 扩展JS表单方法 ***************************
+$.fn.serializeJson = function () {
+    var o = {};
+    var a = this.serializeArray();
+    $.each(a, function () {
+        if (o[this.name] !== undefined) {
+            if (!o[this.name].push) {
+                o[this.name] = [o[this.name]];
+            }
+            o[this.name].push(this.value || '');
+        } else {
+            o[this.name] = this.value || '';
+        }
+    });
+    return o;
+};
+
+function validateForm($form) {
+    if (!$form || !$form.length) { return true; }
+
+    var isValid = true;
+    $form.find('.form-error-msg').remove();
+    $form.find('.is-invalid').removeClass('is-invalid');
+
+    // 查找所有带有 required 属性且非隐藏状态的字段
+    $form.find('[required]:not([type="hidden"])').each(function(){
+        var $field = $(this);
+
+        // 额外检查是否被隐藏 (例如通过 hidden 属性或 CSS display)
+        if ($field.is(':hidden')) {
+            return; // 跳过本次循环，继续验证下一个元素
+        }
+
+        if ($field.is(':disabled')) {
+            return;
+        }
+
+        var value = $.trim($field.val());
+        var invalid = false;
+
+        if ($field.is(':checkbox') || $field.is(':radio')) {
+            // 对于复选框和单选按钮，检查是否被选中
+            invalid = !$field.is(':checked');
+        } else if ($field.is('select')) {
+            // 对于下拉选择框，检查值是否为空
+            invalid = value === '' || value === null;
+        } else {
+            // 对于其他输入框（文本、数字等），检查值长度
+            invalid = value.length === 0;
+        }
+
+        if (invalid) {
+            isValid = false;
+            var $container = $field.closest('.form-control-area');
+            if ($container.length === 0) {
+                $container = $field.parent();
+            }
+
+            // 获取字段的标签文本用于错误提示
+            var labelText = '';
+            var $label = $field.closest('.form-item').find('.form-label').first();
+            if ($label.length) {
+                labelText = $label.text().replace('*', '').trim();
+            } else if ($field.attr('placeholder')) {
+                labelText = $field.attr('placeholder');
+            } else {
+                labelText = '该字段';
+            }
+
+            // 标记字段为无效，并添加错误信息
+            $field.addClass('is-invalid');
+            if ($container.length) {
+                $('<div class="form-error-msg"><i class="fa fa-exclamation-circle"></i> ' + labelText + '不能为空</div>').appendTo($container);
+            }
+        }
+    });
+
+    return isValid;
+}
+
+// ******************* 复制到剪贴板 ***************************
+/**
+ * 复制文本到剪贴板（公共方法）
+ * @param {string} text - 要复制的文本内容
+ * @param {Object} options - 配置选项
+ * @param {string|jQuery|HTMLElement} options.button - 按钮元素（jQuery对象、选择器或DOM元素），用于显示复制状态反馈
+ * @param {string} options.successMessage - 复制成功提示消息，默认："复制成功！"
+ * @param {string} options.errorMessage - 复制失败提示消息，默认："复制失败，请手动复制"
+ * @param {string} options.successIcon - 复制成功时按钮显示的图标，默认："fa-check"
+ * @param {string} options.originalIcon - 按钮原始图标，默认："fa-copy"
+ * @param {string} options.originalText - 按钮原始文本，默认："复制"
+ * @param {number} options.resetDelay - 按钮状态重置延迟时间（毫秒），默认：2000
+ * @param {string} options.copiedClass - 复制成功时添加到按钮的CSS类，默认："copied"
+ */
+function copyToClipboard(text, options) {
+    if (!text) {
+        const errorMsg = (options && options.errorMessage) || '复制失败，请手动复制';
+        if (typeof bootGrowl === 'function') {
+            bootGrowl(errorMsg, "danger");
+        }
+        return Promise.reject(new Error('文本内容为空'));
+    }
+
+    // 默认配置
+    const config = {
+        successMessage: '复制成功！',
+        errorMessage: '复制失败，请手动复制',
+        successIcon: 'fa-check',
+        originalIcon: 'fa-copy',
+        originalText: '复制',
+        resetDelay: 2000,
+        copiedClass: 'copied',
+        ...options
+    };
+
+    // 获取按钮元素（支持jQuery对象、选择器字符串或DOM元素）
+    let $button = null;
+    if (config.button) {
+        if (typeof config.button === 'string') {
+            $button = $(config.button);
+        } else if (config.button instanceof jQuery) {
+            $button = config.button;
+        } else if (config.button instanceof HTMLElement) {
+            $button = $(config.button);
+        }
+    }
+
+    // 如果按钮存在，检查是否正在复制中（防止快速多次点击）
+    if ($button && $button.length) {
+        const isCopying = $button.data('copying');
+        if (isCopying) {
+            // 如果正在复制中，忽略本次请求
+            return Promise.resolve();
+        }
+        // 清除之前的重置定时器（如果存在）
+        const resetTimerId = $button.data('resetTimerId');
+        if (resetTimerId) {
+            clearTimeout(resetTimerId);
+            $button.removeData('resetTimerId');
+        }
+    }
+
+    // 保存按钮原始内容
+    let originalButtonHtml = '';
+    if ($button && $button.length) {
+        originalButtonHtml = $button.html();
+        // 标记为正在复制中
+        $button.data('copying', true);
+    }
+
+    // 更新按钮状态为"已复制"
+    function updateButtonToCopied() {
+        if ($button && $button.length) {
+            const successText = config.originalText === '复制' ? '已复制' : config.originalText;
+            $button.html(`<i class="fa ${config.successIcon}"></i> ${successText}`);
+            $button.addClass(config.copiedClass);
+        }
+    }
+
+    // 恢复按钮原始状态
+    function resetButton() {
+        if ($button && $button.length) {
+            $button.html(originalButtonHtml || `<i class="fa ${config.originalIcon}"></i> ${config.originalText}`);
+            $button.removeClass(config.copiedClass);
+            // 清除复制中标记和定时器ID
+            $button.removeData('copying');
+            $button.removeData('resetTimerId');
+        }
+    }
+
+    // 使用现代浏览器的 Clipboard API
+    let copyPromise;
+    if (navigator.clipboard && window.isSecureContext) {
+        copyPromise = navigator.clipboard.writeText(text).then(function() {
+            // 复制成功
+            if (typeof bootGrowl === 'function') {
+                bootGrowl(config.successMessage, "success");
+            }
+            updateButtonToCopied();
+            // 保存定时器ID，以便后续清除
+            const resetTimerId = setTimeout(function() {
+                resetButton();
+            }, config.resetDelay);
+            if ($button && $button.length) {
+                $button.data('resetTimerId', resetTimerId);
+            }
+            return Promise.resolve();
+        }).catch(function(err) {
+            console.error('复制失败', err);
+            // 复制失败时也要清除复制中标记
+            if ($button && $button.length) {
+                $button.removeData('copying');
+            }
+            // 降级到传统方法
+            return fallbackCopyText(text, config, updateButtonToCopied, resetButton, $button);
+        });
+    } else {
+        // 降级到传统方法
+        copyPromise = fallbackCopyText(text, config, updateButtonToCopied, resetButton, $button);
+    }
+    copyPromise.catch(function(err) {
+        // 错误已在内部处理（通过 bootGrowl 提示），这里仅用于消除未处理的 Promise rejection 警告
+        console.error('复制操作失败:', err);
+        // 复制失败时也要清除复制中标记
+        if ($button && $button.length) {
+            $button.removeData('copying');
+        }
+    });
+}
+
+/**
+ * 降级复制方案（兼容旧浏览器）
+ * @private
+ */
+function fallbackCopyText(text, config, updateButtonToCopied, resetButton, $button) {
+    return new Promise(function(resolve, reject) {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.top = '0';
+        textArea.style.left = '0';
+        textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+
+        try {
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            
+            if (successful) {
+                if (typeof bootGrowl === 'function') {
+                    bootGrowl(config.successMessage, "success");
+                }
+                if (updateButtonToCopied) {
+                    updateButtonToCopied();
+                    // 保存定时器ID，以便后续清除
+                    const resetTimerId = setTimeout(function() {
+                        resetButton();
+                    }, config.resetDelay);
+                    if ($button && $button.length) {
+                        $button.data('resetTimerId', resetTimerId);
+                    }
+                }
+                resolve();
+            } else {
+                throw new Error('execCommand copy failed');
+            }
+        } catch (err) {
+            document.body.removeChild(textArea);
+            console.error('复制失败', err);
+            if (typeof bootGrowl === 'function') {
+                bootGrowl(config.errorMessage, "danger");
+            }
+            // 复制失败时也要清除复制中标记
+            if ($button && $button.length) {
+                $button.removeData('copying');
+            }
+            reject(err);
+        }
+    });
+}
+
+// ******************* 全局定时刷新管理器 ***************************
+/**
+ * 全局定时刷新管理器
+ * 全局只启动一个定时任务，间隔固定5秒执行一次
+ * 每个页面可以注册自己的刷新函数，只刷新当前显示页面的内容
+ */
+const PageRefreshManager = (function() {
+    let refreshTimer = null;
+    let currentRefreshFn = null;
+    const REFRESH_INTERVAL = 5000; // 5秒
+
+    // 启动定时器
+    function startTimer() {
+        if (refreshTimer === null) {
+            refreshTimer = setInterval(function() {
+                if (currentRefreshFn && typeof currentRefreshFn === 'function') {
+                    try {
+                        currentRefreshFn();
+                    } catch (e) {
+                        console.error('页面刷新函数执行错误:', e);
+                    }
+                }
+            }, REFRESH_INTERVAL);
+        }
+    }
+
+    // 停止定时器
+    function stopTimer() {
+        if (refreshTimer !== null) {
+            clearInterval(refreshTimer);
+            refreshTimer = null;
+        }
+    }
+
+    return {
+        /**
+         * 注册当前页面的刷新函数
+         * @param {Function} refreshFn - 刷新函数
+         */
+        register: function(refreshFn) {
+            currentRefreshFn = refreshFn;
+            startTimer();
+        },
+        
+        /**
+         * 取消注册当前页面的刷新函数
+         */
+        unregister: function() {
+            currentRefreshFn = null;
+        },
+        
+        /**
+         * 停止定时器（通常不需要手动调用）
+         */
+        stop: function() {
+            stopTimer();
+            currentRefreshFn = null;
+        }
+    };
+})();
+
+// 全局加载页面
+function doLoader(url) {
+    // 使用统一的内容区域
+    if ($mainContent.length) {
+        // 清除之前页面的刷新函数注册
+        PageRefreshManager.unregister();
+
+        // 销毁当前内容区 dbSelect，避免页面切换后滚动监听访问已移除的 DOM
+        if (typeof window.destroyDbSelectsIn === 'function') {
+            window.destroyDbSelectsIn($mainContent);
+        }
+        
+        // 显示加载状态
+        showLoading();
+
+        // 加载页面内容
+        $mainContent.load($basePath + url, function (response, status, xhr) {
+            hideLoading();
+            if (status !== 'success') {
+                bootGrowl('页面加载失败，请稍后重试', "danger");
+            }
+        });
+    }
+}
+
+// 异常请求
+function doRequest(action, data) {
+    hideLoading();
+    // 异常请求：302
+    if (!(data instanceof Object)) {
+        bootGrowl("会话过期, 3秒后将访问登录主页...", "danger");
+        setTimeout(function () {
+            location.href = $basePath;
+        }, 3000);
+    } else {
+        action(data);
+    }
+}
+
+// 异常响应
+function doErrorResponse(xhr, status, info) {
+    hideLoading();
+    bootGrowl("访问异常，请刷新或重试.", "danger");
+}
+
+// 全局Ajax post
+function doPoster(url, params, action) {
+    $.post($basePath + url, params, function (data) {
+        doRequest(action, data);
+    }).error(function (xhr, status, info) {
+        doErrorResponse(xhr, status, info);
+    });
+}
+
+// 全局Ajax get
+function doGetter(url, params, action) {
+    $.get($basePath + url, params, function (data) {
+        doRequest(action, data);
+    }).error(function (xhr, status, info) {
+        doErrorResponse(xhr, status, info);
+    });
+}
+
+function initSearch(searchWrapperId, callback) {
+    const wrapper = document.getElementById(searchWrapperId);
+    const searchInput = wrapper.querySelector('.search-input');
+    const searchClear = wrapper.querySelector('.search-clear');
+
+    if (!searchInput || !searchClear || searchInput.dataset.selectBound === 'true') {
+        return null;
+    }
+
+    // 更新搜索状态（显示/隐藏清除按钮）
+    function updateSearchState(keyword) {
+        if (keyword && keyword.trim() !== '') {
+            searchClear.classList.add('active');
+        } else {
+            searchClear.classList.remove('active');
+        }
+    }
+
+    // 清除搜索的内部实现
+    function clearSearch() {
+        searchInput.value = '';
+        searchInput.focus();
+        updateSearchState('');
+        if (callback) {
+            callback(searchInput.value);
+        }
+    }
+
+    // 绑定事件
+    searchInput.addEventListener('input', function(e) {
+        const value = e.target.value;
+        // 立即更新清除按钮显示状态
+        updateSearchState(value);
+    });
+
+    // 清除搜索
+    searchClear.addEventListener('click', clearSearch);
+
+    // 回车键搜索
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            updateSearchState(e.target.value);
+            if (callback) {
+                callback(e.target.value);
+            }
+        }
+    });
+
+    // 避免重复绑定
+    searchInput.dataset.selectBound = 'true';
+
+    // 初始化状态
+    updateSearchState(searchInput.value || '');
+
+    // 返回包含 input 实例和方法的对象
+    return {
+        // input 元素实例
+        input: searchInput,
+        // 模拟点击清除按钮
+        clear: function() {
+            clearSearch();
+        },
+        // 设置搜索值
+        setValue: function(value) {
+            searchInput.value = value || '';
+            updateSearchState(searchInput.value);
+            if (callback) {
+                callback(searchInput.value);
+            }
+        },
+        // 获取搜索值
+        getValue: function() {
+            return searchInput.value;
+        },
+        // 触发搜索（模拟回车）
+        search: function() {
+            updateSearchState(searchInput.value);
+            if (callback) {
+                callback(searchInput.value);
+            }
+        }
+    };
+}
+
+function initSelect(selector){
+    return selector.dbSelect({
+        type: 'single'
+    });
+}
+
+function initSwitch(dbSwitch, callback) {
+    const $input = dbSwitch;
+    $input.attr('role', 'switch');
+    $input.attr('aria-checked', $input.is(':checked'));
+    $input.on('change', function () {
+        $input.attr('aria-checked', this.checked);
+        callback(this.checked);
+    });
+
+    return {
+        isChecked: function () {
+            return $input.is(':checked');
+        }
+    }
+}
+
+// 注销
+function logout() {
+    // 基础用法
+    showConfirm({
+        title: '确定要注销？',
+        message: '确定后将跳转至登录页面',
+        icon: 'info',
+        size: 'large',
+        confirmType: 'info',
+        onConfirm: function () {
+            doPoster("/logout", null, function (data) {
+                location.href = $basePath;
+            });
+        }
+    });
+}
+
+// 刷新登录人信息
+function refreshLoginUser() {
+    // 刷新登录用户
+    doGetter("/user/getUserInfo.json", {}, function (response) {
+        if (response.success) {
+            $("#currentUser").text(response.data.nickname);
+        }
+    });
+}
+
+// ******************* 驱动表格展示内容 ***************************
+function showMappingError(metaId){
+    // 兼容旧调用：失败明细已迁移到同步任务详情
+    doLoader('/mapping/list');
+}
+
+function getStateConfig(mappingId) {
+    return {
+        0: { // 未运行
+            icon: 'fa-play',
+            title: '启动',
+            onclick: `changeMappingState('${mappingId}', '/mapping/start', '启动')`,
+            disabled: false,
+            class: 'badge-info',
+            text: '未运行'
+        },
+        1: { // 运行中
+            icon: 'fa-pause',
+            title: '停止',
+            onclick: `changeMappingState('${mappingId}', '/mapping/stop', '停止')`,
+            disabled: false,
+            class: 'badge-success',
+            text: '运行中'
+        },
+        2: { // 停止中
+            icon: 'fa-spinner fa-spin',
+            title: '停止中',
+            text: ' 停止中',
+            disabled: true,
+            class: 'badge-warning'
+        }
+    };
+}
+
+// 格式化百分比（保留2位小数）
+function formatPercent(value, maxFractionDigits) {
+    if (value == null || isNaN(value)) return '0%';
+    const percent = value * 100;
+    return percent.toFixed(maxFractionDigits || 2) + '%';
+}
+
+// 格式化整数（千分位）
+function formatCount(value) {
+    const num = Number(value) || 0;
+    return num.toLocaleString('zh-CN');
+}
+
+// 追加耗时信息
+function formatElapsedDuration(beginTime, endTime) {
+    const begin = Number(beginTime);
+    const end = Number(endTime);
+    if (!begin || !end || end <= begin) {
+        return '';
+    }
+    const seconds = Math.floor((end - begin) / 1000);
+    if (seconds < 60) {
+        return seconds + '秒';
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    if (minutes < 60) {
+        return minutes + '分' + remainingSeconds + '秒';
+    }
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return hours + '小时' + remainingMinutes + '分';
+}
+
+function appendElapsedTime(content, meta) {
+    const text = formatElapsedDuration(meta.beginTime, meta.endTime);
+    if (!text) {
+        return;
+    }
+    content.push(`<div class="text-tertiary">耗时: ${text}</div>`);
+}
+
+// 迷你进度条
+function renderMiniProgressBar(current, total) {
+    const safeTotal = Number(total) || 0;
+    const safeCurrent = Number(current) || 0;
+    const percent = safeTotal > 0 ? Math.min(100, Math.round((safeCurrent / safeTotal) * 100)) : 0;
+    return `<div class="progress-bar" style="height:6px;margin:4px 0;">
+        <div class="progress-fill progress-fill-success" style="width:${percent}%"></div>
+    </div>`;
+}
+
+// 解析全量+增量当前阶段：full / increment / idle
+function resolveFullIncrementPhase(meta) {
+    const RUNNING = 1;
+    const STOPPING = 2;
+    const snapshot = meta.snapshot || {};
+    const phaseCode = snapshot.fullIncrementPhase;
+    const isActive = meta.state === RUNNING || meta.state === STOPPING;
+
+    if (!isActive) {
+        // 停止后仍保留阶段语义，避免已完成全量却展示成全量进度条样式
+        if (phaseCode === 'increment') {
+            return 'increment';
+        }
+        return 'idle';
+    }
+
+    // 以后端 snapshot 阶段为准（增量阶段 success 常小于全量 total，不能再用 processed < total 推断）
+    if (phaseCode === 'increment') {
+        return 'increment';
+    }
+
+    if (meta.counting) {
+        return 'full';
+    }
+
+    if (phaseCode === 'full') {
+        if (meta.counting || isFullPhaseInProgress(meta, snapshot)) {
+            return 'full';
+        }
+        // 全量已标记为 full 但尚未统计出 total，仍按全量阶段展示
+        if ((Number(meta.total) || 0) === 0) {
+            return 'full';
+        }
+        return 'increment';
+    }
+
+    // 兼容旧数据：无 fullIncrementPhase 时回退到进度启发式
+    return isFullPhaseInProgress(meta, snapshot) ? 'full' : 'increment';
+}
+
+function isFullPhaseInProgress(meta, snapshot) {
+    const total = Number(meta.total) || 0;
+    const processed = (Number(meta.success) || 0) + (Number(meta.fail) || 0);
+    const tableGroupIndex = parseInt(snapshot.tableGroupIndex || '0', 10);
+    const pageIndex = parseInt(snapshot.pageIndex || '1', 10);
+    const fullCursorActive = tableGroupIndex > 0 || pageIndex > 1 || !!snapshot.cursor;
+    if (total > 0 && processed < total) {
+        return true;
+    }
+    return fullCursorActive && (total === 0 || processed <= total);
+}
+
+// 全量同步进度展示（全量 / 全量+增量全量阶段共用）
+function renderFullPhaseSyncResult(meta) {
+    const total = Number(meta.total) || 0;
+    const success = Number(meta.success) || 0;
+    const processed = success + (Number(meta.fail) || 0);
+    const isFullInProgress = total > 0 && processed < total;
+    const content = [];
+
+    content.push('<div class="sync-result text-xs">');
+    if (meta.counting) {
+        content.push(`<div class="text-tertiary">正在统计表总数...</div>`);
+    } else {
+        content.push(`<div>总数: ${formatCount(total)}</div>`);
+        if (isFullInProgress) {
+            content.push(renderMiniProgressBar(processed, total));
+            content.push(`<div>全量进度: ${formatCount(processed)} / ${formatCount(total)} (${formatPercent(processed / total, 1)})</div>`);
+        } else if (total === 0) {
+            content.push(`<div class="text-tertiary">等待全量任务启动...</div>`);
+        }
+    }
+    appendElapsedTime(content, meta);
+    content.push(`<div>成功: ${formatCount(success)}</div>`);
+    content.push('</div>');
+    return content.join('');
+}
+
+// 全量+增量：结果列展示
+function renderFullIncrementSyncResult(meta) {
+    const phase = resolveFullIncrementPhase(meta);
+    const total = Number(meta.total) || 0;
+    const success = Number(meta.success) || 0;
+    const content = [];
+
+    if (phase === 'full') {
+        return renderFullPhaseSyncResult(meta);
+    }
+    content.push('<div class="sync-result text-xs">');
+    if (phase === 'increment') {
+        content.push(`<div>成功: ${formatCount(success)}</div>`);
+    } else {
+        if (total > 0) {
+            content.push(`<div>全量总数: ${formatCount(total)}</div>`);
+        }
+        content.push(`<div>成功: ${formatCount(success)}</div>`);
+    }
+
+    content.push('</div>');
+    return content.join('');
+}
+
+// 全量模式：结果列展示
+function renderFullSyncResult(meta) {
+    return renderFullPhaseSyncResult(meta);
+}
+
+// 同步失败行
+function renderMappingFailLine(meta, mappingId) {
+    if (!meta.fail || meta.fail <= 0) {
+        return '';
+    }
+    const id = mappingId || '';
+    return `<div class="text-xs mt-1">失败: <span class="text-error">${formatCount(meta.fail)}</span> <span class="hover-underline cursor-pointer text-error" title='查看失败详情' onclick="doLoader('/mapping/page/detail?id=${id}&detailStatus=fail')">查看详情</span></div>`;
+}
+
+// 根据同步结果生成内容
+function renderSyncResult(mapping) {
+    const meta = mapping.meta;
+    if (!meta) return '';
+
+    if (mapping.model === 'fullIncrement') {
+        return renderFullIncrementSyncResult(meta) + renderMappingFailLine(meta, mapping.id);
+    }
+
+    const content = [];
+    if (mapping.model === 'full') {
+        content.push(renderFullSyncResult(meta));
+    } else {
+        content.push(`<div class="text-xs">成功: ${formatCount(meta.success || 0)}</div>`);
+    }
+    content.push(renderMappingFailLine(meta, mapping.id));
+    return content.join('');
+}
+
+// 根据任务类型生成内容
+function renderModelText(model) {
+    const modelState = {
+        'full': { // 全量
+            class: 'badge-primary',
+            text: '全量同步',
+        },
+        'increment': { // 增量
+            class: 'badge-info',
+            text: '增量同步',
+        },
+        'fullIncrement': {
+            class: 'badge-info',
+            text: '全量+增量',
+        }
+    };
+    const config = modelState[model] || { class: 'badge-secondary', text: model || '未知' };
+    return `<span class="badge ${config.class}">${config.text}</span>`;
+}
+
+// 根据执行模式生成徽章（同步 SYNC / 异步 ASYNC）
+function renderSyncModeText(mapping) {
+    let mode = '';
+    try {
+        const p = mapping && mapping.params;
+        if (p && typeof p === 'object') {
+            mode = p.syncMode || p.SYNC || '';
+        }
+    } catch (e) { /* ignore */ }
+    if (!mode) mode = 'SYNC';
+    const upper = String(mode).toUpperCase();
+    if (upper === 'ASYNC') {
+        return '<span class="badge badge-warning" title="批量异步：多线程并发写入，吞吐优先（适合全量迁移或时间戳增量，类似 DataX 离线批量模式）"><i class="fa fa-rocket"></i> 批量异步 ASYNC</span>';
+    }
+    return '<span class="badge badge-success" title="实时同步：单线程顺序写入，强一致（适合 binlog 增量实时场景，类似 DataX 实时流模式）"><i class="fa fa-bolt"></i> 实时同步 SYNC</span>';
+}
+
+// 根据增量策略生成徽章（log 增量监听 / timing 定时拉取）
+function renderIncrementStrategyText(mapping) {
+    let listenerType = '';
+    try {
+        const l = mapping && mapping.listener;
+        if (l && typeof l === 'object') {
+            listenerType = l.listenerType || l.listener_type || '';
+        }
+    } catch (e) { /* ignore */ }
+    const type = String(listenerType).toLowerCase();
+    if (type === 'log') {
+        return '<span class="badge badge-success" title="基于 binlog/日志增量监听，源端变更后实时同步"><i class="fa fa-rss"></i> log 增量监听</span>';
+    }
+    if (type === 'timing') {
+        return '<span class="badge badge-info" title="基于时间戳定时轮询增量，批量拉取"><i class="fa fa-clock-o"></i> timing 定时拉取</span>';
+    }
+    return '<span class="badge badge-secondary" title="未启用增量策略">无增量</span>';
+}
+
+// 根据状态生成内容
+function renderStateText(state) {
+    const stateConfig = getStateConfig();
+    const config = stateConfig[state] || stateConfig[0];
+    return `<span class="badge ${config.class}">${config.text}</span>`;
+}
+
+// 根据状态生成操作按钮
+function renderStateButton(state, mappingId) {
+    const stateConfig = getStateConfig(mappingId);
+    const config = stateConfig[state] || stateConfig[0];
+    const disabledAttr = config.disabled ? ' disabled' : '';
+    const onclickAttr = config.onclick ? ` onclick="${config.onclick}"` : '';
+    const stateBtn = [];
+    stateBtn.push(`
+        <button class="table-action-btn play" data-id="${mappingId}" title="${config.title}"${onclickAttr}${disabledAttr}>
+            <i class="fa ${config.icon}"></i>
+        </button>
+    `);
+    // 未运行才显示删除按钮
+    if (state === 0) {
+        stateBtn.push(`
+            <button class="table-action-btn delete" title="删除" onclick="deleteMapping('${mappingId}')">
+                <i class="fa fa-trash"></i>
+            </button>
+        `);
+    }
+    return stateBtn.join('');
+}
+
+// ===== 迁移预检测（前置校验）=====
+// 调用后端 /mapping/precheck 或 /database-sync/precheck，弹出结果对话框：
+// ERROR 项阻断启动，必须修复后重新发起检测；WARN 项提示风险但不阻断。
+function runPreCheck(url, id, name) {
+    if (!url || !id) {
+        return;
+    }
+    doPoster(url, { id: id }, function (response) {
+        if (!response.success) {
+            bootGrowl(response.message || '预检测执行失败', 'danger');
+            return;
+        }
+        const issues = (response.data && response.data.length) ? response.data : [];
+        const errors = issues.filter(function (x) { return x && x.level === 'error'; });
+        const warns = issues.filter(function (x) { return x && x.level === 'warn'; });
+
+        let body;
+        if (issues.length === 0) {
+            body = '<div class="text-center py-3">'
+                + '<i class="fa fa-check-circle text-3xl" style="color:var(--success-color);"></i>'
+                + '<p class="mt-3">预检测通过，未发现阻断或风险项，可以执行迁移/同步。</p>'
+                + '</div>';
+        } else {
+            let rows = '';
+            issues.forEach(function (x) {
+                const badge = x.level === 'error'
+                    ? '<span class="badge badge-error">阻断</span>'
+                    : '<span class="badge badge-warning">警告</span>';
+                rows += '<tr>'
+                    + '<td class="whitespace-nowrap">' + badge + ' <span class="text-xs text-tertiary">' + escapeHtml(x.code || '') + '</span></td>'
+                    + '<td>' + escapeHtml([x.table, x.column].filter(Boolean).join(' · ') || '-') + '</td>'
+                    + '<td>' + escapeHtml([x.sourceType, x.targetType].filter(Boolean).join(' → ') || '-') + '</td>'
+                    + '<td>' + escapeHtml(x.message || '') + '</td>'
+                    + '<td class="text-xs text-secondary">' + escapeHtml(x.suggestion || '') + '</td>'
+                    + '</tr>';
+            });
+            body = '<div class="mb-2">'
+                + '<span class="badge badge-error">阻断 ' + errors.length + '</span> '
+                + '<span class="badge badge-warning">警告 ' + warns.length + '</span>'
+                + (errors.length > 0
+                    ? '<span class="text-xs text-tertiary ml-2">存在阻断项，修复后请重新发起预检测，通过后才能启动。</span>'
+                    : '<span class="text-xs text-tertiary ml-2">无阻断项，可正常启动。</span>')
+                + '</div>'
+                + '<div style="max-height:340px;overflow:auto;">'
+                + '<table class="table"><thead><tr><th style="width:120px;">级别</th><th style="width:180px;">对象</th>'
+                + '<th style="width:150px;">类型</th><th>说明</th><th style="width:220px;">建议</th></tr></thead>'
+                + '<tbody>' + rows + '</tbody></table>'
+                + '</div>';
+        }
+        showConfirm({
+            title: '迁移预检测' + (name ? '：' + name : ''),
+            icon: errors.length > 0 ? 'error' : 'success',
+            size: 'max',
+            message: '',
+            body: body,
+            confirmText: '知道了',
+            showCancel: false,
+            closeOnConfirm: true,
+            onConfirm: function () { /* 仅展示 */ }
+        });
+    });
+}
+
+$(function () {
+    // 定义返回函数，子页面返回
+    window.backIndexPage = function () {
+        doLoader('/index');
+    };
+    window.validateForm = validateForm;
+
+    refreshLoginUser();
+    // 初始化水印
+    doGetter("/index/version.json", {}, function (response) {
+        if (response.success === true) {
+            // 水印信息
+            settings.watermark_txt = response.data.watermark;
+            watermark();
+        }
+    });
+
+    // 新导航链接点击事件
+    $('.sidebar-item[url]').on('click', function(e) {
+        e.preventDefault();
+        // 更新活动状态
+        $('.sidebar-item').removeClass('active');
+        $(this).addClass('active');
+        // 加载页面
+        doLoader($(this).attr('url'));
+    });
+
+    // 下拉菜单
+    const $dropdown = $(".dropdown");
+    const $dropdownBtn = $(".dropdown button");
+    const $dropdownMenu = $(".dropdown .dropdown-menu");
+    $dropdownBtn.on('click', function (){
+        event.stopPropagation();
+        // 只切换当前下拉菜单，不影响其他下拉菜单
+        const $currentDropdown = $(this).closest('.dropdown');
+        const $currentMenu = $currentDropdown.find('.dropdown-menu');
+        // 关闭其他下拉菜单
+        $dropdown.not($currentDropdown).removeClass("open");
+        $dropdownMenu.not($currentMenu).addClass("hidden");
+        // 切换当前下拉菜单
+        $currentDropdown.toggleClass("open");
+        $currentMenu.toggleClass("hidden");
+    });
+    // 只有点击下拉菜单按钮或菜单项外才关闭
+    $(document).on('click', function(event) {
+        if (!$(event.target).closest('.dropdown').length) {
+            $dropdown.removeClass("open");
+            $dropdownMenu.addClass("hidden");
+        }
+    });
+});
+/**
+ * 连接器分页 → dbSelect 选项
+ */
+function convertConnectorPagingToSelectData(paging, preferredType) {
+    const rows = paging && Array.isArray(paging.data) ? paging.data : [];
+    const preferred = preferredType ? String(preferredType).trim() : '';
+    const list = [];
+    rows.forEach(function (row) {
+        if (!row || !row.id) {
+            return;
+        }
+        const type = (row.config && row.config.connectorType) ? String(row.config.connectorType) : '';
+        if (preferred && type && preferred.toLowerCase() !== type.toLowerCase()) {
+            return;
+        }
+        const name = row.name || '';
+        list.push({
+            label: type ? (name + '(' + type + ')') : name,
+            value: row.id,
+            data: {connectorType: type}
+        });
+    });
+    return list;
+}
+
+/**
+ * 构建远程连接器 dbSelect 配置（库侧分页）。
+ * @param {Object} extra defaultValue/defaultLabel/defaultType/relationOnly/preferredType/role/pageSize/disabled/onSelect
+ */
+function buildRemoteConnectorSelectOptions(extra) {
+    extra = extra || {};
+    const initialData = [];
+    if (extra.defaultValue) {
+        initialData.push({
+            label: extra.defaultLabel || extra.defaultValue,
+            value: extra.defaultValue,
+            data: {connectorType: extra.defaultType || ''}
+        });
+    }
+    return {
+        type: 'single',
+        remoteSearch: true,
+        pageSize: extra.pageSize || 50,
+        keywordDebounceMs: 300,
+        disabled: !!extra.disabled,
+        defaultValue: extra.defaultValue ? [extra.defaultValue] : null,
+        data: initialData,
+        loadOptions: function (query, onSuccess, onError) {
+            const params = {
+                pageNum: query.pageNum,
+                pageSize: query.pageSize,
+                searchKey: query.searchKey || ''
+            };
+            if (extra.relationOnly) {
+                params.relationOnly = '1';
+            }
+            if (extra.role === 'source' || extra.role === 'target') {
+                params.role = extra.role;
+            }
+            doPoster('/connector/search', params, function (res) {
+                if (res.success === true) {
+                    const paging = res.data || {};
+                    onSuccess({
+                        pageNum: paging.pageNum || query.pageNum,
+                        pageSize: paging.pageSize || query.pageSize,
+                        total: paging.total || 0,
+                        data: convertConnectorPagingToSelectData(paging, extra.preferredType)
+                    });
+                } else {
+                    bootGrowl(res.message || '加载连接器失败', 'danger');
+                    if (typeof onError === 'function') {
+                        onError();
+                    }
+                }
+            });
+        },
+        onSelect: extra.onSelect
+    };
+}
+
+/**
+ * 从 dbSelect 选中项解析连接器类型（优先 data.connectorType）。
+ */
+function resolveConnectorTypeFromSelect($connector, connectorId) {
+    const api = $connector && $connector.data ? $connector.data('dbSelect') : null;
+    if (api && typeof api.getSelectedItems === 'function') {
+        const items = api.getSelectedItems() || [];
+        if (items.length && items[0] && items[0].data && items[0].data.connectorType) {
+            return String(items[0].data.connectorType).trim();
+        }
+    }
+    if (!connectorId || !$connector || !$connector.length) {
+        return '';
+    }
+    const $option = $connector.find('option[value="' + connectorId + '"]');
+    if ($option.length) {
+        return ($option.attr('data-connector-type') || $option.data('connectorType') || '').toString().trim();
+    }
+    return '';
+}
+
+/**
+ * 通用远程分页下拉（ConfigModel 风格：id + name）。
+ * @param {Object} extra url/defaultValue/defaultLabel/pageSize/onSelect/convertRow/params
+ */
+function buildRemotePagingSelectOptions(extra) {
+    extra = extra || {};
+    const initialData = [];
+    if (extra.defaultValue) {
+        initialData.push({
+            label: extra.defaultLabel || extra.defaultValue,
+            value: extra.defaultValue
+        });
+    }
+    return {
+        type: 'single',
+        remoteSearch: true,
+        pageSize: extra.pageSize || 50,
+        keywordDebounceMs: 300,
+        defaultValue: extra.defaultValue ? [extra.defaultValue] : null,
+        data: initialData,
+        loadOptions: function (query, onSuccess, onError) {
+            const params = $.extend({}, extra.params || {}, {
+                pageNum: query.pageNum,
+                pageSize: query.pageSize,
+                searchKey: query.searchKey || ''
+            });
+            doPoster(extra.url, params, function (res) {
+                if (res.success === true) {
+                    const paging = res.data || {};
+                    const rows = Array.isArray(paging.data) ? paging.data : [];
+                    const convert = typeof extra.convertRow === 'function'
+                        ? extra.convertRow
+                        : function (row) {
+                            return row && row.id ? {label: row.name || row.id, value: row.id} : null;
+                        };
+                    const data = [];
+                    rows.forEach(function (row) {
+                        const item = convert(row);
+                        if (item) {
+                            data.push(item);
+                        }
+                    });
+                    onSuccess({
+                        pageNum: paging.pageNum || query.pageNum,
+                        pageSize: paging.pageSize || query.pageSize,
+                        total: paging.total || 0,
+                        data: data
+                    });
+                } else {
+                    bootGrowl(res.message || '加载失败', 'danger');
+                    if (typeof onError === 'function') {
+                        onError();
+                    }
+                }
+            });
+        },
+        onSelect: extra.onSelect
+    };
+}

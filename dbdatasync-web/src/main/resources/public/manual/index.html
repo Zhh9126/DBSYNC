@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
+
+<!--
+    DBDataSync 操作手册（系统管理 -> 操作手册）
+    纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
+-->
+
+<style id="manual-style">
+    .manual-wrap { display: flex; gap: 24px; align-items: flex-start; }
+    .manual-toc { width: 260px; flex-shrink: 0; position: sticky; top: 12px; max-height: calc(100vh - 90px); overflow-y: auto; }
+    .manual-toc a { display: block; padding: 7px 12px; color: inherit; text-decoration: none; border-left: 3px solid transparent; font-size: 14px; line-height: 1.5; }
+    .manual-toc a:hover { background: #eef4ff; border-left-color: #3567d6; }
+    .manual-toc .lv2 { padding-left: 28px; color: #64748b; }
+    .manual-main { flex: 1; min-width: 0; }
+    .manual-main section { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 22px 26px; margin-bottom: 20px; scroll-margin-top: 12px; }
+    .manual-main h2 { font-size: 19px; font-weight: 700; margin: 0 0 12px; color: #1e293b; }
+    .manual-main h3 { font-size: 15px; font-weight: 700; margin: 18px 0 8px; color: #334155; border-left: 4px solid #3567d6; padding-left: 8px; }
+    .manual-main h4 { font-size: 14px; font-weight: 700; margin: 14px 0 6px; color: #475569; }
+    .manual-main p, .manual-main li { font-size: 14px; line-height: 1.85; color: #374151; }
+    .manual-main ol, .manual-main ul { padding-left: 22px; margin: 6px 0 10px; }
+    .manual-main ol > li { margin-bottom: 4px; list-style: decimal; }
+    .manual-main ul > li { margin-bottom: 4px; list-style: disc; }
+    .manual-main table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; }
+    .manual-main th, .manual-main td { border: 1px solid #e2e8f0; padding: 7px 10px; font-size: 13px; text-align: left; vertical-align: top; }
+    .manual-main th { background: #f1f5f9; font-weight: 700; white-space: nowrap; }
+    .manual-main tr:nth-child(even) td { background: #fafbfd; }
+    .manual-main code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 1px 6px; font-size: 12.5px; color: #0f172a; word-break: break-all; }
+    .manual-main kbd { background: #1e293b; color: #fff; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
+    .manual-main .tip, .manual-main .warn, .manual-main .danger { border-radius: 8px; padding: 10px 14px; font-size: 13.5px; line-height: 1.8; margin: 10px 0; }
+    .manual-main .tip { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+    .manual-main .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+    .manual-main .danger { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+    .manual-main .uibox { display: inline-block; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; padding: 1px 8px; font-size: 12.5px; margin: 0 2px; }
+    .manual-header { background: linear-gradient(90deg, #1d4ed8, #3567d6 55%, #6d9bff); border-radius: 12px; color: #fff; padding: 26px 30px; margin-bottom: 20px; }
+    .manual-header h1 { margin: 0 0 8px; font-size: 24px; }
+    .manual-header p { margin: 0; font-size: 13.5px; opacity: .92; }
+    .manual-header .meta { margin-top: 10px; font-size: 12.5px; opacity: .85; }
+</style>
+
+<div th:fragment="content">
+    <div class="manual-header">
+        <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
+        <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 一体化平台</p>
+        <div class="meta">适用版本 v2.x ｜ 更新日期 2026-10-18 ｜ 本手册内置离线查看，无需联网</div>
+    </div>
+
+    <div class="manual-wrap">
+        <!-- 目录 -->
+        <div class="manual-toc">
+            <a href="#manual-h1">1. 产品概述与快速开始</a>
+            <a href="#manual-h2">2. 登录与工作台</a>
+            <a href="#manual-h3">3. 连接管理（配置数据源）</a>
+            <a class="lv2" href="#manual-h3-1">3.1 新增连接</a>
+            <a class="lv2" href="#manual-h3-2">3.2 连接参数速查</a>
+            <a href="#manual-h4">4. 数据同步（全流程核心）</a>
+            <a class="lv2" href="#manual-h4-1">4.1 创建数据同步（映射）</a>
+            <a class="lv2" href="#manual-h4-2">4.2 添加表映射</a>
+            <a class="lv2" href="#manual-h4-3">4.3 字段映射（自动映射）</a>
+            <a class="lv2" href="#manual-h4-4">4.4 同步方式与执行模式</a>
+            <a class="lv2" href="#manual-h4-5">4.5 预检测（启动前校验）</a>
+            <a class="lv2" href="#manual-h4-6">4.6 启动 / 停止 / 结果查看</a>
+            <a href="#manual-h5">5. 数据同步记录与导出</a>
+            <a href="#manual-h6">6. 整库迁移</a>
+            <a href="#manual-h7">7. 订正校验（数据校验与订正）</a>
+            <a href="#manual-h8">8. 数据血缘</a>
+            <a href="#manual-h9">9. 性能监控与告警通知</a>
+            <a href="#manual-h10">10. 系统管理</a>
+            <a href="#manual-h11">11. 增量同步前置条件（重要）</a>
+            <a href="#manual-h12">12. 故障诊断与排查</a>
+            <a href="#manual-h13">13. 常见问题 FAQ</a>
+            <a href="#manual-h14">14. 离线部署与升级</a>
+        </div>
+
+        <!-- 正文 -->
+        <div class="manual-main">
+
+            <section id="manual-h1">
+                <h2><i class="fa fa-rocket"></i> 1. 产品概述与快速开始</h2>
+                <p>DBDataSync 是通用数据同步中间件，支持多种主流数据库之间的：<b>全量同步</b>、<b>增量同步（CDC）</b>、<b>全量+增量</b>、<b>整库迁移</b>，并提供 <b>数据校验/订正</b>、<b>数据血缘</b>、<b>性能监控</b>、<b>告警通知</b> 等运维能力。</p>
+                <h3>支持的数据库</h3>
+                <table>
+                    <tr><th>类别</th><th>数据库</th><th>增量方式</th></tr>
+                    <tr><td>关系型</td><td>MySQL / MariaDB、PostgreSQL、Oracle、达梦(DM8)、人大金仓(KES V9)</td><td>binlog / 逻辑复制、test_decoding|syslogical_output、LogMiner、LogMiner(DM)、syslogical_output</td></tr>
+                    <tr><td>嵌入式</td><td>SQLite、H2</td><td>不支持增量（仅全量/定时）</td></tr>
+                </table>
+                <h3>五步快速开始</h3>
+                <ol>
+                    <li>【连接管理】添加源端、目标端数据库连接并测试连通；</li>
+                    <li>【数据同步 → 添加】创建同步（映射）任务，选择源/目标连接与库（Schema）；</li>
+                    <li>选择需要同步的表，系统将<b>自动建立表映射与字段映射（同名自动匹配，忽略大小写）</b>，未自动匹配的字段在字段映射页面手动调整；</li>
+                    <li>设置执行模式（全量 / 全量+增量），点击行内 <span class="uibox"><i class="fa fa-list-alt"></i> 预检测</span> 完成启动前校验；</li>
+                    <li>点击 <span class="uibox"><i class="fa fa-play"></i> 启动</span> 执行同步，在【数据同步】/【数据同步记录】页面查看进度与结果。</li>
+                </ol>
+                <div class="tip"><b>提示：</b>任何任务启动前都建议先做一次「预检测」，它会集中给出所有阻断性问题（ERROR，无法启动）与建议项（WARN），并附修复说明，避免任务运行后才发现配置问题。</div>
+            </section>
+
+            <section id="manual-h2">
+                <h2><i class="fa fa-tachometer"></i> 2. 登录与工作台</h2>
+                <ol>
+                    <li>浏览器访问 <code>http://服务器IP:端口/</code>（默认 <code>http://127.0.0.1:18686</code>）；</li>
+                    <li>输入账号密码（默认管理员 admin），点击登录；</li>
+                    <li>登录后进入【工作台 → 仪表盘】，可查看连接器数量、任务总数、运行中任务、成功率概览等。</li>
+                </ol>
+                <h3>左侧菜单结构</h3>
+                <table>
+                    <tr><th>菜单组</th><th>功能项</th><th>说明</th></tr>
+                    <tr><td>工作台</td><td>仪表盘</td><td>系统总览</td></tr>
+                    <tr><td rowspan="5">数据同步</td><td>连接管理</td><td>数据源连接 CRUD、测试连接</td></tr>
+                    <tr><td>数据同步</td><td>同步（映射）任务的增删改查、启动/停止、预检测</td></tr>
+                    <tr><td>数据同步记录</td><td>所有同步任务的执行记录汇总、CSV 导出</td></tr>
+                    <tr><td>整库迁移</td><td>整库任务（一次同步整库全部表）的管理与运行</td></tr>
+                    <tr><td>订正校验 / 数据血缘</td><td>数据一致性校验订正、表级同步关系展示</td></tr>
+                    <tr><td>监控告警</td><td>性能监控 / 告警通知</td><td>同步速率、异常告警与通知渠道</td></tr>
+                    <tr><td>系统管理</td><td>插件管理 / 配置管理 / 用户管理 / 系统配置 / <b>操作手册</b></td><td>扩展插件、全局配置、账号与系统参数、本手册</td></tr>
+                </table>
+                <div class="warn"><b>注意：</b>页面上所有列表服务端分页默认可能较小，可通过列表中的分页条切换每页行数；搜索框支持按名称模糊过滤。</div>
+            </section>
+
+            <section id="manual-h3">
+                <h2><i class="fa fa-database"></i> 3. 连接管理（配置数据源）</h2>
+                <p>路径：左侧菜单【数据同步 → 连接管理】。连接是同步任务的数据源信息载体，建议先建立全部需要的连接。</p>
+                <h3 id="manual-h3-1">3.1 新增连接</h3>
+                <ol>
+                    <li>点击「添加」按钮，进入连接配置页；</li>
+                    <li>填写 <b>名称</b>（任意便于识别，如 “生产MySQL-主库”）、选择 <b>数据库类型</b>；</li>
+                    <li>按类型填写 <b>主机 IP</b>、<b>端口</b>、<b>用户名/密码</b>；域名形式填写方式见下方“连接参数速查”；</li>
+                    <li>点击「测试连接」，出现成功提示后保存；失败时按提示核对网络、账号、库名。</li>
+                </ol>
+                <h3 id="manual-h3-2">3.2 连接参数速查</h3>
+                <table>
+                    <tr><th>数据库</th><th>默认端口</th><th>用户名形式 / 连接示例</th><th>备注</th></tr>
+                    <tr><td>MySQL / MariaDB</td><td>3306</td><td><code>host:port / user:password</code></td><td>需 binlog=ROW（增量前置见第 11 节）</td></tr>
+                    <tr><td>PostgreSQL</td><td>5432</td><td><code>host:port/database</code></td><td>逻辑复制需 wal_level=logical</td></tr>
+                    <tr><td>Oracle</td><td>1521</td><td><code>host:port/service_name(SID)</code></td><td>增量用 LogMiner，需归档与补充日志</td></tr>
+                    <tr><td>达梦 DM8</td><td>5236</td><td><code>host:port</code>（用户名 SYSDBA 等）</td><td>增量用 DM LogMiner，需归档</td></tr>
+                    <tr><td>人大金仓 KES V9</td><td>54321</td><td><code>host:port/database</code></td><td>增量扩展参数 <code>pluginName=syslogical_output</code></td></tr>
+                    <tr><td>SQLite / H2</td><td>—</td><td>文件路径</td><td>仅单机文件库</td></tr>
+                </table>
+                <div class="tip"><b>小技巧：</b>连接列表行内按钮：<i class="fa fa-edit"></i> 修改、<i class="fa fa-trash-o"></i> 删除、连接测试等；删除连接前请先确认没有同步任务引用它（有引用时任务预检测会报 ERROR）。</div>
+            </section>
+
+            <section id="manual-h4">
+                <h2><i class="fa fa-exchange"></i> 4. 数据同步（全流程核心）</h2>
+                <p>路径：左侧菜单【数据同步 → 数据同步】。核心概念：<b>映射（Mapping）= 一个同步任务</b>，其下包含若干 <b>表映射（TableGroup）</b>，每个表映射内含 <b>字段映射</b>。</p>
+
+                <h3 id="manual-h4-1">4.1 创建数据同步（映射）</h3>
+                <ol>
+                    <li>点击「添加」，进入创建页面；</li>
+                    <li>填写任务名称；选择 <b>源连接</b> 与 <b>目标连接</b>（连接管理中已建）；</li>
+                    <li>选择源端 <b>数据库 / Schema</b> 与目标端 <b>数据库 / Schema</b>（Oracle、达梦等以用户/模式为命名空间的，填对应的 Schema）；</li>
+                    <li>保存后进入映射详情页，继续“添加表映射”。</li>
+                </ol>
+
+                <h3 id="manual-h4-2">4.2 添加表映射</h3>
+                <p>在映射详情/编辑页的「表映射」区域：</p>
+                <ol>
+                    <li>左侧选择源表（可多选），右侧选择目标表（顺序与左侧一一对应）；系统会自动按 <b>同名规则</b> 帮你选中目标表；</li>
+                    <li>需要时输入源/目标 <b>主键字段</b>（可多个，回车确认；一般不需要手动输入，系统自动识别）；</li>
+                    <li>点击「添加映射关系」批量建立表映射。<b>字段映射同样自动生成（同名自动匹配，忽略大小写）</b>；</li>
+                    <li>目标表不存在时可勾选自动建表（引擎按源表结构在目标库创建）。</li>
+                </ol>
+                <div class="tip"><b>自动匹配规则：</b>源字段名与目标字段名 <b>忽略大小写</b> 进行同名匹配（如 <code>ID → id</code>、<code>NAME → name</code> 也会命中），匹配到的字段自动建立映射关系；主键字段会自动识别并在字段映射中标记。</div>
+
+                <h3 id="manual-h4-3">4.3 字段映射（自动映射 + 手动修正）</h3>
+                <p>在表映射列表点击行内 <span class="uibox"><i class="fa fa-indent"></i> 字段映射</span> 进入“表字段映射”编辑页：</p>
+                <ul>
+                    <li><b>打开页面即自动映射：</b>若该表还没有字段映射，页面会自动按同名（忽略大小写）规则补齐全部映射关系，无需手动逐个添加；</li>
+                    <li><b>未匹配字段提示：</b>自动匹配完成后，页面顶部出现黄色提示条，列出“未匹配的源字段 / 未匹配的目标字段”；<b>有问题的字段由用户自行修改</b>：通过「手动编辑」或「添加映射」建立特殊映射，无需同步的字段可以不映射；</li>
+                    <li>顶部工具按钮：
+                        <table>
+                            <tr><th>按钮</th><th>作用</th></tr>
+                            <tr><td><span class="uibox">同名映射</span></td><td>按同名字段（忽略大小写）重新自动匹配一次</td></tr>
+                            <tr><td><span class="uibox">同序映射</span></td><td>按源/目标字段的顺序位置一一对应映射</td></tr>
+                            <tr><td><span class="uibox">清空映射</span></td><td>删除当前全部字段映射关系（需确认）</td></tr>
+                            <tr><td><span class="uibox">手动编辑</span></td><td>弹窗中自选源字段、目标字段并可勾选“设为目标主键”</td></tr>
+                            <tr><td><span class="uibox">添加映射</span></td><td>用上方两个字段下拉框快速追加一条映射</td></tr>
+                            <tr><td><span class="uibox">刷新字段</span></td><td>重新拉取源/目标表结构（表结构变更后使用）</td></tr>
+                        </table>
+                    </li>
+                    <li>映射表行内操作：<i class="fa fa-edit"></i> 修改该条映射、<i class="fa fa-trash-o"></i> 删除该条映射、<b>双击行</b> 标记/取消目标主键、<b>拖拽行</b> 调整顺序；</li>
+                    <li>底部「提交」保存字段映射配置。</li>
+                </ul>
+                <div class="warn"><b>注意：</b>同一源字段只能映射到一条记录；目标主键至少要有一条映射标记（同步语义需要按键定位行）。字段映射为空时，预检测会报 ERROR 阻止启动。</div>
+
+                <h3 id="manual-h4-4">4.4 同步方式与执行模式</h3>
+                <p>在映射编辑页（<i class="fa fa-edit"></i> 修改）中：</p>
+                <table>
+                    <tr><th>配置</th><th>取值</th><th>说明</th></tr>
+                    <tr><td>执行模式</td><td>全量 / 全量+增量</td><td>「全量+增量」先做一次全量迁移，再进入 CDC 增量持续监听</td></tr>
+                    <tr><td>增量方式</td><td>log 日志增量 / timing 定时拉取</td><td>log：实时解析数据库日志（推荐）；timing：按设定间隔轮询对比（分钟级延迟）</td></tr>
+                    <tr><td>增量选项</td><td>插入 / 更新 / 删除 / DDL</td><td>按需勾选；删除默认按主键定位目标行</td></tr>
+                    <tr><td>写入方式</td><td>SYNC / ASYNC</td><td>见「写入方式」单选；大批量建议默认</td></tr>
+                    <tr><td>插件（可选）</td><td>转换处理插件</td><td>在【插件管理】上传企业自定义处理插件后，可在映射/表映射上挂载</td></tr>
+                </table>
+
+                <h3 id="manual-h4-5">4.5 预检测（启动前校验）</h3>
+                <p>列表行内点击 <span class="uibox"><i class="fa fa-list-alt"></i></span>（工具提示：预检测（启动前校验）），弹出检测结果：</p>
+                <ul>
+                    <li>顶部横幅显示 <b>通过（绿色）</b> 或 <b>阻断 ERROR 数 / 警告 WARN 数</b>；</li>
+                    <li>表格列出问题明细：规则编号、级别、所属项、说明与修复建议；</li>
+                    <li><b>ERROR</b>：必须修复后才能启动（例如：字段映射为空、目标端无权限、日志配置缺失）；</li>
+                    <li><b>WARN</b>：不阻断，但建议留意（例如：异构库字段类型宽度收缩、自动建表覆盖风险）。</li>
+                </ul>
+                <div class="tip"><b>整库迁移任务同样提供预检测</b>：在【整库迁移】列表行内仍有 <i class="fa fa-list-alt"></i> 按钮，点击即可对整库任务做启动前校验。</div>
+
+                <h3 id="manual-h4-6">4.6 启动 / 停止 / 结果查看</h3>
+                <ol>
+                    <li>在【数据同步】列表点击 <span class="uibox"><i class="fa fa-play"></i></span> 启动（无日志配置时按提示先在编辑页保存增量配置）；</li>
+                    <li>「同步结果」列实时显示 总条数 / 成功 / 失败 / 差异 / 耗时；状态列显示未运行-启动中-运行中-已完成等；</li>
+                    <li>增量任务保持"运行中"持续监听；需要暂停时点击 <span class="uibox"><i class="fa fa-stop"></i></span> 停止；</li>
+                    <li>点击任务名称可进入详情页查看各表进度明细；</li>
+                    <li>行内其他按钮：<i class="fa fa-indent"></i> 字段映射、<i class="fa fa-copy"></i> 复制任务（复制配置快速创建同构任务）。</li>
+                </ol>
+            </section>
+
+            <section id="manual-h5">
+                <h2><i class="fa fa-history"></i> 5. 数据同步记录与导出</h2>
+                <p>路径：【数据同步 → 数据同步记录】。该页面集中展示<b>所有数据同步任务</b>的执行记录，数据同步页面停止的任务记录仍会保留在这里，便于追溯。</p>
+                <h3>列表字段说明</h3>
+                <table>
+                    <tr><th>列</th><th>含义</th></tr>
+                    <tr><td>任务名称</td><td>同步（映射）任务名</td></tr>
+                    <tr><td>来源/目标连接</td><td>源端与目标端连接名称、数据库类型（含图标）</td></tr>
+                    <tr><td>同步方案</td><td>全量 / 全量+增量 等翻译后的模式名</td></tr>
+                    <tr><td>执行模式</td><td>写入方式（SYNC/ASYNC）</td></tr>
+                    <tr><td>增量策略</td><td>log增量监听 / timing定时拉取</td></tr>
+                    <tr><td>总条数/成功/失败/差异/订正</td><td>任务累计的数量统计（增量持续累加）</td></tr>
+                    <tr><td>状态</td><td>未运行/运行中/已完成/失败等</td></tr>
+                    <tr><td>开始时间/结束时间/耗时(秒)</td><td>最近一次执行的起止时间与时长</td></tr>
+                </table>
+                <h3>过滤与导出</h3>
+                <ul>
+                    <li>顶部可按 <b>来源数据库类型</b>、<b>同步方案</b> 组合过滤后查看/导出；</li>
+                    <li><b>导出迁移记录（CSV）</b>：按当前过滤条件导出任务维度记录（UTF-8 BOM，Excel 打开中文不乱码）；</li>
+                    <li><b>导出迁移清单（CSV）</b>：导出表映射维度明细（源库/源Schema/源表，目标库/目标Schema/目标表，字段映射条数，排序号）。</li>
+                </ul>
+                <div class="warn"><b>重要：</b>删除数据同步任务会同时清除其记录展示数据源（记录页读取任务与运行元数据）。如需保留历史记录展示，请<b>停止</b>任务而非删除任务。</div>
+            </section>
+
+            <section id="manual-h6">
+                <h2><i class="fa fa-clone"></i> 6. 整库迁移</h2>
+                <p>路径：【数据同步 → 整库迁移】。整库迁移用于"一次配置，整库搬迁"：选择源库与目标库后，自动枚举整库所有表并迁移（推荐新建目标库）。</p>
+                <h3>操作步骤</h3>
+                <ol>
+                    <li>点击「添加」；填写任务名称；</li>
+                    <li>添加映射关系：选择源连接 + 源库/Schema、目标连接 + 目标库/Schema；</li>
+                    <li>点击下一步保存任务；</li>
+                    <li>列表行内点击 <span class="uibox"><i class="fa fa-list-alt"></i></span> <b>预检测</b>（整库规则：库级连通性、建表权限、同库校验等；表无显式字段映射时按同名字段自动推断）；</li>
+                    <li>点击 <span class="uibox"><i class="fa fa-play"></i></span> 启动迁移；「迁移结果」列实时刷新进度；</li>
+                    <li>点击任务名称进入详情，查看每张表的迁移状态（成功/失败/耗时）。</li>
+                </ol>
+                <div class="warn"><b>注意：</b>整库迁移会在目标库创建表；若目标库已存在同名表，预检测/运行时会按提示处理（遇结构冲突建议先在目标库删除旧表）。</div>
+            </section>
+
+            <section id="manual-h7">
+                <h2><i class="fa fa-check-square-o"></i> 7. 订正校验（数据校验与订正）</h2>
+                <p>路径：【数据同步 → 订正校验】。用于对已完成同步的数据做<b>一致性校验</b>并按结果<b>订正差异</b>。</p>
+                <ol>
+                    <li>创建校验任务：选择源/目标连接与库，方式支持全表或抽样校验；</li>
+                    <li>运行后查看差异条数、差异明细（哪些键不一致）；</li>
+                    <li>按差异生成订正任务，一键把差异订正到目标端；</li>
+                    <li>建议：全量迁移完成后先做一次全量校验，增量运行期间可按需再做校验。</li>
+                </ol>
+            </section>
+
+            <section id="manual-h8">
+                <h2><i class="fa fa-sitemap"></i> 8. 数据血缘</h2>
+                <p>路径：【数据同步 → 数据血缘】。展示 表 → 表 的同步链路关系图（源库 → 源表 → 目标库 → 目标表），用于梳理数据流向、评估变更影响。任务建立/修改后自动采集，可按连接、库、表过滤查询。</p>
+            </section>
+
+            <section id="manual-h9">
+                <h2><i class="fa fa-line-chart"></i> 9. 性能监控与告警通知</h2>
+                <h3>性能监控</h3>
+                <ul>
+                    <li>路径：【监控告警 → 性能监控】；展示当前运行任务的同步速率（行/秒）、缓冲区堆积、连接池等指标；</li>
+                    <li>长表格同步建议关注"缓冲区堆积"是否持续升高，必要时增加缓冲批大小（参考第 12 节诊断开关定位瓶颈）。</li>
+                </ul>
+                <h3>告警通知</h3>
+                <ul>
+                    <li>路径：【监控告警 → 告警通知】；可按任务运行失败/异常启用通知；</li>
+                    <li>配置通知渠道后在任务编辑页关联启用，异常发生时按渠道推送。</li>
+                </ul>
+            </section>
+
+            <section id="manual-h10">
+                <h2><i class="fa fa-cog"></i> 10. 系统管理</h2>
+                <table>
+                    <tr><th>功能</th><th>说明</th></tr>
+                    <tr><td>插件管理</td><td>上传/管理数据处理扩展插件（jar），供映射/表映射挂载，用于字段转换等自定义逻辑</td></tr>
+                    <tr><td>配置管理</td><td>查看系统加载的配置文件内容（application.properties 等），修改后需重启生效</td></tr>
+                    <tr><td>用户管理</td><td>账号增删改、密码重置、启用停用；首次部署后请立即修改默认密码</td></tr>
+                    <tr><td>系统配置</td><td>系统级参数（工作线程、缓冲区、调度线程池等），调整后重启生效</td></tr>
+                    <tr><td>操作手册</td><td>本页面；离线内置，可离线环境直接查阅</td></tr>
+                </table>
+            </section>
+
+            <section id="manual-h11">
+                <h2><i class="fa fa-cubes"></i> 11. 增量同步前置条件（重要）</h2>
+                <p>“全量+增量” 使用数据库日志实时监听，各数据库需提前做以下准备（一次性配置）：</p>
+                <table>
+                    <tr><th>数据库</th><th>前置要求</th></tr>
+                    <tr>
+                        <td>MySQL / MariaDB</td>
+                        <td><code>server-id</code> 唯一、<code>binlog-format=ROW</code>、<code>binlog-row-image=FULL</code>；账号需 REPLICATION SLAVE 权限</td>
+                    </tr>
+                    <tr>
+                        <td>PostgreSQL</td>
+                        <td><code>wal_level=logical</code>、<code>max_replication_slots</code> ≥ 任务数；重启实例生效</td>
+                    </tr>
+                    <tr>
+                        <td>Oracle</td>
+                        <td>归档模式（ARCHIVELOG）、<code>ENABLE supplemental log data</code>；账号有 LogMiner 执行权限（SELECT ANY TRANSACTION 等）</td>
+                    </tr>
+                    <tr>
+                        <td>达梦 DM8</td>
+                        <td>开启归档（ARCH_INI）；同步账号具备 LogMiner 相关字典访问权限；start 选项可用 JVM 参数 <code>-Ddbdatasync.dm.logminer.options=NN</code> 调整（默认 16）。<b>实时性由产品自动保障</b>：每轮轮询重开会话读取最新归档，空轮询且有堆积时自动切归档（空闲库不切），实测增量延迟约 6 秒，无需人工切归档</td>
+                    </tr>
+                    <tr>
+                        <td>人大金仓 KES V9</td>
+                        <td><code>wal_level=logical</code> 并重启（配置备份 <code>kingbase.conf.bak_dbsync</code> 连接方式见现场部署记录）；连接<b>扩展参数</b>填 <code>{"pluginName":"syslogical_output"}</code>（V009R003C011 实测）</td>
+                    </tr>
+                </table>
+                <div class="danger"><b>未满足前置条件时的典型现象：</b>任务能启动、全量成功，但增量数据一直为 0；或启动即报日志跳转错误。请先核对第 11 节配置，再用第 12 节诊断开关定位。</div>
+            </section>
+
+            <section id="manual-h12">
+                <h2><i class="fa fa-stethoscope"></i> 12. 故障诊断与排查</h2>
+                <h3>诊断日志开关（启动 App 时加 JVM 参数）</h3>
+                <table>
+                    <tr><th>参数</th><th>作用</th></tr>
+                    <tr><td><code>-Ddbdatasync.logminer.rowdebug=true</code></td><td>输出 <code>[logminer-rowdebug]</code>（SCN/操作/表/事务）、<code>[cdc-delete-debug]</code>（解析后的行数据，用于定位 DELETE 断链）</td></tr>
+                    <tr><td>-</td><td>目标端同时输出 <code>[dm-writer-debug]</code> / <code>[writer-debug]</code>：目标端执行的 SQL 与受影响行数（`execute=[1]` 表示命中 1 行）</td></tr>
+                    <tr><td><code>-Ddbdatasync.dm.logminer.options=NN</code></td><td>DM LogMiner start 选项位值（默认 16，DICT_FROM_ONLINE_CATALOG 语义），现场调优用</td></tr>
+                </table>
+                <h3>常见问题定位思路</h3>
+                <ol>
+                    <li><b>全量慢</b>：看监控页缓冲堆积与.writer日志；大批量时优先确认目标端批量写入已启用（buffer-writer-count）；</li>
+                    <li><b>增量为 0</b>：核对第 11 节前置；确认源库确实有新写入并被提交；开启 rowdebug 观察是否解析到行（表名/操作类型）；</li>
+                    <li><b>UPDATE/DELETE 目标未生效</b>：开 诊断开关 看目标端 execute 行数；0 说明主键定位未命中（检查目标键是否被业务改写）；</li>
+                    <li><b>启动报错</b>：先跑预检测，把 ERROR 逐条修复；日志 app.log 按规则编号搜索；</li>
+                    <li><b>异构大小写不一致</b>：字段映射已支持忽略大小写自动匹配；若仍不匹配（如改名），在字段映射页手动编辑。</li>
+                </ol>
+            </section>
+
+            <section id="manual-h13">
+                <h2><i class="fa fa-question-circle-o"></i> 13. 常见问题 FAQ</h2>
+                <h3>Q1：预检测报“字段映射为空”？</h3>
+                <p>A：进入该表的「字段映射」编辑页会自动按同名（忽略大小写）补齐映射；确无同名字段时按提示手动编辑。历史遗留的空映射旧任务需补齐映射后重跑。</p>
+                <h3>Q2：字段数目不一致 / 类型不一致怎么办？</h3>
+                <p>A：自动映射只匹配同名；未匹配字段留待人工处理——不需要同步的字段不映射即可，需要同步但名称不同的用「手动编辑」指定映射。类型宽度收缩类风险预检测会给出 WARN。</p>
+                <h3>Q3：删除任务后记录还在吗？</h3>
+                <p>A：「数据同步记录」读取任务与其运行元数据，删除任务后该任务记录随之消失；只想暂停采集请用“停止”。整体记录支持 CSV 导出留档，建议定期导出存档。</p>
+                <h3>Q4：怎么复制一个已完成配置的任务？</h3>
+                <p>A：列表行内 <i class="fa fa-copy"></i> 复制，生成同配置新任务，改名后即可按需微调（换连接、换库）。</p>
+                <h3>Q5：金仓 KES 为什么没有用 test_decoding？</h3>
+                <p>A：KES V9 实测仅内置 <code>syslogical_output</code>（协议为 pgoutput 二进制）。连接扩展参数选择插件名即可，系统自动按插件切换解码链路。</p>
+                <h3>Q6：能同步 DDL 吗？</h3>
+                <p>A：映射编辑中默认关闭 DDL 同步（enableDDL=0）；如需开启请评估目标库兼容性与权限，并先在测试链路验证。</p>
+            </section>
+
+            <section id="manual-h14">
+                <h2><i class="fa fa-download"></i> 14. 离线部署与升级</h2>
+                <ol>
+                    <li>安装包自带 JRE 与全部依赖（含前端字体/图标/脚本），<b>完全离线</b>，无需访问外网或 CDN；</li>
+                    <li>启动：双击 <code>start_app.cmd</code>（Windows）或对应 shell 脚本；确认日志出现端口监听（默认 18686）；</li>
+                    <li>访问 <code>http://127.0.0.1:18686</code> 登录；首次登录后立即修改 admin 密码（【用户管理】）；</li>
+                    <li>数据存储默认内置 H2（<code>data/DBDataSync</code>），生产建议在 application.properties 切换为 MySQL 存储；</li>
+                    <li>升级：备份 data 目录与 application.properties → 替换部署包 → 启动 → 【配置管理】核对配置；</li>
+                    <li>离线环境安全基线：禁用重置密码开关（<code>dbdatasync.web.security.reset-pwd=false</code>），端口仅内网开放。</li>
+                </ol>
+                <div class="tip"><b>技术支持：</b>离线交付场景收集 <code>logs/app.log</code>、预检测结果截图并联系运维支持人员。</div>
+                <p style="margin-top:14px;color:#94a3b8;font-size:12.5px;">— DBDataSync · 用户操作手册（v2.x，2026-10-18 更新）—</p>
+            </section>
+
+        </div>
+    </div>
+</div>
+</html>

@@ -1,0 +1,43 @@
+/**
+ * DBDataSync Copyright 2020-2026 All Rights Reserved.
+ */
+package org.dbdatasync.connector.kafka.schema.support;
+
+import org.dbdatasync.common.util.DateFormatUtil;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.schema.support.TimestampType;
+
+import java.sql.Timestamp;
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * @Author 穿云
+ * @Version 1.0.0
+ * @Date 2026-01-11 22:21
+ */
+public final class KafkaTimestampType extends TimestampType {
+
+    @Override
+    protected Timestamp merge(Object val, Field field) {
+        if (val instanceof Long) {
+            return new Timestamp((Long) val);
+        }
+
+        if (val instanceof String) {
+            Timestamp timestamp = DateFormatUtil.stringToTimestamp((String) val);
+            if (null != timestamp) {
+                return timestamp;
+            }
+        }
+
+        return throwUnsupportedException(val, field);
+    }
+
+    @Override
+    public Set<String> getSupportedTypeName() {
+        Set<String> types = new HashSet<>();
+        types.add(getType().name());
+        return types;
+    }
+}

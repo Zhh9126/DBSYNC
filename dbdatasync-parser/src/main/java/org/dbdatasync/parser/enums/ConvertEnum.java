@@ -1,0 +1,164 @@
+package org.dbdatasync.parser.enums;
+
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.parser.ParserException;
+import org.dbdatasync.parser.convert.CustomConvertRegistry;
+import org.dbdatasync.parser.convert.Handler;
+import org.dbdatasync.parser.convert.handler.AppendHandler;
+import org.dbdatasync.parser.convert.handler.BytesToStringHandler;
+import org.dbdatasync.parser.convert.handler.ClearHandler;
+import org.dbdatasync.parser.convert.handler.DateHandler;
+import org.dbdatasync.parser.convert.handler.DefaultHandler;
+import org.dbdatasync.parser.convert.handler.LongToTimestampHandler;
+import org.dbdatasync.parser.convert.handler.NumberToStringHandler;
+import org.dbdatasync.parser.convert.handler.PrependHandler;
+import org.dbdatasync.parser.convert.handler.RemStrFirstHandler;
+import org.dbdatasync.parser.convert.handler.RemStrLastHandler;
+import org.dbdatasync.parser.convert.handler.ReplaceHandler;
+import org.dbdatasync.parser.convert.handler.StringToFormatDateHandler;
+import org.dbdatasync.parser.convert.handler.StringToTimestampHandler;
+import org.dbdatasync.parser.convert.handler.SubStrFirstHandler;
+import org.dbdatasync.parser.convert.handler.SubStrLastHandler;
+import org.dbdatasync.parser.convert.handler.TimestampHandler;
+import org.dbdatasync.parser.convert.handler.TimestampToChineseStandardTimeHandler;
+import org.dbdatasync.parser.convert.handler.TimestampToDateHandler;
+import org.dbdatasync.parser.convert.handler.TimestampToLongHandler;
+import org.dbdatasync.parser.convert.handler.UUIDHandler;
+
+/**
+ * 支持的转换类型
+ *
+ * @author AE86
+ * @version 1.0.0
+ * @date 2019/9/19 23:56
+ */
+public enum ConvertEnum {
+
+    /**
+     * 默认值
+     */
+    DEFAULT("DEFAULT", "默认值", 1, new DefaultHandler()),
+    /**
+     * 系统时间戳
+     */
+    SYSTEM_TIMESTAMP("SYSTEM_TIMESTAMP", "系统时间戳", 0, new TimestampHandler()),
+    /**
+     * 系统日期Date
+     */
+    SYSTEM_DATE("SYSTEM_DATE", "系统日期", 0, new DateHandler()),
+    /**
+     * Timestamp转Date
+     */
+    TIMESTAMP_TO_DATE("TIMESTAMP_TO_DATE", "Timestamp转Date", 0, new TimestampToDateHandler()),
+    /**
+     * Timestamp转中国标准时间
+     */
+    TIMESTAMP_TO_CHINESE_STANDARD_TIME("TIMESTAMP_TO_CHINESE_STANDARD_TIME", "Timestamp转yyyy-MM-dd HH:mm:ss", 0, new TimestampToChineseStandardTimeHandler()),
+    /**
+     * Timestamp转Long
+     */
+    TIMESTAMP_TO_LONG("TIMESTAMP_TO_LONG", "Timestamp转Long", 0, new TimestampToLongHandler()),
+    /**
+     * Long转Timestamp
+     */
+    LONG_TO_TIMESTAMP("LONG_TO_TIMESTAMP", "Long转Timestamp", 0, new LongToTimestampHandler()),
+    /**
+     * String转Timestamp
+     */
+    STRING_TO_TIMESTAMP("STRING_TO_TIMESTAMP", "String转Timestamp", 0, new StringToTimestampHandler()),
+    /**
+     * String转日期自定义格式
+     */
+    STRING_TO_FORMAT_DATE("STRING_TO_FORMAT_DATE", "String转Date自定义格式", 1, new StringToFormatDateHandler()),
+    /**
+     * Number转String
+     */
+    NUMBER_TO_STRING("NUMBER_TO_STRING", "Number转String", 0, new NumberToStringHandler()),
+    /**
+     * Byte[]转String
+     */
+    BYTES_TO_STRING("BYTES_TO_STRING", "Byte[]转String", 0, new BytesToStringHandler()),
+    /**
+     * 替换
+     */
+    REPLACE("REPLACE", "替换", 2, new ReplaceHandler()),
+    /**
+     * 追加在前面,例如“张三”追加123 => 123张三
+     */
+    PREPEND("PREPEND", "前面追加", 1, new PrependHandler()),
+    /**
+     * 追加在后面,例如“张三”追加123 => 张三123
+     */
+    APPEND("APPEND", "后面追加", 1, new AppendHandler()),
+    /**
+     * UUID
+     */
+    UUID("UUID", "UUID", 0, new UUIDHandler()),
+    /**
+     * 去掉首字符
+     */
+    REM_STR_FIRST("REM_STR_FIRST", "去掉首字符", 0, new RemStrFirstHandler()),
+    /**
+     * 去掉尾字符
+     */
+    REM_STR_LAST("REM_STR_LAST", "去掉尾字符", 0, new RemStrLastHandler()),
+    /**
+     * 从前面截取N个字符
+     */
+    SUB_STR_FIRST("SUB_STR_FIRST", "从前面截取N个字符", 1, new SubStrFirstHandler()),
+    /**
+     * 从后面截取N个字符
+     */
+    SUB_STR_LAST("SUB_STR_LAST", "从后面截取N个字符", 1, new SubStrLastHandler()),
+    /**
+     * 清空
+     */
+    CLEAR("CLEAR", "清空", 0, new ClearHandler());
+
+    // 转换编码
+    private final String code;
+    // 转换名称
+    private final String name;
+    // 参数个数
+    private final int argNum;
+    // 转换实现
+    private final Handler handler;
+
+    ConvertEnum(String code, String name, int argNum, Handler handler) {
+        this.code = code;
+        this.name = name;
+        this.argNum = argNum;
+        this.handler = handler;
+    }
+
+    public static Handler getHandler(String code) throws ParserException {
+        for (ConvertEnum e : ConvertEnum.values()) {
+            if (StringUtil.equals(code, e.getCode())) {
+                return e.getHandler();
+            }
+        }
+        // 自定义函数扩展点（产品化）：优先外部注册的 handler
+        Handler custom = CustomConvertRegistry.lookup(code);
+        if (custom != null) {
+            return custom;
+        }
+        throw new ParserException(String.format("Handler code \"%s\" does not exist.", code));
+    }
+
+    public String getCode() {
+        return code;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public int getArgNum() {
+        return argNum;
+    }
+
+    public Handler getHandler() {
+        return handler;
+    }
+
+}

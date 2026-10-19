@@ -1,0 +1,623 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.connector.oracle;
+
+import org.dbdatasync.common.model.Result;
+import org.dbdatasync.common.util.CollectionUtils;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.connector.oracle.cdc.OracleListener;
+import org.dbdatasync.connector.oracle.schema.OracleSchemaResolver;
+import org.dbdatasync.connector.oracle.validator.OracleConfigValidator;
+import org.dbdatasync.sdk.config.DDLConfig;
+import org.dbdatasync.sdk.config.DatabaseConfig;
+import org.dbdatasync.sdk.config.SqlBuilderConfig;
+import org.dbdatasync.sdk.connector.ConfigValidator;
+import org.dbdatasync.sdk.connector.database.AbstractDatabaseConnector;
+import org.dbdatasync.sdk.connector.database.Database;
+import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
+import org.dbdatasync.sdk.connector.database.DatabaseTemplate;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.constant.DatabaseConstant;
+import org.dbdatasync.sdk.enums.ListenerTypeEnum;
+import org.dbdatasync.sdk.listener.DatabaseQuartzListener;
+import org.dbdatasync.sdk.listener.Listener;
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.model.PageSql;
+import org.dbdatasync.sdk.model.ValidateSyncTask;
+import org.dbdatasync.connector.oracle.schema.OracleBlobParameter;
+import org.dbdatasync.sdk.plugin.ReaderContext;
+import org.dbdatasync.sdk.schema.BindParameter;
+import org.dbdatasync.sdk.schema.SchemaResolver;
+import org.dbdatasync.sdk.util.PrimaryKeyUtil;
+import org.springframework.util.Assert;
+
+import java.sql.Clob;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Oracle连接器实现
+ *
+ * @Author AE86
+ * @Version 1.0.0
+ * @Date 2022-05-12 21:14
+ */
+public class OracleConnector extends AbstractDatabaseConnector {
+    private final String QUERY_SCHEMA = "SELECT USERNAME FROM ALL_USERS where USERNAME not in('ANONYMOUS','APEX_030200','APEX_PUBLIC_USER','APPQOSSYS','BI','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','HR','IX','MDDATA','MDSYS','MGMT_VIEW','OE','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS','OWBSYS_AUDIT','PM','SCOTT','SH','SI_INFORMTN_SCHEMA','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','SYS','SYSMAN','SYSTEM','WMSYS','XDB','XS$NULL') ORDER BY USERNAME";
+
+    private final OracleConfigValidator configValidator = new OracleConfigValidator();
+    private final OracleSchemaResolver schemaResolver = new OracleSchemaResolver();
+
+    @Override
+    public String getConnectorType() {
+        return "Oracle";
+    }
+
+    @Override
+    public ConfigValidator getConfigValidator() {
+        return configValidator;
+    }
+
+    @Override
+    public Listener getListener(String listenerType) {
+        if (ListenerTypeEnum.isTiming(listenerType)) {
+            return new DatabaseQuartzListener();
+        }
+
+        if (ListenerTypeEnum.isLog(listenerType)) {
+            return new OracleListener();
+        }
+        return null;
+    }
+
+    @Override
+    public List<String> getSchemas(DatabaseConnectorInstance connectorInstance, String catalog) {
+        return connectorInstance.execute(databaseTemplate -> databaseTemplate.queryForList(QUERY_SCHEMA, String.class));
+    }
+
+    @Override
+    public String buildSqlWithQuotation() {
+        return "\"";
+    }
+
+    /**
+     * Oracle 以 schema（用户）为迁移命名空间；优先 {@code schemaName}，兼容仅填 {@code databaseName} 的旧数据。
+     */
+    @Override
+    public String buildCreateDatabaseSql(String databaseName, String schemaName) {
+        String user = schemaName.trim().toUpperCase(Locale.ROOT);
+        String password = defaultSchemaPassword(user);
+        String createUserSql = "CREATE USER " + user + " IDENTIFIED BY \"" + password + "\" " +
+                "DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP QUOTA UNLIMITED ON USERS";
+        String grantSql = "GRANT CONNECT, RESOURCE TO " + user;
+        return "DECLARE v_cnt NUMBER := 0; BEGIN " +
+                "SELECT COUNT(1) INTO v_cnt FROM ALL_USERS WHERE USERNAME = '" + user + "'; " +
+                "IF v_cnt = 0 THEN " +
+                "EXECUTE IMMEDIATE '" + createUserSql + "'; " +
+                "EXECUTE IMMEDIATE '" + grantSql + "'; " +
+                "END IF; END;";
+    }
+
+    /**
+     * 判断 schema（用户）是否存在；优先 {@code schemaName}，兼容仅填 {@code databaseName} 的旧数据。
+     */
+    @Override
+    public boolean databaseExists(DatabaseConnectorInstance connectorInstance, String databaseName, String schemaName) {
+        Integer count = connectorInstance.execute(databaseTemplate ->
+                databaseTemplate.queryForObject(
+                        "SELECT COUNT(1) FROM ALL_USERS WHERE USERNAME = UPPER(?)",
+                        Integer.class,
+                        schemaName
+                ));
+        return count != null && count > 0;
+    }
+
+    private static String defaultSchemaPassword(String schemaName) {
+        return schemaName + "@1234";
+    }
+
+    @Override
+    public String buildDropTableSql(DatabaseConnectorInstance targetInstance, String tableName) {
+        String owner = targetInstance != null ? targetInstance.getSchema() : null;
+        String dropSql = "DROP TABLE " + qualifyTableName(owner, tableName) + " CASCADE CONSTRAINTS";
+        return wrapDropTableIfExists(owner, tableName, dropSql);
+    }
+
+    @Override
+    public String getTargetTableDDL(DatabaseConnectorInstance targetInstance, String tableName, String sourceDDL) {
+        String owner = targetInstance != null ? targetInstance.getSchema() : null;
+        String createSql = "CREATE TABLE " + qualifyTableName(owner, tableName) + " (" + sourceDDL + ")";
+        return wrapCreateTableIfNotExists(owner, tableName, createSql);
+    }
+
+    @Override
+    public String getSourceTableDDL(DatabaseConnectorInstance sourceInstance, String sourceTableName) {
+        if (sourceInstance == null || StringUtil.isBlank(sourceTableName)) {
+            return StringUtil.EMPTY;
+        }
+        return fetchRawTableDdl(sourceInstance, sourceTableName);
+    }
+
+    private String fetchRawTableDdl(DatabaseConnectorInstance connectorInstance, String tableName) {
+        return connectorInstance.execute(databaseTemplate -> {
+            String schema = connectorInstance.getSchema();
+            try {
+                String ddl = databaseTemplate.queryForObject(
+                        "SELECT DBMS_METADATA.GET_DDL('TABLE', ?, ?) FROM DUAL",
+                        (ResultSet rs, int rowNum) -> {
+                            Clob clob = rs.getClob(1);
+                            if (clob == null || clob.length() == 0) {
+                                return StringUtil.EMPTY;
+                            }
+                            return clob.getSubString(1, (int) clob.length());
+                        },
+                        tableName, schema);
+                if (StringUtil.isBlank(ddl)) {
+                    return StringUtil.EMPTY;
+                }
+                ddl = ddl.trim();
+                if (StringUtil.isNotBlank(schema)) {
+                    String quotedSchema = "\"" + schema.toUpperCase(Locale.ROOT) + "\"";
+                    ddl = ddl.replace(quotedSchema + ".", "");
+                    quotedSchema = "\"" + schema + "\"";
+                    ddl = ddl.replace(quotedSchema + ".", "");
+                }
+                if (ddl.endsWith(";")) {
+                    ddl = ddl.substring(0, ddl.length() - 1).trim();
+                }
+                return ddl;
+            } catch (Exception e) {
+                String msg = e.getMessage();
+                if (msg != null && msg.contains("ORA-31603")) {
+                    return StringUtil.EMPTY;
+                }
+                throw new RuntimeException("Failed to get DDL for table: " + tableName, e);
+            }
+        });
+    }
+
+    private String wrapCreateTableIfNotExists(String owner, String tableName, String createSql) {
+        String tableLiteral = escapeForExecuteImmediate(tableName);
+        String escapedCreateSql = escapeForExecuteImmediate(createSql);
+        String tableExistsPredicate = "UPPER(TABLE_NAME) = UPPER('" + tableLiteral + "')";
+        if (StringUtil.isBlank(owner)) {
+            return "DECLARE v_cnt NUMBER := 0; BEGIN " +
+                    "SELECT COUNT(1) INTO v_cnt FROM USER_TABLES WHERE " + tableExistsPredicate + "; " +
+                    "IF v_cnt = 0 THEN EXECUTE IMMEDIATE '" + escapedCreateSql + "'; END IF; END;";
+        }
+        String ownerUpper = normalizeOwner(owner);
+        return "DECLARE v_cnt NUMBER := 0; BEGIN " +
+                "SELECT COUNT(1) INTO v_cnt FROM ALL_TABLES WHERE OWNER = '" + ownerUpper + "' AND " + tableExistsPredicate + "; " +
+                "IF v_cnt = 0 THEN EXECUTE IMMEDIATE '" + escapedCreateSql + "'; END IF; END;";
+    }
+
+    private String wrapDropTableIfExists(String owner, String tableName, String dropSql) {
+        String tableLiteral = escapeForExecuteImmediate(tableName);
+        String escapedDropSql = escapeForExecuteImmediate(dropSql);
+        String tableExistsPredicate = "UPPER(TABLE_NAME) = UPPER('" + tableLiteral + "')";
+        if (StringUtil.isBlank(owner)) {
+            return "DECLARE v_cnt NUMBER := 0; BEGIN " +
+                    "SELECT COUNT(1) INTO v_cnt FROM USER_TABLES WHERE " + tableExistsPredicate + "; " +
+                    "IF v_cnt > 0 THEN EXECUTE IMMEDIATE '" + escapedDropSql + "'; END IF; END;";
+        }
+        String ownerUpper = normalizeOwner(owner);
+        return "DECLARE v_cnt NUMBER := 0; BEGIN " +
+                "SELECT COUNT(1) INTO v_cnt FROM ALL_TABLES WHERE OWNER = '" + ownerUpper + "' AND " + tableExistsPredicate + "; " +
+                "IF v_cnt > 0 THEN EXECUTE IMMEDIATE '" + escapedDropSql + "'; END IF; END;";
+    }
+
+    /**
+     * schema.table 均加双引号并保留表名大小写，与整库迁移建表 DDL 一致。
+     */
+    private String qualifyTableName(String owner, String tableName) {
+        String quotedTable = buildWithQuotation(escapeForExecuteImmediate(tableName));
+        if (StringUtil.isBlank(owner)) {
+            return quotedTable;
+        }
+        return buildWithQuotation(normalizeOwner(owner)) + "." + quotedTable;
+    }
+
+    private static String normalizeOwner(String owner) {
+        return owner == null ? StringUtil.EMPTY : owner.trim().toUpperCase(Locale.ROOT);
+    }
+
+//    private static String trimIdentifier(String name) {
+//        return name == null ? StringUtil.EMPTY : name.trim();
+//    }
+//
+//    private static String escapeSqlLiteral(String value) {
+//        return escapeForExecuteImmediate(value);
+//    }
+
+    private void applySessionSchema(DatabaseTemplate databaseTemplate, String schema) {
+        if (StringUtil.isBlank(schema)) {
+            return;
+        }
+        databaseTemplate.execute("ALTER SESSION SET CURRENT_SCHEMA = " + normalizeOwner(schema));
+    }
+
+    @Override
+    public Result writerDDL(DatabaseConnectorInstance connectorInstance, DDLConfig config) {
+        Result result = new Result();
+        try {
+            Assert.hasText(config.getSql(), "执行SQL语句不能为空.");
+            connectorInstance.execute(databaseTemplate -> {
+                applySessionSchema(databaseTemplate, connectorInstance.getSchema());
+                databaseTemplate.execute(DatabaseConstant.DBS_UNIQUE_CODE.concat(config.getSql()));
+                return true;
+            });
+            Map<String, String> successMap = new HashMap<>();
+            successMap.put(ConfigConstant.BINLOG_DATA, config.getSql());
+            result.addSuccessData(Collections.singletonList(successMap));
+        } catch (Exception e) {
+            result.getError().append(String.format("执行ddl: %s, 异常：%s", config.getSql(), e.getMessage()));
+        }
+        return result;
+    }
+
+    @Override
+    public String getQueryCountSql(SqlBuilderConfig config) {
+        Database database = config.getDatabase();
+        String queryFilter = config.getQueryFilter();
+        // PARALLEL hint 利用多核 CPU 并行处理，提升性能但不影响准确性
+        // 让 Oracle 优化器自动选择最佳访问路径（索引扫描或全表扫描）
+        String query = "SELECT /*+ PARALLEL(t, 8) */ COUNT(*) FROM %s%s t %s";
+
+        return String.format(query, config.getSchema(), database.buildWithQuotation(config.getTableName()), queryFilter);
+    }
+
+    @Override
+    public String getPageSql(PageSql config) {
+        // 使用三层嵌套查询：SELECT * FROM (SELECT A.*, ROWNUM RN FROM (...) A WHERE ROWNUM <= ?) WHERE RN > ?
+        StringBuilder sql = new StringBuilder();
+        sql.append(DatabaseConstant.ORACLE_PAGE_SQL_START);
+        sql.append(config.getQuerySql());
+        // 使用基类方法添加ORDER BY（按主键排序，保证分页一致性）
+        appendOrderByPrimaryKeys(sql, config);
+        sql.append(DatabaseConstant.ORACLE_PAGE_SQL_END);
+        return sql.toString();
+    }
+
+    @Override
+    public Object[] getPageArgs(ReaderContext context) {
+        int pageSize = context.getPageSize();
+        int pageIndex = context.getPageIndex();
+        return new Object[]{pageIndex * pageSize, (pageIndex - 1) * pageSize};
+    }
+
+    @Override
+    public String getPageCursorSql(PageSql config) {
+        // 不支持游标查询
+        if (!PrimaryKeyUtil.isSupportedCursor(config.getFields())) {
+            return StringUtil.EMPTY;
+        }
+
+        StringBuilder sql = new StringBuilder();
+        sql.append(DatabaseConstant.ORACLE_PAGE_CURSOR_SQL_START);
+        sql.append(config.getQuerySql());
+        // 使用基类的公共方法构建WHERE条件和ORDER BY
+        buildCursorConditionAndOrderBy(sql, config);
+        sql.append(DatabaseConstant.ORACLE_PAGE_CURSOR_SQL_END);
+        return sql.toString();
+    }
+
+    @Override
+    public Object[] getPageCursorArgs(ReaderContext context) {
+        int pageSize = context.getPageSize();
+        Object[] cursors = context.getCursors();
+        if (null == cursors || cursors.length == 0) {
+            return new Object[]{pageSize};
+        }
+        // 使用基类的公共方法构建游标条件参数
+        Object[] cursorArgs = buildCursorArgs(cursors);
+        if (cursorArgs == null) {
+            return new Object[]{pageSize};
+        }
+
+        // Oracle不需要OFFSET，只需要添加pageSize参数
+        Object[] newCursors = new Object[cursorArgs.length + 1];
+        System.arraycopy(cursorArgs, 0, newCursors, 0, cursorArgs.length);
+        newCursors[cursorArgs.length] = pageSize;
+        return newCursors;
+    }
+
+    @Override
+    public String buildModifyColumnsSql(DatabaseConnectorInstance targetInstance, ValidateSyncTask task,
+                                        String targetTableName, List<Field> sourceDefinitions,
+                                        List<String> targetColumnNames) {
+        if (CollectionUtils.isEmpty(sourceDefinitions) || CollectionUtils.isEmpty(targetColumnNames)) {
+            return StringUtil.EMPTY;
+        }
+        int loopSize = Math.min(sourceDefinitions.size(), targetColumnNames.size());
+
+        String qualifiedTable = qualifyTable(targetInstance, task, targetTableName);
+        List<String> alterStatements = new ArrayList<>(loopSize);
+        for (int i = 0; i < loopSize; i++) {
+            Field sourceField = sourceDefinitions.get(i);
+            String targetColumn = targetColumnNames.get(i);
+            if (sourceField == null || StringUtil.isBlank(targetColumn)) {
+                continue;
+            }
+            String col = buildWithQuotation(targetColumn);
+            String type = formatPhysicalType(sourceField);
+            if (isUnsupportedOnlineModifyType(type)) {
+                continue;
+            }
+            // 单列 MODIFY：多列写在一个 MODIFY(...) 中易触发 ORA-22859；writerDDL 仅一次 execute，故用 PL/SQL 批量 EXECUTE IMMEDIATE
+            alterStatements.add(String.format(Locale.ROOT, "ALTER TABLE %s MODIFY (%s %s)", qualifiedTable, col, type));
+        }
+        if (alterStatements.isEmpty()) {
+            return StringUtil.EMPTY;
+        }
+        if (alterStatements.size() == 1) {
+            return alterStatements.get(0);
+        }
+        StringBuilder plsql = new StringBuilder(alterStatements.size() * 80);
+        plsql.append("BEGIN\n");
+        for (String stmt : alterStatements) {
+            plsql.append("  EXECUTE IMMEDIATE '")
+                    .append(escapeForExecuteImmediate(stmt))
+                    .append("';\n");
+        }
+        plsql.append("END;");
+        return plsql.toString();
+    }
+
+    /**
+     * 将动态 SQL 嵌入 EXECUTE IMMEDIATE 的单引号字面量时，单引号需加倍转义。
+     */
+    private static String escapeForExecuteImmediate(String sql) {
+        if (sql == null) {
+            return "";
+        }
+        return sql.replace("'", "''");
+    }
+
+    /**
+     * Oracle LONG/LONG RAW 到 LOB 的转换不能通过 MODIFY 修改
+     */
+    private boolean isUnsupportedOnlineModifyType(String type) {
+        if (StringUtil.isBlank(type)) {
+            return false;
+        }
+        String normalized = type.trim().toUpperCase(Locale.ROOT);
+        return "CLOB".equals(normalized)
+                || "NCLOB".equals(normalized)
+                || "BLOB".equals(normalized)
+                || "LONG".equals(normalized)
+                || "LONG RAW".equals(normalized);
+    }
+
+    private String qualifyTable(DatabaseConnectorInstance targetInstance, ValidateSyncTask task,
+                                String tableName) {
+        String schema = StringUtil.isNotBlank(task.getTargetSchema())
+                ? task.getTargetSchema()
+                : targetInstance.getCatalog();
+        if (StringUtil.isBlank(schema)) {
+            return buildWithQuotation(tableName);
+        }
+        return buildWithQuotation(schema) + "." + buildWithQuotation(tableName);
+    }
+
+    @Override
+    public String getValidationQuery() {
+        return "select 1 from dual";
+    }
+
+    @Override
+    protected String getCatalog(String database, Connection connection) {
+        return null;
+    }
+
+    @Override
+    protected String getSchema(String schema, Connection connection) throws SQLException {
+        if (StringUtil.isBlank(schema)) {
+            schema = connection.getSchema();
+        }
+        if (StringUtil.isNotBlank(schema)) {
+            schema = schema.toUpperCase();
+        }
+        return schema;
+    }
+
+    @Override
+    public String buildJdbcUrl(DatabaseConfig config, String database) {
+        // jdbc:oracle:thin:@127.0.0.1:1521:ORCL
+        StringBuilder url = new StringBuilder();
+        url.append("jdbc:oracle:thin:@").append(config.getHost()).append(":").append(config.getPort());
+        String serviceName = config.getServiceName();
+        if (StringUtil.isNotBlank(serviceName)) {
+            // 使用Service Name
+            url.append("/").append(serviceName);
+        } else if (StringUtil.isNotBlank(database)) {
+            // 使用SID (传统方式)
+            url.append(":").append(database);
+        } else {
+            throw new IllegalArgumentException("Oracle需要指定serviceName或database(SID)");
+        }
+
+        return url.toString();
+    }
+
+    @Override
+    public String buildInsertSql(SqlBuilderConfig config) {
+        // Oracle 使用 MERGE 实现 INSERT IGNORE 效果（主键冲突时忽略）
+        MergeContext context = buildMergeContext(config);
+
+        StringBuilder sql = new StringBuilder(config.getDatabase().generateUniqueCode());
+        // 构建 MERGE 头部
+        buildMergeHeader(sql, config, context);
+
+        // 只有 WHEN NOT MATCHED 子句，主键冲突时什么都不做（INSERT IGNORE 行为）
+        buildInsertClause(sql, context);
+
+        return sql.toString();
+    }
+
+    @Override
+    public String buildUpsertSql(DatabaseConnectorInstance connectorInstance, SqlBuilderConfig config) {
+        MergeContext context = buildMergeContext(config);
+
+        StringBuilder sql = new StringBuilder(config.getDatabase().generateUniqueCode());
+        // 构建 MERGE 头部
+        buildMergeHeader(sql, config, context);
+
+        // WHEN MATCHED 子句 - 更新非主键字段
+        sql.append("WHEN MATCHED THEN UPDATE SET ");
+        sql.append(StringUtil.join(context.updateSets, StringUtil.COMMA)).append(" ");
+
+        // WHEN NOT MATCHED 子句 - 插入
+        buildInsertClause(sql, context);
+
+        return sql.toString();
+    }
+
+    /**
+     * 构建 MERGE 上下文（字段、主键等信息）
+     */
+    private MergeContext buildMergeContext(SqlBuilderConfig config) {
+        Database database = config.getDatabase();
+        MergeContext context = new MergeContext();
+
+        config.getFields().forEach(f -> {
+            String fieldName = database.buildWithQuotation(f.getName());
+            context.fieldNames.add(fieldName);
+
+            // 构建 SELECT 部分的字段别名
+            List<String> fieldVs = new ArrayList<>();
+            if (database.buildCustomValue(fieldVs, f)) {
+                context.selectFields.add(fieldVs.get(0) + " AS " + fieldName);
+            } else {
+                context.selectFields.add("? AS " + fieldName);
+            }
+
+            if (f.isPk()) {
+                context.pkFieldNames.add(fieldName);
+            } else {
+                context.updateSets.add(String.format("t.%s = s.%s", fieldName, fieldName));
+            }
+        });
+
+        return context;
+    }
+
+    /**
+     * 构建 MERGE 语句头部（MERGE INTO ... USING ... ON ...）
+     */
+    private void buildMergeHeader(StringBuilder sql, SqlBuilderConfig config, MergeContext context) {
+        Database database = config.getDatabase();
+
+        sql.append("MERGE INTO ").append(config.getSchema());
+        sql.append(database.buildWithQuotation(config.getTableName())).append(" t ");
+
+        // Oracle 使用 DUAL 表构造数据源
+        sql.append("USING (SELECT ");
+        sql.append(StringUtil.join(context.selectFields, StringUtil.COMMA));
+        sql.append(" FROM DUAL) s ");
+
+        // 构建 ON 条件：t.pk = s.pk AND ...
+        sql.append("ON (");
+        for (int i = 0; i < context.pkFieldNames.size(); i++) {
+            if (i > 0) {
+                sql.append(" AND ");
+            }
+            String pkFieldName = context.pkFieldNames.get(i);
+            sql.append("t.").append(pkFieldName).append(" = s.").append(pkFieldName);
+        }
+        sql.append(") ");
+    }
+
+    /**
+     * 构建 INSERT 子句（WHEN NOT MATCHED THEN INSERT ...）
+     */
+    private void buildInsertClause(StringBuilder sql, MergeContext context) {
+        sql.append("WHEN NOT MATCHED THEN INSERT (");
+        sql.append(StringUtil.join(context.fieldNames, StringUtil.COMMA)).append(") VALUES (");
+
+        // VALUES 子句使用 s.fieldName
+        List<String> sFieldNames = new ArrayList<>();
+        context.fieldNames.forEach(f -> sFieldNames.add("s." + f));
+        sql.append(StringUtil.join(sFieldNames, StringUtil.COMMA)).append(")");
+    }
+
+    @Override
+    public String formatPhysicalType(Field sourceDefinition) {
+        String typeName = sourceDefinition == null ? null : sourceDefinition.getTypeName();
+        if (StringUtil.isBlank(typeName)) {
+            return "VARCHAR2(255)";
+        }
+        String t = typeName.trim().toUpperCase(Locale.ROOT);
+        String oracleSpecific = mapOracleSpecialNumericAndTemporal(t, sourceDefinition);
+        if (oracleSpecific != null) {
+            return oracleSpecific;
+        }
+        return super.formatPhysicalType(sourceDefinition);
+    }
+
+    /**
+     * MODIFY 子句中 BINARY_FLOAT/DOUBLE、TIMESTAMP、RAW 与基类默认不兼容。
+     */
+    private static String mapOracleSpecialNumericAndTemporal(String t, Field sourceDefinition) {
+        if ("BINARY_FLOAT".equals(t) || t.startsWith("BINARY_FLOAT(")) {
+            return "BINARY_FLOAT";
+        }
+        if ("BINARY_DOUBLE".equals(t) || t.startsWith("BINARY_DOUBLE(")) {
+            return "BINARY_DOUBLE";
+        }
+        return null;
+    }
+
+    /**
+     * 二进制列显式绑参：BLOB 走连接创建的 LOB，避免 MERGE 下 setObject(byte[]) 报 17004。
+     */
+    @Override
+    protected Object wrapBindParameter(Field field, Object val) {
+        if (val instanceof OracleBlobParameter) {
+            return val;
+        }
+        String type = field == null || StringUtil.isBlank(field.getTypeName())
+                ? StringUtil.EMPTY
+                : field.getTypeName().trim().toUpperCase(Locale.ROOT);
+        // SQL NULL → setNull(Types.BLOB)，避免 TYPE_UNKNOWN 绑参异常或落成空 BLOB
+        if (val == null && isBlobType(type)) {
+            return new OracleBlobParameter(null);
+        }
+        if (!(val instanceof byte[])) {
+            return val;
+        }
+        final byte[] bytes = (byte[]) val;
+        if (isBlobType(type)) {
+            return new OracleBlobParameter(bytes);
+        }
+        // RAW / LONG RAW
+        return (BindParameter) (ps, paramIndex, connection) -> ps.setBytes(paramIndex, bytes);
+    }
+
+    private static boolean isBlobType(String type) {
+        return StringUtil.isNotBlank(type) && type.contains("BLOB");
+    }
+
+    /**
+     * MERGE 语句构建上下文
+     */
+    private static class MergeContext {
+
+        List<String> fieldNames = new ArrayList<>();
+        List<String> selectFields = new ArrayList<>();
+        List<String> pkFieldNames = new ArrayList<>();
+        List<String> updateSets = new ArrayList<>();
+    }
+
+    @Override
+    public SchemaResolver getSchemaResolver() {
+        return schemaResolver;
+    }
+}

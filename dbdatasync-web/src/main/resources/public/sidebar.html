@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 左侧边栏 -->
+<aside th:fragment="nav" class="sidebar">
+    <!-- 品牌标识 -->
+    <div class="sidebar-brand">
+        <i class="fa fa-database"></i>
+        <span>数据同步工具</span>
+    </div>
+
+    <!-- 导航菜单 -->
+    <nav class="sidebar-nav">
+        <!-- 工作台 -->
+        <div class="sidebar-group-title">工作台</div>
+        <div class="space-y-1">
+            <div class="sidebar-item active" url="/index">
+                <i class="fa fa-tachometer w-5 text-center"></i>
+                <span>仪表盘</span>
+            </div>
+        </div>
+
+        <!-- 数据同步 -->
+        <div class="sidebar-group-title sync">数据同步</div>
+        <div class="space-y-1">
+            <div class="sidebar-item" url="/connector/list">
+                <i class="fa fa-database w-5 text-center"></i>
+                <span>连接管理</span>
+            </div>
+            <div class="sidebar-item" url="/mapping/list">
+                <i class="fa fa-exchange w-5 text-center"></i>
+                <span>数据同步</span>
+            </div>
+            <div class="sidebar-item" url="/sync-record/list">
+                <i class="fa fa-history w-5 text-center"></i>
+                <span>数据同步记录</span>
+            </div>
+            <div class="sidebar-item" url="/database-sync/list">
+                <i class="fa fa-clone w-5 text-center"></i>
+                <span>整库迁移</span>
+            </div>
+            <div class="sidebar-item" url="/validate-sync/list">
+                <i class="fa fa-history w-5 text-center"></i>
+                <span>订正校验</span>
+            </div>
+            <div class="sidebar-item" url="/lineage/list">
+                <i class="fa fa-sitemap w-5 text-center"></i>
+                <span>数据血缘</span>
+            </div>
+        </div>
+
+        <!-- 监控告警 -->
+        <div class="sidebar-group-title monitor">监控告警</div>
+        <div class="space-y-1">
+            <div class="sidebar-item" url="/monitor">
+                <i class="fa fa-line-chart w-5 text-center"></i>
+                <span>性能监控</span>
+            </div>
+            <div class="sidebar-item" url="/notice">
+                <i class="fa fa-bell w-5 text-center"></i>
+                <span>告警通知</span>
+            </div>
+        </div>
+
+        <!-- 系统管理 -->
+        <div class="sidebar-group-title system">系统管理</div>
+        <div class="space-y-1 pb-3">
+            <div class="sidebar-item" url="/plugin">
+                <i class="fa fa-plug w-5 text-center"></i>
+                <span>插件管理</span>
+            </div>
+            <div class="sidebar-item" url="/config">
+                <i class="fa fa-file-code-o w-5 text-center"></i>
+                <span>配置管理</span>
+            </div>
+            <div class="sidebar-item" url="/user">
+                <i class="fa fa-user w-5 text-center"></i>
+                <span>用户管理</span>
+            </div>
+            <div class="sidebar-item" url="/system">
+                <i class="fa fa-cog w-5 text-center"></i>
+                <span>系统配置</span>
+            </div>
+            <div class="sidebar-item" url="/manual">
+                <i class="fa fa-book w-5 text-center"></i>
+                <span>操作手册</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 底部品牌（固定在 sidebar 底部） -->
+    <div class="sidebar-footer">
+        DBDataSync 通用数据同步中间件
+        <br/>
+        <span class="version-tag">v2.x</span>
+    </div>
+</aside>
+</html>

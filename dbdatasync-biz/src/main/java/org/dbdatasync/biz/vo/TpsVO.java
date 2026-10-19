@@ -1,0 +1,12 @@
+/**
+ * DBDataSync Copyright 2020-2025 All Rights Reserved.
+ */
+package org.dbdatasync.biz.vo;
+
+/**
+ * @Author 穿云
+ * @Version 1.0.0
+ * @Date 2025-12-20 21:41
+ */
+public class TpsVO extends HistoryStackVO {
+}

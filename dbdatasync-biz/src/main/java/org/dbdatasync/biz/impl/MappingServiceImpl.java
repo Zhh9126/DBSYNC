@@ -1,0 +1,816 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.biz.impl;
+
+import org.dbdatasync.biz.BizException;
+import org.dbdatasync.biz.LineageService;
+import org.dbdatasync.biz.MappingService;
+import org.dbdatasync.biz.MonitorService;
+import org.dbdatasync.biz.RepeatedTableGroupException;
+import org.dbdatasync.biz.TableGroupService;
+import org.dbdatasync.biz.checker.impl.mapping.MappingChecker;
+import org.dbdatasync.biz.precheck.PreCheckService;
+import org.dbdatasync.biz.task.MappingCountTask;
+import org.dbdatasync.biz.task.MappingMatchTableTask;
+import org.dbdatasync.biz.vo.MappingCustomTableVO;
+import org.dbdatasync.biz.vo.MappingVO;
+import org.dbdatasync.biz.vo.MetaVO;
+import org.dbdatasync.biz.vo.TableVO;
+import org.dbdatasync.common.dispatch.DispatchTaskService;
+import org.dbdatasync.common.model.ConfigModel;import org.dbdatasync.common.model.Paging;
+import org.dbdatasync.common.rsa.RsaManager;
+import org.dbdatasync.common.util.CollectionUtils;
+import org.dbdatasync.common.util.JsonUtil;
+import org.dbdatasync.common.util.NumberUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.connector.base.ConnectorFactory;
+import org.dbdatasync.manager.ManagerFactory;
+import org.dbdatasync.manager.impl.PreloadTemplate;
+import org.dbdatasync.parser.LogType;
+import org.dbdatasync.parser.MetaProfile;
+import org.dbdatasync.parser.ParserComponent;
+import org.dbdatasync.parser.ProfileComponent;
+import org.dbdatasync.parser.TableGroupContext;
+import org.dbdatasync.parser.TableGroupProfile;
+import org.dbdatasync.parser.TaskProfile;
+import org.dbdatasync.parser.model.Connector;
+import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.Meta;
+import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.util.ConnectorInstanceUtil;
+import org.dbdatasync.parser.util.ConnectorServiceContextUtil;
+import org.dbdatasync.plugin.model.MappingStopContent;
+import org.dbdatasync.sdk.SdkException;
+import org.dbdatasync.sdk.connector.ConfigValidator;
+import org.dbdatasync.sdk.connector.ConnectorInstance;
+import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.enums.ModelEnum;
+import org.dbdatasync.sdk.enums.TableTypeEnum;
+import org.dbdatasync.sdk.model.ConnectorConfig;
+import org.dbdatasync.sdk.model.MetaInfo;
+import org.dbdatasync.sdk.model.Table;
+import org.dbdatasync.sdk.spi.ConnectorService;
+import org.dbdatasync.storage.impl.SnowflakeIdWorker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+import org.springframework.util.Assert;
+
+import javax.annotation.Resource;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.StringJoiner;
+import java.util.stream.Collectors;
+
+/**
+ * @author AE86
+ * @version 1.0.0
+ * @date 2019/10/17 23:20
+ */
+@Service
+public class MappingServiceImpl extends BaseServiceImpl implements MappingService {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private MappingChecker mappingChecker;
+
+    @Resource
+    private TableGroupService tableGroupService;
+
+    @Resource
+    private PreCheckService preCheckService;
+
+    @Resource
+    private SnowflakeIdWorker snowflakeIdWorker;
+
+    @Resource
+    private ProfileComponent profileComponent;
+
+    @Resource
+    private TaskProfile taskProfile;
+
+    @Resource
+    private MetaProfile metaProfile;
+
+    @Resource
+    private TableGroupProfile tableGroupProfile;
+
+    @Resource
+    private MonitorService monitorService;
+
+    @Resource
+    private DispatchTaskService dispatchTaskService;
+
+    @Resource
+    private ManagerFactory managerFactory;
+
+    @Resource
+    private ConnectorFactory connectorFactory;
+
+    @Resource
+    private TableGroupContext tableGroupContext;
+
+    @Resource
+    private ParserComponent parserComponent;
+
+    @Resource
+    private PreloadTemplate preloadTemplate;
+
+    @Resource
+    private RsaManager rsaManager;
+
+    @Resource
+    private LineageService lineageService;
+
+    @Override
+    public String add(Map<String, String> params) {
+        ConfigModel model = mappingChecker.checkAddConfigModel(params);
+        log(LogType.MappingLog.INSERT, model);
+
+        String id = profileComponent.addConfigModel(model);
+        // 加载驱动表（写入持久化 Mapping，需重新取出后再匹配）
+        refreshMappingTables(id);
+        Mapping mapping = profileComponent.getMapping(id);
+
+        // 匹配相似表（异步）
+        if (StringUtil.isNotBlank(params.get("autoMatchTable"))) {
+            submitMappingMatchTableTask(mapping);
+            return id;
+        }
+
+        // 自定义表映射关系
+        String tableGroups = params.get("tableGroups");
+        if (StringUtil.isNotBlank(tableGroups)) {
+            matchCustomizedTableGroups(mapping, tableGroups);
+        }
+        // 统计总数
+        submitMappingCountTask(mapping, null);
+        // 采集数据血缘
+        lineageService.collect(mapping);
+        return id;
+    }
+
+    @Override
+    public String copy(String id) {
+        Mapping mapping = profileComponent.getMapping(id);
+        Assert.notNull(mapping, "The mapping id is invalid.");
+
+        String json = JsonUtil.objToJson(mapping);
+        Mapping newMapping = JsonUtil.jsonToObj(json, Mapping.class);
+        newMapping.setName(mapping.getName() + "(复制)");
+        newMapping.setId(String.valueOf(snowflakeIdWorker.nextId()));
+        newMapping.setUpdateTime(Instant.now().toEpochMilli());
+        mappingChecker.addMeta(newMapping);
+
+        profileComponent.addConfigModel(newMapping);
+        preloadTemplate.reConnect(newMapping);
+        log(LogType.MappingLog.COPY, newMapping);
+
+        // 复制映射表关系
+        tableGroupProfile.pageScanTableGroups(mapping.getId(), ConfigConstant.PAGE_SIZE, groupList -> {
+            if (CollectionUtils.isEmpty(groupList)) {
+                return;
+            }
+            for (TableGroup tableGroup : groupList) {
+                if (tableGroup == null) {
+                    continue;
+                }
+                String tableGroupJson = JsonUtil.objToJson(tableGroup);
+                TableGroup newTableGroup = JsonUtil.jsonToObj(tableGroupJson, TableGroup.class);
+                newTableGroup.setId(String.valueOf(snowflakeIdWorker.nextId()));
+                newTableGroup.setTaskId(newMapping.getId());
+                tableGroupProfile.addTableGroup(newTableGroup);
+                log(LogType.TableGroupLog.COPY, newTableGroup);
+            }
+        });
+        return newMapping.getId();
+    }
+
+    @Override
+    public String edit(Map<String, String> params) {
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        Mapping mapping = assertMappingExist(id);
+        String metaSnapshot = params.get("metaSnapshot");
+        synchronized (LOCK) {
+            assertRunning(mapping.getMetaId());
+            Mapping model = (Mapping) mappingChecker.checkEditConfigModel(params);
+            // 校验通过后再清空运行结果，避免校验失败时不可逆抹掉历史明细
+            taskProfile.clearRunData(id);
+            taskProfile.resetRunProgress(id);
+            log(LogType.MappingLog.UPDATE, model);
+
+            // 更新meta
+            tableGroupService.updateMeta(mapping, metaSnapshot);
+            profileComponent.editConfigModel(model);
+        }
+        // 统计总数
+        submitMappingCountTask(mapping, metaSnapshot);
+        // 采集数据血缘
+        lineageService.collect(mapping);
+        return id;
+    }
+
+    @Override
+    public String remove(String id) {
+        Mapping mapping = assertMappingExist(id);
+        String metaId = mapping.getMetaId();
+        Meta meta = metaProfile.getMeta(metaId);
+        synchronized (LOCK) {
+            assertRunning(metaId);
+            // 删除数据
+            monitorService.clearData(metaId);
+            log(LogType.MetaLog.CLEAR, meta);
+
+            // 条件删除 table_group + 明细 Meta，并清运行结果
+            taskProfile.clearRunData(id);
+            tableGroupProfile.removeTableGroupsByTaskId(id);
+
+            // 删除任务级 meta
+            profileComponent.removeConfigModel(metaId);
+            log(LogType.MetaLog.DELETE, meta);
+
+            // 删除驱动表映射关系
+            tableGroupContext.clear(metaId);
+
+            // 释放连接池
+            String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getSourceConnectorId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+            String targetInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getTargetConnectorId(), ConnectorInstanceUtil.TARGET_SUFFIX);
+            connectorFactory.disconnect(sourceInstanceId);
+            connectorFactory.disconnect(targetInstanceId);
+
+            // 删除驱动
+            profileComponent.removeConfigModel(id);
+            log(LogType.MappingLog.DELETE, mapping);
+
+            // 删除数据血缘
+            lineageService.removeByMappingId(id);
+        }
+        return "驱动删除成功";
+    }
+
+    @Override
+    public MappingVO getMapping(String id) {
+        Mapping mapping = profileComponent.getMapping(id);
+        return convertMapping2Vo(mapping);
+    }
+
+    @Override
+    public MappingCustomTableVO getMappingCustomTable(String id, String type) {
+        Mapping mapping = profileComponent.getMapping(id);
+        MappingCustomTableVO vo = new MappingCustomTableVO();
+        vo.setId(mapping.getId());
+        vo.setName(mapping.getName());
+        boolean isSource = StringUtil.equals("source", type);
+        List<Table> tables = isSource ? mapping.getSourceTable() : mapping.getTargetTable();
+        String connectorId = isSource ? mapping.getSourceConnectorId() : mapping.getTargetConnectorId();
+        ConnectorConfig config = profileComponent.getConnector(connectorId).getConfig();
+        ConnectorService<?, ?> connectorService = connectorFactory.getConnectorService(config);
+        vo.setConnectorConfig(config);
+        vo.setExtendedType(connectorService.getExtendedTableType().getCode());
+
+        // 只返回自定义表类型
+        if (!CollectionUtils.isEmpty(tables)) {
+            List<Table> mainTables = new ArrayList<>();
+            List<TableVO> customTables = new ArrayList<>();
+            tables.forEach(t -> {
+                switch (TableTypeEnum.getTableType(t.getType())) {
+                    case SQL:
+                    case SEMI:
+                        TableVO tableVO = new TableVO();
+                        BeanUtils.copyProperties(t, tableVO);
+                        customTables.add(tableVO);
+                        break;
+                    case TABLE:
+                        mainTables.add(t);
+                    default:
+                        break;
+                }
+            });
+            vo.setCustomTables(customTables.stream().sorted(Comparator.comparing(Table::getName)).collect(Collectors.toList()));
+            vo.setMainTables(mainTables.stream().sorted(Comparator.comparing(Table::getName)).collect(Collectors.toList()));
+        }
+        // 元信息
+        vo.setMeta(metaProfile.getMeta(mapping.getMetaId()));
+        return vo;
+    }
+
+    @Override
+    public Paging<MappingVO> search(Map<String, String> params) {
+        int pageNum = NumberUtil.toInt(params.get("pageNum"), 1);
+        int pageSize = NumberUtil.toInt(params.get("pageSize"), 10);
+        String searchKey = params.get("searchKey");
+        Paging<Mapping> paging = taskProfile.queryTasks(Mapping.class, pageNum, pageSize, searchKey);
+        Paging<MappingVO> result = new Paging<>(pageNum, pageSize);
+        if (paging == null) {
+            return result;
+        }
+        result.setTotal(paging.getTotal());
+        if (CollectionUtils.isEmpty(paging.getData())) {
+            return result;
+        }
+        List<MappingVO> rows = new ArrayList<>(paging.getData().size());
+        for (Mapping mapping : paging.getData()) {
+            if (mapping == null) {
+                continue;
+            }
+            try {
+                rows.add(convertMapping2Vo(mapping));
+            } catch (Exception e) {
+                logger.error("转换驱动列表行失败, 已跳过. mappingId:{}, name:{}, metaId:{}, error:{}",
+                        mapping.getId(), mapping.getName(), mapping.getMetaId(), e.getMessage());
+            }
+        }
+        result.setData(rows);
+        return result;
+    }
+
+    @Override
+    public Paging searchTableGroupResult(Map<String, String> params) {
+        String mappingId = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        if (StringUtil.isBlank(mappingId)) {
+            mappingId = params.get("id");
+        }
+        Assert.hasText(mappingId, "驱动ID不能为空.");
+        assertMappingExist(mappingId);
+
+        int pageNum = NumberUtil.toInt(params.get("pageNum"), 1);
+        int pageSize = NumberUtil.toInt(params.get("pageSize"), 10);
+        String detailStatus = params.get("detailStatus");
+        return tableGroupProfile.queryTableGroupResults(mappingId, detailStatus, pageNum, pageSize);
+    }
+
+    @Override
+    public String start(String id) {
+        Mapping mapping = assertMappingExist(id);
+        //校验映射关系是否存在
+        assertTableGroupExist(id);
+        // 预检测（产品化）：ERROR 级问题阻断启动，先修复再复检
+        preCheckService.assertPassable(PreCheckService.TYPE_MAPPING, id);
+        final String metaId = mapping.getMetaId();
+        // 如果已经完成了，重置状态
+        clearMetaIfFinished(metaId);
+
+        synchronized (LOCK) {
+            assertRunning(metaId);
+            Assert.isTrue(!dispatchTaskService.isRunning(id), "驱动表映射正在匹配或统计中，请稍候再启动");
+            // 启动
+            managerFactory.start(mapping);
+
+            log(LogType.MappingLog.RUNNING, mapping);
+        }
+        return "驱动启动成功";
+    }
+
+    @Override
+    public String stop(String id) {
+        Mapping mapping = assertMappingExist(id);
+        synchronized (LOCK) {
+            if (!isRunning(mapping.getMetaId())) {
+                throw new BizException("驱动已停止.");
+            }
+            managerFactory.close(mapping);
+
+            log(LogType.MappingLog.STOP, mapping);
+
+            // 发送关闭驱动通知消息
+            MappingStopContent content = new MappingStopContent();
+            content.setTitle("手动停止驱动");
+            content.setName(mapping.getName());
+            content.setModel(ModelEnum.getModelEnum(mapping.getModel()));
+            sendNotifyMessage(content);
+        }
+        return "驱动停止成功";
+    }
+
+    @Override
+    public String refreshMappingTables(String id) {
+        Mapping mapping = profileComponent.getMapping(id);
+        Assert.notNull(mapping, "The mapping id is invalid.");
+        mapping.setSourceTable(updateConnectorTables(mapping, ConnectorInstanceUtil.SOURCE_SUFFIX));
+        mapping.setTargetTable(updateConnectorTables(mapping, ConnectorInstanceUtil.TARGET_SUFFIX));
+        profileComponent.editConfigModel(mapping);
+        return "刷新驱动表成功";
+    }
+
+    @Override
+    public Paging<Table> searchTables(Map<String, String> params) {
+        // 1. 参数获取
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        String type = params.get(ConfigConstant.CONFIG_MODEL_TYPE);
+        String searchKey = params.get("searchKey");
+        String tableNames = params.get("tableNames");
+        int pageNum = NumberUtil.toInt(params.get("pageNum"), 1);
+        int pageSize = Math.max(10, Math.min(200, NumberUtil.toInt(params.get("pageSize"), 50)));
+        //是否过滤
+        boolean excludeMapped = NumberUtil.toInt(params.get("exclude"), 0) != 1;
+
+        // 2. 获取基础数据
+        Mapping mapping = assertMappingExist(id);
+        boolean isSource = !"target".equals(type);
+        List<Table> tables = getMappingTables(mapping, isSource);
+
+        // 3. 已映射表名集合（需要排除的）
+        Set<String> mappedTableNames;
+        if (excludeMapped) {
+            mappedTableNames = new HashSet<>();
+            tableGroupProfile.pageScanTableGroups(id, ConfigConstant.PAGE_SIZE, page -> {
+                if (CollectionUtils.isEmpty(page)) {
+                    return;
+                }
+                for (TableGroup g : page) {
+                    if (g == null) {
+                        continue;
+                    }
+                    Table t = isSource ? g.getSourceTable() : g.getTargetTable();
+                    if (t != null && StringUtil.isNotBlank(t.getName())) {
+                        mappedTableNames.add(t.getName());
+                    }
+                }
+            });
+        } else {
+            mappedTableNames = Collections.emptySet();
+        }
+
+        // 4. 精准匹配（按源表名批量精确查询目标表）
+        Set<String> exactNames = new HashSet<>();
+        if (StringUtil.isNotBlank(tableNames)) {
+            String[] nameArray = StringUtil.split(tableNames, "\\|");
+            if (nameArray != null) {
+                Arrays.stream(nameArray)
+                        .filter(StringUtil::isNotBlank)
+                        .map(String::toUpperCase)
+                        .forEach(exactNames::add);
+            }
+        }
+
+        // 4. 流式过滤 + 搜索 + 排序
+        String key = StringUtil.isBlank(searchKey) ? StringUtil.EMPTY : searchKey.trim().toUpperCase();
+        List<Table> filtered = tables.stream()
+                .filter(Objects::nonNull)
+                .filter(t -> StringUtil.isNotBlank(t.getName()))
+                .filter(t -> !mappedTableNames.contains(t.getName()))
+                .filter(t -> exactNames.isEmpty() || exactNames.contains(t.getName().toUpperCase()))
+                .filter(t -> key.isEmpty() || t.getName().toUpperCase().contains(key))
+                .sorted(Comparator.comparing(Table::getName))
+                .collect(Collectors.toList());
+
+        // 5. 内存分页
+        Paging<Table> paging = new Paging<>(pageNum, pageSize);
+        paging.setTotal(filtered.size());
+
+        int offset = (pageNum - 1) * pageSize;
+        paging.setData(filtered.stream()
+                .skip(offset)
+                .limit(pageSize)
+                .collect(Collectors.toList()));
+
+        return paging;
+    }
+
+    @Override
+    public List<Table> searchCustomTable(Map<String, String> params) {
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        Mapping mapping = assertMappingExist(id);
+        String type = params.get(ConfigConstant.CONFIG_MODEL_TYPE);
+        String searchKey = params.get("searchKey");
+        boolean isSource = StringUtil.equals("source", type);
+        List<Table> tables = getMappingTables(mapping, isSource);
+        if (!CollectionUtils.isEmpty(tables) && StringUtil.isNotBlank(searchKey)) {
+            return tables.stream().filter(t -> t.getName().contains(searchKey)).collect(Collectors.toList());
+        }
+        return tables;
+    }
+
+    @Override
+    public String saveCustomTable(Map<String, String> params) {
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        Mapping mapping = assertMappingExist(id);
+        synchronized (LOCK) {
+            assertRunning(mapping.getMetaId());
+            saveCustomTable(mapping, params);
+            profileComponent.editConfigModel(mapping);
+            log(LogType.MappingLog.UPDATE, mapping);
+        }
+        return id;
+    }
+
+    @Override
+    public String removeCustomTable(Map<String, String> params) {
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        Mapping mapping = assertMappingExist(id);
+        synchronized (LOCK) {
+            assertRunning(mapping.getMetaId());
+            removeCustomTable(mapping, params);
+            profileComponent.editConfigModel(mapping);
+            log(LogType.MappingLog.UPDATE, mapping);
+        }
+        return id;
+    }
+
+    /**
+     * 提交统计驱动总数任务
+     */
+    private void submitMappingCountTask(Mapping mapping, String metaSnapshot) {
+        MappingCountTask task = new MappingCountTask();
+        task.setMappingId(mapping.getId());
+        task.setMetaSnapshot(metaSnapshot);
+        task.setParserComponent(parserComponent);
+        task.setProfileComponent(profileComponent);
+        task.setTableGroupProfile(tableGroupProfile);
+        task.setTableGroupService(tableGroupService);
+        task.setConnectorFactory(connectorFactory);
+        task.setRsaManager(rsaManager);
+        dispatchTaskService.execute(task);
+    }
+
+    /**
+     * 提交异步匹配相似表任务（结束后会继续提交统计）
+     */
+    private void submitMappingMatchTableTask(Mapping mapping) {
+        MappingMatchTableTask task = new MappingMatchTableTask();
+        task.setMappingId(mapping.getId());
+        task.setTableGroupService(tableGroupService);
+        task.setProfileComponent(profileComponent);
+        task.setParserComponent(parserComponent);
+        task.setTableGroupProfile(tableGroupProfile);
+        task.setConnectorFactory(connectorFactory);
+        task.setRsaManager(rsaManager);
+        task.setDispatchTaskService(dispatchTaskService);
+        dispatchTaskService.execute(task);
+    }
+
+    private List<Table> updateConnectorTables(Mapping mapping, String suffix) {
+        boolean isSource = StringUtil.equals(ConnectorInstanceUtil.SOURCE_SUFFIX, suffix);
+        DefaultConnectorServiceContext context = ConnectorServiceContextUtil.buildConnectorServiceContext(mapping, isSource);
+
+        // 合并自定义表
+        List<Table> customTables = new ArrayList<>();
+        List<Table> tables = getMappingTables(mapping, isSource);
+        tables.forEach(t -> {
+            switch (TableTypeEnum.getTableType(t.getType())) {
+                case SQL:
+                case SEMI:
+                    customTables.add(t);
+                    break;
+                default:
+                    break;
+            }
+        });
+
+        String instanceId = ConnectorInstanceUtil.buildConnectorInstanceId(context.getMappingId(), context.getConnectorId(), context.getSuffix());
+        // 按驱动的库/构架重连实例：缓存中可能存在空库/构架的旧实例，getTables 会查错库导致 TableName not found
+        Connector connector = profileComponent.getConnector(context.getConnectorId());
+        ConnectorInstance connectorInstance = connectorFactory.connect(instanceId, connector.getConfig(), context.getCatalog(), context.getSchema());
+        tables = connectorFactory.getTables(connectorInstance, context);
+        tables.addAll(customTables);
+        // 按升序展示表
+        Collections.sort(tables, Comparator.comparing(Table::getName));
+        return tables;
+    }
+
+    private MappingVO convertMapping2Vo(Mapping mapping) {
+        Assert.notNull(mapping, "Mapping can not be null.");
+        String model = mapping.getModel();
+
+        // 元信息（历史数据可能出现 mapping.metaId 悬空，列表不应整页失败）
+        Meta meta = resolveMappingMeta(mapping);
+        Assert.notNull(meta, String.format("Meta can not be null. mappingId:%s, metaId:%s", mapping.getId(), mapping.getMetaId()));
+        MetaVO metaVo = new MetaVO(ModelEnum.getModelEnum(model).getName(), mapping.getName());
+        BeanUtils.copyProperties(meta, metaVo);
+        metaVo.setCounting(dispatchTaskService.isRunning(mapping.getId()));
+
+        Connector s = profileComponent.getConnector(mapping.getSourceConnectorId());
+        Connector t = profileComponent.getConnector(mapping.getTargetConnectorId());
+        MappingVO vo = new MappingVO(s, t, metaVo);
+        BeanUtils.copyProperties(mapping, vo);
+        // 全量表列表体积大，下拉/搜索走 searchTables 分页；VO 不回传
+        vo.setSourceTable(null);
+        vo.setTargetTable(null);
+        return vo;
+    }
+
+    /**
+     * 获取驱动任务级 Meta；若 metaId 悬空则重建并回写 mapping。
+     */
+    private Meta resolveMappingMeta(Mapping mapping) {
+        String metaId = mapping.getMetaId();
+        Meta meta = StringUtil.isBlank(metaId) ? null : metaProfile.getMeta(metaId);
+        if (meta != null) {
+            return meta;
+        }
+        logger.warn("驱动 Meta 缺失，尝试重建. mappingId:{}, name:{}, metaId:{}", mapping.getId(), mapping.getName(), metaId);
+        mappingChecker.addMeta(mapping);
+        profileComponent.editConfigModel(mapping);
+        return metaProfile.getMeta(mapping.getMetaId());
+    }
+
+    /**
+     * 检查是否存在驱动
+     *
+     * @param mappingId
+     * @return
+     */
+    private Mapping assertMappingExist(String mappingId) {
+        Mapping mapping = profileComponent.getMapping(mappingId);
+        Assert.notNull(mapping, "驱动不存在.");
+        return mapping;
+    }
+
+    /**
+     * 检查映射关系
+     */
+    private void assertTableGroupExist(String mappingId) {
+        Assert.isTrue(tableGroupProfile.getTableGroupCount(mappingId) > 0, "映射关系不能为空");
+    }
+
+    /**
+     * 自定义配置表映射关系
+     *
+     * @param model
+     * @param tableGroups
+     */
+    private void matchCustomizedTableGroups(ConfigModel model, String tableGroups) {
+        Mapping mapping = (Mapping) model;
+        List<Table> sourceTables = mapping.getSourceTable();
+        List<Table> targetTables = mapping.getTargetTable();
+        if (CollectionUtils.isEmpty(sourceTables) || CollectionUtils.isEmpty(targetTables)) {
+            return;
+        }
+        String[] lines = StringUtil.split(tableGroups, StringUtil.BREAK_LINE);
+        // 数据源表|目标源表=源表字段A1*|目标字段A2*
+        for (String line : lines) {
+            String[] tableGroup = StringUtil.split(line, StringUtil.EQUAL);
+            String[] tableGroupNames = StringUtil.split(tableGroup[0], StringUtil.VERTICAL_LINE);
+            if (tableGroupNames.length == 2) {
+                addTableGroup(mapping.getId(), tableGroupNames[0], tableGroupNames[1], tableGroup.length == 2 ? tableGroup[1] : StringUtil.EMPTY);
+            }
+        }
+    }
+
+    private void addTableGroup(String id, String sourceTableName, String targetTableName, String fieldMappings) {
+        try {
+            Map<String, String> params = new HashMap<>();
+            params.put("mappingId", id);
+            params.put("sourceTable", sourceTableName);
+            params.put("targetTable", targetTableName);
+            params.put("sourceType", TableTypeEnum.TABLE.getCode());
+            params.put("targetType", TableTypeEnum.TABLE.getCode());
+            // A1*|A2*,B1|B2,|C3
+            if (StringUtil.isNotBlank(fieldMappings)) {
+                String[] mappings = StringUtil.split(fieldMappings, StringUtil.COMMA);
+                StringJoiner fms = new StringJoiner(StringUtil.COMMA);
+                StringJoiner sPk = new StringJoiner(StringUtil.COMMA);
+                StringJoiner tPk = new StringJoiner(StringUtil.COMMA);
+                for (String mapping : mappings) {
+                    String[] m = StringUtil.split(mapping, "\\" + StringUtil.VERTICAL_LINE);
+                    if (m.length == 2) {
+                        fms.add(replaceStar(m[0], sPk) + StringUtil.VERTICAL_LINE + replaceStar(m[1], tPk));
+                        continue;
+                    }
+                    // |C2,C3|
+                    if (m.length == 1) {
+                        String name = replaceStar(m[0], tPk);
+                        if (StringUtil.startsWith(mapping, StringUtil.VERTICAL_LINE)) {
+                            fms.add(StringUtil.VERTICAL_LINE + name);
+                            continue;
+                        }
+                        fms.add(name + StringUtil.VERTICAL_LINE);
+                    }
+                }
+                params.put("fieldMappings", fms.toString());
+                if (StringUtil.isNotBlank(sPk.toString())) {
+                    params.put("sourceTablePK", sPk.toString());
+                }
+                if (StringUtil.isNotBlank(tPk.toString())) {
+                    params.put("targetTablePK", tPk.toString());
+                }
+            }
+            tableGroupService.add(params);
+        } catch (RepeatedTableGroupException | SdkException e) {
+            logger.error(e.getMessage(), e);
+        }
+    }
+
+    private String replaceStar(String name, StringJoiner joiner) {
+        if (StringUtil.endsWith(name, StringUtil.STAR)) {
+            name = StringUtil.replace(name.trim(), StringUtil.STAR, StringUtil.EMPTY);
+            joiner.add(name);
+        }
+        return name;
+    }
+
+    private void clearMetaIfFinished(String metaId) {
+        Meta meta = metaProfile.getMeta(metaId);
+        Assert.notNull(meta, "Mapping meta can not be null.");
+        // 完成任务则重置状态
+        if (meta.getTotal().get() <= (meta.getSuccess().get() + meta.getFail().get())) {
+            meta.getFail().set(0);
+            meta.getSuccess().set(0);
+            profileComponent.editConfigModel(meta);
+        }
+    }
+
+    private void saveCustomTable(Mapping mapping, Map<String, String> params) {
+        String type = params.get(ConfigConstant.CONFIG_MODEL_TYPE);
+        String operator = params.get("operator");
+        String customTable = params.get("customTable");
+        boolean isSource = StringUtil.equals("source", type);
+        DefaultConnectorServiceContext context = ConnectorServiceContextUtil.buildConnectorServiceContext(mapping, isSource);
+
+        String instanceId = ConnectorInstanceUtil.buildConnectorInstanceId(context.getMappingId(), context.getConnectorId(), context.getSuffix());
+        ConnectorInstance connectorInstance = connectorFactory.connect(instanceId);
+        ConnectorService connectorService = connectorFactory.getConnectorService(connectorInstance.getConfig());
+        ConfigValidator configValidator = connectorService.getConfigValidator();
+        Assert.notNull(configValidator, "ConfigValidator can not be null.");
+        Table newTable = configValidator.modifyExtendedTable(connectorService, params);
+        Assert.notNull(newTable, "解析自定义表异常");
+
+        context.addTablePattern(newTable);
+        List<MetaInfo> metaInfos = connectorService.getMetaInfo(connectorInstance, context);
+        Assert.notEmpty(metaInfos, "执行SQL异常");
+        Assert.notEmpty(metaInfos.get(0).getColumn(), "获取字段信息异常");
+
+        List<Table> tables = getMappingTables(mapping, isSource);
+        // 首次添加
+        if (CollectionUtils.isEmpty(tables)) {
+            tables.add(newTable);
+            return;
+        }
+
+        // 新增操作
+        Set<String> exist = tables.stream().map(Table::getName).collect(Collectors.toSet());
+        String newTableName = newTable.getName();
+        if (StringUtil.equals("add", operator)) {
+            if (exist.contains(newTableName)) {
+                throw new BizException(String.format("%s或自定义表名重复，请更换", isSource ? "数据源" : "目标源"));
+            }
+            tables.add(newTable);
+            // 按升序展示表
+            Collections.sort(tables, Comparator.comparing(Table::getName));
+            return;
+        }
+
+        // 修改操作，更改表名
+        if (!StringUtil.equals(customTable, newTableName)) {
+            if (exist.contains(newTableName)) {
+                throw new BizException(String.format("%s或自定义表名重复，请更换", isSource ? "数据源" : "目标源"));
+            }
+        }
+        for (Table t : tables) {
+            if (StringUtil.equals(t.getName(), customTable)) {
+                t.setName(newTable.getName());
+                t.setColumn(newTable.getColumn());
+                t.setExtInfo(newTable.getExtInfo());
+                break;
+            }
+        }
+
+        // 按升序展示表
+        Collections.sort(tables, Comparator.comparing(Table::getName));
+    }
+
+    private List<Table> getMappingTables(Mapping mapping, boolean isSource) {
+        mapping.setSourceTable(!CollectionUtils.isEmpty(mapping.getSourceTable()) ? mapping.getSourceTable() : new ArrayList<>());
+        mapping.setTargetTable(!CollectionUtils.isEmpty(mapping.getTargetTable()) ? mapping.getTargetTable() : new ArrayList<>());
+        return isSource ? mapping.getSourceTable() : mapping.getTargetTable();
+    }
+
+    private void removeCustomTable(Mapping mapping, Map<String, String> params) {
+        String type = params.get(ConfigConstant.CONFIG_MODEL_TYPE);
+        String tableName = params.get("customTable");
+        Assert.hasText(tableName, "无自定义表.");
+        List<Table> tables = StringUtil.equals("source", type) ? mapping.getSourceTable() : mapping.getTargetTable();
+        if (!CollectionUtils.isEmpty(tables)) {
+            Iterator<Table> iterator = tables.iterator();
+            while (iterator.hasNext()) {
+                Table t = iterator.next();
+                switch (TableTypeEnum.getTableType(t.getType())) {
+                    case SQL:
+                    case SEMI:
+                        if (StringUtil.equals(t.getName(), tableName)) {
+                            iterator.remove();
+                            return;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+
+}

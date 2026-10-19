@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">修改连接</h3>
+    </div>
+    <div class="card-body">
+        <div class="form-actions mb-4">
+            <button id="connectorSubmitBtn" type="button" class="btn btn-primary">
+                <i class="fa fa-save"></i> 保存
+            </button>
+            <button class="btn btn-outline" onclick="backIndexPage()">
+                <i class="fa fa-reply"></i> 返回
+            </button>
+        </div>
+
+        <form id="connectorModifyForm" class="grid">
+            <input type="hidden" name="id" th:value="${connector?.id}" />
+
+            <div class="grid grid-cols-2 mt-4">
+                <div class="form-item">
+                    <label class="form-label">类型</label>
+                    <div class="bg-gray-100">
+                        <input class="form-control" name="connectorType" readonly="readonly" type="text" th:value="${connector?.config?.connectorType}" />
+                    </div>
+                </div>
+
+                <div class="form-item">
+                    <label class="form-label">名称<strong class="text-primary">*</strong></label>
+                    <div class="form-control-area">
+                        <input class="form-control" name="name" type="text" maxlength="50" required placeholder="请输入连接名称" th:value="${connector?.name}" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- 连接配置 -->
+            <div class="connectorConfig">
+                <div th:replace="'connector/add'+${connector?.config?.connectorType} :: content"></div>
+            </div>
+
+            <div class="grid grid-cols-2 mt-4">
+                <div class="form-item">
+                    <label class="form-label">数据源</label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="isSource" type="checkbox" th:checked="${connector?.isSource != false}"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">目标源</label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="isTarget" type="checkbox" th:checked="${connector?.isTarget != false}"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    // 绑定保存按钮事件
+    $('#connectorSubmitBtn').off('click').on('click', function() {
+        const $form = $("#connectorModifyForm");
+        const isSource = $form.find('input[name="isSource"]').is(':checked');
+        const isTarget = $form.find('input[name="isTarget"]').is(':checked');
+        if (!isSource && !isTarget) {
+            bootGrowl("至少开启「可作为源」或「可作为目标」之一", "warning");
+            return;
+        }
+        // 验证表单
+        if (validateForm($form)) {
+            // 显示提交状态
+            const submitBtn = $('#connectorSubmitBtn');
+            const originalText = submitBtn.html();
+            submitBtn.html('<i class="fa fa-spinner fa-spin"></i> 保存中...').prop('disabled', true);
+            doPoster("/connector/edit", $form.serializeJson(), function(response) {
+                submitBtn.html(originalText).prop('disabled', false);
+                if (response.success === true) {
+                    bootGrowl("保存成功!", "success");
+                    backIndexPage();
+                } else {
+                    bootGrowl(response.message, "danger");
+                }
+            });
+        }
+    });
+})
+</script>
+</html>

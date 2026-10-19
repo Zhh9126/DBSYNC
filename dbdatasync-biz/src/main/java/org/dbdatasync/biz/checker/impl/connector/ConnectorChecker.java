@@ -1,0 +1,126 @@
+/**
+ * DBDataSync Copyright 2020-2023 All Rights Reserved.
+ */
+package org.dbdatasync.biz.checker.impl.connector;
+
+import org.dbdatasync.biz.BizException;
+import org.dbdatasync.biz.checker.AbstractChecker;
+import org.dbdatasync.common.model.ConfigModel;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.connector.base.ConnectorFactory;
+import org.dbdatasync.parser.ProfileComponent;
+import org.dbdatasync.parser.model.Connector;
+import org.dbdatasync.sdk.connector.ConfigValidator;
+import org.dbdatasync.sdk.connector.ConnectorInstance;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.model.ConnectorConfig;
+import org.dbdatasync.sdk.spi.ConnectorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.util.Assert;
+
+import javax.annotation.Resource;
+import java.util.Map;
+
+/**
+ * @Author AE86
+ * @Version 1.0.0
+ * @Date 2020-01-08 15:17
+ */
+@Component
+public class ConnectorChecker extends AbstractChecker {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Resource
+    private ProfileComponent profileComponent;
+
+    @Resource
+    private ConnectorFactory connectorFactory;
+
+    @Override
+    public ConfigModel checkAddConfigModel(Map<String, String> params) {
+        printParams(params);
+        String name = params.get(ConfigConstant.CONFIG_MODEL_NAME);
+        String connectorType = params.get("connectorType");
+        Assert.hasText(name, "connector name is empty.");
+        Assert.hasText(connectorType, "connector connectorType is empty.");
+
+        Connector connector = new Connector();
+        connector.setName(name);
+        ConnectorConfig config = getConfig(connectorType);
+        connector.setConfig(config);
+        // 修改基本配置
+        this.modifyConfigModel(connector, params);
+        applySourceTargetFlags(connector, params);
+        // 校验并修改配置
+        validateAndModifyConfig(config, params);
+        // 连接并获取数据库列表
+        connectAndLoadDatabases(connector, config);
+
+        return connector;
+    }
+
+    @Override
+    public ConfigModel checkEditConfigModel(Map<String, String> params) {
+        printParams(params);
+        Assert.notEmpty(params, "ConnectorChecker check params is null.");
+        String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+        Connector connector = profileComponent.getConnector(id);
+        Assert.notNull(connector, "Can not find connector.");
+        ConnectorConfig config = connector.getConfig();
+        // 修改基本配置
+        this.modifyConfigModel(connector, params);
+        applySourceTargetFlags(connector, params);
+        // 校验并修改配置
+        validateAndModifyConfig(config, params);
+        // 获取数据库列表
+        connectAndLoadDatabases(connector, config);
+
+        return connector;
+    }
+
+    /**
+     * 解析并校验「可作为源 / 可作为目标」开关（至少开启一个）。
+     */
+    private void applySourceTargetFlags(Connector connector, Map<String, String> params) {
+        boolean isSource = StringUtil.isNotBlank(params.get(ConfigConstant.CONNECTOR_IS_SOURCE));
+        boolean isTarget = StringUtil.isNotBlank(params.get(ConfigConstant.CONNECTOR_IS_TARGET));
+        Assert.isTrue(isSource || isTarget, "至少开启「可作为源」或「可作为目标」之一");
+        connector.setIsSource(isSource);
+        connector.setIsTarget(isTarget);
+    }
+
+    /**
+     * 校验并修改配置
+     */
+    private void validateAndModifyConfig(ConnectorConfig config, Map<String, String> params) {
+        ConnectorService connectorService = connectorFactory.getConnectorService(config.getConnectorType());
+        ConfigValidator configValidator = connectorService.getConfigValidator();
+        Assert.notNull(configValidator, "ConfigValidator can not be null.");
+        configValidator.modify(connectorService, config, params);
+    }
+
+    /**
+     * 连接并加载数据库列表
+     */
+    private void connectAndLoadDatabases(Connector connector, ConnectorConfig config) {
+        ConnectorInstance connectorInstance = connectorFactory.connect(connector.getId(), config, StringUtil.EMPTY, StringUtil.EMPTY);
+        ConnectorService connectorService = connectorFactory.getConnectorService(config.getConnectorType());
+        connector.setDatabases(connectorService.getDatabases(connectorInstance));
+    }
+
+    private ConnectorConfig getConfig(String connectorType) {
+        try {
+            ConnectorService connectorService = connectorFactory.getConnectorService(connectorType);
+            Class<ConnectorConfig> configClass = connectorService.getConfigClass();
+            ConnectorConfig config = configClass.newInstance();
+            config.setConnectorType(connectorService.getConnectorType());
+            return config;
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            throw new BizException("获取连接器配置异常.");
+        }
+    }
+}

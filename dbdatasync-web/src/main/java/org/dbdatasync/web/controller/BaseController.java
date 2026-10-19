@@ -1,0 +1,82 @@
+package org.dbdatasync.web.controller;
+
+import org.dbdatasync.biz.ConditionService;
+import org.dbdatasync.biz.ConvertService;
+import org.dbdatasync.biz.PluginService;
+import org.dbdatasync.biz.vo.EditionInfoVO;
+import org.dbdatasync.sdk.enums.EditionEnum;
+import org.springframework.ui.ModelMap;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author AE86
+ * @version 1.0.0
+ * @date 2020/1/7 22:46
+ */
+public abstract class BaseController {
+
+    @Resource
+    private ConditionService filterService;
+
+    @Resource
+    private ConvertService convertService;
+
+    @Resource
+    private PluginService pluginService;
+
+    /**
+     * 获取请求参数
+     */
+    protected Map<String, String> getParams(HttpServletRequest request) {
+        Map<String, String[]> map = request.getParameterMap();
+        Map<String, String> res = new HashMap<>();
+        map.forEach((k, v)->res.put(k, v[0]));
+        return res;
+    }
+
+    /**
+     * 初始化: 条件/转换/插件（插件仅加载已安装列表，不含全库关联扫描）
+     */
+    protected void initConfig(ModelMap model) {
+        model.put("condition", filterService.getCondition());
+        model.put("convert", convertService.getConvertEnumAll());
+        model.put("plugin", pluginService.listPlugins());
+    }
+
+    /**
+     * 初始化: 条件
+     */
+    protected void initConditionConfig(ModelMap model) {
+        model.put("condition", filterService.getCondition());
+    }
+
+    /**
+     * 初始化: 版本信息（固定为基础版，不再依赖 LicenseService）
+     */
+    protected void initEditionInfo(ModelMap model) {
+        EditionInfoVO editionInfo = new EditionInfoVO();
+        editionInfo.setEdition(EditionEnum.COMMUNITY.getCode());
+        editionInfo.setEditionName(EditionEnum.COMMUNITY.getMessage());
+        model.put("editionInfo", editionInfo);
+    }
+
+    /**
+     * 读取请求体
+     */
+    protected String readRequestBody(HttpServletRequest request) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader reader = request.getReader()) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+        }
+        return sb.toString();
+    }
+}

@@ -1,0 +1,67 @@
+package org.dbdatasync.parser;
+
+import org.dbdatasync.common.model.Result;
+import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.model.Task;
+import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
+import org.dbdatasync.sdk.model.MetaInfo;
+import org.dbdatasync.sdk.model.ValidateSyncTask;
+import org.dbdatasync.sdk.plugin.PluginContext;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executor;
+
+/**
+ * <pre>
+ *     实现全量和增量同步任务，以及连接器读写，插件转换，表元信息，心跳检测
+ * </pre>
+ *
+ * @author AE86
+ * @version 1.0.0
+ * @date 2019/10/20 21:11
+ */
+public interface ParserComponent {
+
+    /**
+     * 获取表元信息
+     *
+     * @param context
+     * @return
+     */
+    List<MetaInfo> getMetaInfo(DefaultConnectorServiceContext context);
+
+    /**
+     * 获取映射关系执行命令
+     *
+     * @param mapping
+     * @param tableGroup
+     * @return
+     */
+    Map<String, String> getCommand(Mapping mapping, TableGroup tableGroup);
+
+    /**
+     * 订正校验任务：按源/目标连接器生成表组执行命令
+     */
+    Map<String, String> getCommand(ValidateSyncTask task, TableGroup tableGroup);
+
+    /**
+     * 全量同步
+     *
+     * @param task
+     * @param mapping
+     * @param tableGroup
+     * @param executor
+     */
+    void execute(Task task, Mapping mapping, TableGroup tableGroup, Executor executor);
+
+    /**
+     * 批执行
+     *
+     * @param pluginContext
+     * @param executor
+     * @return
+     */
+    Result writeBatch(PluginContext pluginContext, Executor executor);
+}

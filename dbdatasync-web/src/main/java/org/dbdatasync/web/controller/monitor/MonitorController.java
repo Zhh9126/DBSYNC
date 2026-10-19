@@ -1,0 +1,424 @@
+/**
+ * DBDataSync Copyright 2020-2024 All Rights Reserved.
+ */
+package org.dbdatasync.web.controller.monitor;
+
+import org.dbdatasync.biz.BizException;
+import org.dbdatasync.biz.ConnectorService;
+import org.dbdatasync.biz.DataSyncService;
+import org.dbdatasync.biz.MappingService;
+import org.dbdatasync.biz.MonitorService;
+import org.dbdatasync.biz.enums.MetricEnum;
+import org.dbdatasync.biz.model.AppReportMetric;
+import org.dbdatasync.biz.model.MetricResponse;
+import org.dbdatasync.biz.model.Sample;
+import org.dbdatasync.biz.vo.CpuVO;
+import org.dbdatasync.biz.vo.DiskSpaceVO;
+import org.dbdatasync.biz.vo.HistoryStackVO;
+import org.dbdatasync.biz.vo.MemoryVO;
+import org.dbdatasync.biz.vo.MetaVO;
+import org.dbdatasync.biz.vo.RestResult;
+import org.dbdatasync.common.util.CollectionUtils;
+import org.dbdatasync.common.util.DateFormatUtil;
+import org.dbdatasync.common.util.StringUtil;
+import org.dbdatasync.manager.impl.PreloadTemplate;
+import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.web.controller.BaseController;
+import org.dbdatasync.web.controller.monitor.impl.CpuValueFormatter;
+import org.dbdatasync.web.controller.monitor.impl.GBValueFormatter;
+import org.dbdatasync.web.controller.monitor.impl.MemoryValueFormatter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.actuate.health.Health;
+import org.springframework.boot.actuate.health.HealthComponent;
+import org.springframework.boot.actuate.health.HealthEndpoint;
+import org.springframework.boot.actuate.health.SystemHealth;
+import org.springframework.boot.actuate.metrics.MetricsEndpoint;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import oshi.SystemInfo;
+import oshi.hardware.CentralProcessor;
+import oshi.hardware.GlobalMemory;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+@Controller
+@RequestMapping("/monitor")
+public class MonitorController extends BaseController {
+
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    private final SystemInfo systemInfo = new SystemInfo();
+    private final CentralProcessor processor = systemInfo.getHardware().getProcessor();
+    private final GlobalMemory globalMemory = systemInfo.getHardware().getMemory();
+    private long[] prevTicks = processor.getSystemCpuLoadTicks();
+    private final static int COUNT = 60;
+    private final CpuVO cpu = new CpuVO();
+    private final MemoryVO memory = new MemoryVO();
+    private final DiskSpaceVO disk = new DiskSpaceVO();
+
+    @Resource
+    private MonitorService monitorService;
+
+    @Resource
+    private DataSyncService dataSyncService;
+
+    @Resource
+    private ConnectorService connectorService;
+
+    @Resource
+    private MappingService mappingService;
+
+    @Resource
+    private PreloadTemplate preloadTemplate;
+
+    @Resource
+    private MetricsEndpoint metricsEndpoint;
+
+    @Resource
+    private HealthEndpoint healthEndpoint;
+
+    @Resource
+    private CpuValueFormatter cpuValueFormatter;
+
+    @Resource
+    private MemoryValueFormatter memoryValueFormatter;
+
+    @Resource
+    private GBValueFormatter gbValueFormatter;
+
+    @RequestMapping("")
+    public String index(HttpServletRequest request, ModelMap model) {
+        initEditionInfo(model);
+        return "monitor/list.html";
+    }
+
+    @GetMapping("/page/retry")
+    public String page(ModelMap model, String metaId, String messageId) {
+        MetaVO metaVo = monitorService.getMetaVo(metaId);
+        model.put("meta", metaVo);
+        model.put("mapping", mappingService.getMapping(metaVo.getTaskId()));
+        model.put("message", dataSyncService.getMessageVo(metaId, messageId));
+        return "monitor/retry.html";
+    }
+
+    @Scheduled(fixedRate = 5000)
+    public void recordHistoryStackMetric() {
+        collectCpu();
+        collectMemory();
+        collectDiskSpace();
+    }
+
+    @Scheduled(fixedRate = 10000)
+    public void refreshConnectorHealth() {
+        if (preloadTemplate.isPreloadCompleted()) {
+            connectorService.refreshHealth();
+        }
+    }
+
+    @Scheduled(fixedRate = 30000)
+    public void deleteExpiredDataAndLog() {
+        if (preloadTemplate.isPreloadCompleted()) {
+            monitorService.deleteExpiredDataAndLog();
+        }
+    }
+
+    @PostMapping("/queryMeta")
+    @ResponseBody
+    public RestResult queryMeta(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(monitorService.queryMeta(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/queryData")
+    @ResponseBody
+    public RestResult queryData(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(monitorService.queryData(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 仪表盘下钻：跨驱动聚合的同步数据明细
+     */
+    @PostMapping("/queryAllData")
+    @ResponseBody
+    public RestResult queryAllData(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(monitorService.queryAllData(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 全局同步数据明细页（仪表盘各统计卡片下钻目标）
+     */
+    @GetMapping("/page/data")
+    public String pageData(ModelMap model,
+                           @RequestParam(value = "status", required = false) String status,
+                           @RequestParam(value = "event", required = false) String event) {
+        model.put("drillStatus", status == null ? "" : status.trim());
+        model.put("drillEvent", event == null ? "" : event.trim());
+        return "monitor/data.html";
+    }
+
+    @PostMapping("/queryLog")
+    @ResponseBody
+    public RestResult queryLog(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(monitorService.queryLog(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/sync")
+    @ResponseBody
+    public RestResult sync(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(dataSyncService.sync(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/clearData")
+    @ResponseBody
+    public RestResult clearData(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            String id = params.get(ConfigConstant.CONFIG_MODEL_ID);
+            if (StringUtil.isBlank(id)) {
+                id = params.get("id");
+            }
+            String tableGroupId = params.get(ConfigConstant.DATA_TABLE_GROUP_ID);
+            if (StringUtil.isBlank(tableGroupId)) {
+                tableGroupId = params.get("tableGroupId");
+            }
+            return RestResult.restSuccess(monitorService.clearData(id, tableGroupId));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 按需获取单条同步数据字段详情（不解列表 blob）
+     */
+    @PostMapping("/getDataDetail")
+    @ResponseBody
+    public RestResult getDataDetail(String metaId, String messageId) {
+        try {
+            return RestResult.restSuccess(dataSyncService.getMessageVo(metaId, messageId));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @PostMapping("/clearLog")
+    @ResponseBody
+    public RestResult clearLog() {
+        try {
+            return RestResult.restSuccess(monitorService.clearLog());
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @ResponseBody
+    @GetMapping("/metric")
+    public RestResult metric() {
+        try {
+            AppReportMetric reportMetric = monitorService
+                    .queryAppMetric(Stream.of(MetricEnum.THREADS_LIVE, MetricEnum.THREADS_PEAK).map(m->getMetricResponse(m.getCode())).collect(Collectors.toList()));
+            reportMetric.setCpu(cpu);
+            reportMetric.setMemory(memory);
+            reportMetric.setDisk(disk);
+            return RestResult.restSuccess(reportMetric);
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @ResponseBody
+    @GetMapping("/dashboard")
+    public RestResult dashboard() {
+        try {
+            return RestResult.restSuccess(monitorService.queryDashboardMetric());
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @ResponseBody
+    @PostMapping("/queryActuator")
+    public RestResult queryActuator(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            return RestResult.restSuccess(monitorService.queryActuator(params));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    private void collectCpu() {
+        collectStackMetric(MetricEnum.CPU_USAGE, cpu, cpuValueFormatter);
+        // 采集瞬时数据
+        long[] ticks = processor.getSystemCpuLoadTicks();
+        if (prevTicks != null) {
+            long user = ticks[CentralProcessor.TickType.USER.getIndex()] - prevTicks[CentralProcessor.TickType.USER.getIndex()];
+            long nice = ticks[CentralProcessor.TickType.NICE.getIndex()] - prevTicks[CentralProcessor.TickType.NICE.getIndex()];
+            long system = ticks[CentralProcessor.TickType.SYSTEM.getIndex()] - prevTicks[CentralProcessor.TickType.SYSTEM.getIndex()];
+            long idle = ticks[CentralProcessor.TickType.IDLE.getIndex()] - prevTicks[CentralProcessor.TickType.IDLE.getIndex()];
+            long total = user + nice + system + idle;
+
+            // 防止除零错误：如果 total 为 0，说明 CPU tick 没有变化，使用默认值 0
+            if (total == 0) {
+                cpu.setUserPercent(BigDecimal.ZERO);
+                cpu.setSysPercent(BigDecimal.ZERO);
+                cpu.setTotalPercent(BigDecimal.ZERO);
+            } else {
+                // 用户态CPU使用率（user + nice）
+                BigDecimal userCpuPercent = BigDecimal.valueOf(user + nice).divide(BigDecimal.valueOf(total), 6, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
+                        .setScale(2, RoundingMode.HALF_UP);
+                cpu.setUserPercent(userCpuPercent);
+
+                // 系统态CPU使用率
+                BigDecimal systemCpuPercent = BigDecimal.valueOf(system).divide(BigDecimal.valueOf(total), 6, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP);
+                cpu.setSysPercent(systemCpuPercent);
+
+                // 总CPU使用率（非空闲时间）
+                BigDecimal totalCpuPercent = BigDecimal.valueOf(total - idle).divide(BigDecimal.valueOf(total), 6, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
+                        .setScale(2, RoundingMode.HALF_UP);
+                cpu.setTotalPercent(totalCpuPercent);
+            }
+            prevTicks = ticks;
+        } else {
+            cpu.setUserPercent(BigDecimal.ZERO);
+            cpu.setSysPercent(BigDecimal.ZERO);
+            cpu.setTotalPercent(BigDecimal.ZERO);
+        }
+    }
+
+    private void collectMemory() {
+        collectStackMetric(MetricEnum.MEMORY_USED, memory, memoryValueFormatter);
+        // 系统 总内存
+        memory.setSysTotal(gbValueFormatter.formatValue(globalMemory.getTotal()));
+        // 系统 已使用
+        memory.setSysUsed(gbValueFormatter.formatValue(globalMemory.getTotal() - globalMemory.getAvailable()));
+        memory.setTotalPercent(formatPercent(memory.getSysUsed(), memory.getSysTotal()));
+        // JVM 已使用
+        memory.setJvmUsed(gbValueFormatter.formatValue(collectValue(MetricEnum.MEMORY_USED)));
+        // JVM 总内存
+        memory.setJvmTotal(gbValueFormatter.formatValue(collectValue(MetricEnum.MEMORY_MAX)));
+    }
+
+    private void collectDiskSpace() {
+        SystemHealth health = (SystemHealth) healthEndpoint.health();
+        Map<String, HealthComponent> details = health.getComponents();
+        Health diskSpace = (Health) details.get("diskSpace");
+        Map<String, Object> diskSpaceDetails = diskSpace.getDetails();
+        // 总容量
+        disk.setTotal(gbValueFormatter.formatValue(diskSpaceDetails.get("total")));
+        // 剩余量
+        disk.setFree(gbValueFormatter.formatValue(diskSpaceDetails.get("free")));
+        // 已使用
+        disk.setUsed(disk.getTotal().subtract(disk.getFree()));
+        // 使用百分比
+        disk.setUsedPercent(formatPercent(disk.getUsed(), disk.getTotal()));
+    }
+
+    private BigDecimal formatPercent(BigDecimal used, BigDecimal total) {
+        if (total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        if (used == null) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        BigDecimal percent = used.divide(total, 4, RoundingMode.HALF_UP).multiply(new BigDecimal("100"));
+        return percent.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private MetricResponse getMetricResponse(String code) {
+        MetricsEndpoint.MetricResponse metric = metricsEndpoint.metric(code, null);
+        if (metric == null) {
+            throw new IllegalArgumentException("不支持指标=" + code);
+        }
+        MetricResponse metricResponse = new MetricResponse();
+        MetricEnum metricEnum = MetricEnum.getMetric(metric.getName());
+        if (metricEnum == null) {
+            throw new BizException(String.format("Metric code \"%s\" does not exist.", code));
+        }
+        metricResponse.setCode(metricEnum.getCode());
+        metricResponse.setGroup(metricEnum.getGroup());
+        metricResponse.setMetricName(metricEnum.getMetricName());
+        if (!CollectionUtils.isEmpty(metric.getMeasurements())) {
+            List<Sample> measurements = new ArrayList<>();
+            metric.getMeasurements().forEach(s->measurements.add(new Sample(s.getStatistic().getTagValueRepresentation(), s.getValue())));
+            metricResponse.setMeasurements(measurements);
+        }
+        return metricResponse;
+    }
+
+    private void collectStackMetric(MetricEnum metricEnum, HistoryStackVO stackVo, ValueFormatter<Object, Object> formatter) {
+        MetricResponse metricResponse = getMetricResponse(metricEnum.getCode());
+        List<Sample> measurements = metricResponse.getMeasurements();
+        if (!CollectionUtils.isEmpty(measurements)) {
+            stackVo.addValue(formatter.formatValue(measurements.get(0).getValue()));
+            stackVo.addName(DateFormatUtil.getCurrentTime());
+            optimizeStackOverflow(stackVo.getName());
+            optimizeStackOverflow(stackVo.getValue());
+        }
+    }
+
+    private Object collectValue(MetricEnum metricEnum) {
+        MetricResponse metricResponse = getMetricResponse(metricEnum.getCode());
+        List<Sample> measurements = metricResponse.getMeasurements();
+        if (!CollectionUtils.isEmpty(measurements)) {
+            return measurements.get(0).getValue();
+        }
+        return 0;
+    }
+
+    private void optimizeStackOverflow(List<Object> stack) {
+        if (stack.size() >= COUNT) {
+            stack.remove(0);
+        }
+    }
+
+}

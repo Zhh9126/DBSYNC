@@ -1,0 +1,51 @@
+/**
+ * DBDataSync Copyright 2020-2026 All Rights Reserved.
+ */
+package org.dbdatasync.connector.mongodb.schema.support;
+
+import org.dbdatasync.sdk.model.Field;
+import org.dbdatasync.sdk.schema.support.DoubleType;
+
+import java.util.Collections;
+import java.util.Set;
+
+/**
+ * @author 穿云
+ * @version 1.0.0
+ * @date 2026-06-06 20:00
+ */
+public final class MongoDBDoubleType extends DoubleType {
+
+    @Override
+    public Set<String> getSupportedTypeName() {
+        return Collections.singleton("double");
+    }
+
+    @Override
+    protected Double merge(Object val, Field field) {
+        if (val instanceof String) {
+            return Double.parseDouble((String) val);
+        }
+        if (val instanceof Number) {
+            return ((Number) val).doubleValue();
+        }
+        if (val instanceof Boolean) {
+            return ((Boolean) val) ? 1.0 : 0.0;
+        }
+        return throwUnsupportedException(val, field);
+    }
+
+    @Override
+    protected Object convert(Object val, Field field) {
+        if (val instanceof Number) {
+            return ((Number) val).doubleValue();
+        }
+        if (val instanceof String) {
+            return Double.parseDouble((String) val);
+        }
+        if (val instanceof Boolean) {
+            return ((Boolean) val) ? 1.0d : 0.0d;
+        }
+        return throwUnsupportedException(val, field);
+    }
+}
