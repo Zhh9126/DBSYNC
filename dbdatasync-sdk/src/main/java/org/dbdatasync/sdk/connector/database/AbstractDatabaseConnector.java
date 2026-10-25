@@ -340,6 +340,7 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         // 1、获取SQL
         List<Field> fields = new ArrayList<>(targetFields);
         String executeSql;
+        final String upsertSql = context.getCommand().get(ConnectorConstant.OPERTION_UPSERT);
         if (isDelete(event)) {
             executeSql = context.getCommand().get(event);
             fields.clear();
@@ -356,15 +357,24 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
             executeSql = context.getCommand().get(event);
         }
         if (StringUtil.isBlank(executeSql)) {
+            // 兼容降级: forceUpdate 由 true 切为 false 后, 既有 tableGroup 的 command 仍按 UPSERT 生成
+            // (Mapping.forceUpdate 默认 true), 逐条 INSERT/UPDATE/DELETE 键缺失时降级 UPSERT, 避免增量直接失败
+            if (StringUtil.isNotBlank(upsertSql) && !isDelete(event)) {
+                logger.warn("事件:{} 未配置独立SQL(疑似 forceUpdate 模式切换), 降级使用 UPSERT", event);
+                executeSql = upsertSql;
+            }
+        }
+        if (StringUtil.isBlank(executeSql)) {
             logger.error("事件:{}, 执行SQL不能为空", event);
             throw new SdkException("执行SQL不能为空");
         }
 
         Result result = new Result();
         int[] execute = null;
+        final String finalExecuteSql = executeSql;
         try {
             // 2、设置参数
-            execute = connectorInstance.execute(databaseTemplate -> batchUpdate(databaseTemplate, executeSql, fields, data));
+            execute = connectorInstance.execute(databaseTemplate -> batchUpdate(databaseTemplate, finalExecuteSql, fields, data));
         } catch (Exception e) {
             // 出现失败时，服务降级为逐条处理
             forceUpdate(connectorInstance, context, executeSql, fields, event, data, result);
@@ -1114,7 +1124,7 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         if (StringUtil.isBlank(raw)) {
             return "VARCHAR(255)";
         }
-        String t = raw.trim().toUpperCase(Locale.ROOT);
+        String t = normalizeCrossDialectType(raw.trim().toUpperCase(Locale.ROOT), sourceDefinition.getType());
         int size = Math.max(0, sourceDefinition.getColumnSize());
         int ratio = Math.max(0, sourceDefinition.getRatio());
         //需要设置精度的类型
@@ -1124,6 +1134,36 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         //CHAR / VARCHAR / NCHAR / NVARCHAR / 二进制(BINARY/VARBINARY/RAW)
         if (t.contains("CHAR") || t.contains("BINARY") || t.contains("RAW") || t.contains("BYTEA")) {
             return formatCharOrBinaryTypeFragment(t, size);
+        }
+        return t;
+    }
+
+    /**
+     * 跨方言类型名归一: 源端(如 Oracle)特有类型名按 JDBC 类型翻译为通用名,
+     * 由目标方言的 formatPhysicalType 落地为本地类型(跨源 DDL 同步使用)。
+     */
+    private static String normalizeCrossDialectType(String t, int jdbcType) {
+        // VARCHAR2/NVARCHAR2 仅 Oracle/OceanBase-Oracle 使用, 其 JDBC type 为 12/(-9)
+        if ("VARCHAR2".equals(t)) {
+            return "VARCHAR";
+        }
+        if ("NVARCHAR2".equals(t)) {
+            return "NVARCHAR";
+        }
+        // Oracle NUMBER 的 JDBC type 为 2/3; PG NUMERIC 已是通用名
+        if ("NUMBER".equals(t) && (jdbcType == 2 || jdbcType == 3)) {
+            return "DECIMAL";
+        }
+        // Oracle CLOB/BLOB -> 通用 TEXT/BINARY
+        if ("CLOB".equals(t) || "NCLOB".equals(t)) {
+            return "TEXT";
+        }
+        if ("BLOB".equals(t)) {
+            return "BLOB";
+        }
+        // Oracle RAW -> VARBINARY
+        if ("RAW".equals(t)) {
+            return "VARBINARY";
         }
         return t;
     }

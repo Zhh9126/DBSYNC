@@ -64,6 +64,12 @@
 
 /* ===== 兼容硬编码工具类的深色覆盖 ===== */
 [data-theme="dark"] .bg-white { background-color: var(--bg-primary) !important; }
+[data-theme="dark"] body.bg-gray-50,
+[data-theme="dark"] .bg-gray-50 { background-color: var(--bg-secondary) !important; }
+[data-theme="dark"] .bg-gray-100 { background-color: var(--bg-tertiary) !important; }
+[data-theme="dark"] .text-gray-800,
+[data-theme="dark"] .text-gray-700,
+[data-theme="dark"] .text-gray-900 { color: var(--text-primary) !important; }
 [data-theme="dark"] .text-gray-500,
 [data-theme="dark"] .text-gray-600 { color: var(--text-secondary) !important; }
 [data-theme="dark"] .border-gray-200 { border-color: var(--border-primary) !important; }
