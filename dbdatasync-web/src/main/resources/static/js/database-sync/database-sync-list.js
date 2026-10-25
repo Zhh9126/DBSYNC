@@ -264,7 +264,7 @@
                     + '<button class="table-action-btn info" title="预检测（启动前校验）" onclick="runPreCheck(\'/database-sync/precheck\',\''
                     + taskId + '\',\'' + escapeHtml(task.name || '') + '\')">'
                     + '<i class="fa fa-list-alt"></i></button>'
-                    + (task.metaState === META_STATE_DONE
+                    + (Number(task.metaState) === META_STATE_DONE
                     + '<button class="table-action-btn compare" title="一键数据对比（迁移完成后校验一致性）" '
                     + 'onclick="databaseSyncCreateValidateSync(\'' + taskId + '\')"><i class="fa fa-exchange"></i></button>'
                         ? '<button class="table-action-btn upgrade" title="一键接续增量（离线结果 -> 实时 CDC）" '
