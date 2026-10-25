@@ -109,8 +109,18 @@
   background: linear-gradient(180deg, #0B1120 0%, #0F172A 100%);
   border-color: var(--border-primary);
 }
-[data-theme="dark"] .sidebar-brand,
-[data-theme="dark"] .sidebar-footer { color: var(--text-secondary); }
+[data-theme="dark"] .sidebar-brand { color: var(--text-secondary); }
+/* 侧边栏底部品牌条: sidebar.css 硬编码白色背景, 需显式覆盖 */
+[data-theme="dark"] .sidebar-footer {
+  background: #0B1120;
+  border-top: 1px dashed var(--border-primary);
+  color: var(--text-tertiary);
+}
+/* 提高特异性以压过 .sidebar-footer .version-tag 的绿色渐变(后加载) */
+[data-theme="dark"] .sidebar-footer .version-tag {
+  background: rgba(45, 212, 191, 0.15);
+  color: var(--primary-color);
+}
 [data-theme="dark"] .sidebar-group-title { color: var(--text-tertiary); }
 [data-theme="dark"] .sidebar-item { color: var(--sidebar-text); }
 [data-theme="dark"] .sidebar-item:hover {
@@ -122,10 +132,6 @@
   color: var(--primary-color);
 }
 [data-theme="dark"] .sidebar-nav::-webkit-scrollbar-thumb { background: var(--bg-quaternary); }
-[data-theme="dark"] .version-tag {
-  background: var(--primary-light);
-  color: var(--primary-color);
-}
 /* 顶栏深色 */
 [data-theme="dark"] header.h-14 {
   background: var(--bg-secondary);
