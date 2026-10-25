@@ -75,6 +75,18 @@
                     </div>
                 </div>
                 <div class="form-item">
+                    <label class="form-label">DDL 同步风险策略<i class="fa fa-question-circle"
+                                                               title="all=全部 ALTER 自动同步; add_only=仅新增字段自动同步(改类型/删列/改名拦截需人工确认); off=关闭 DDL 同步"></i><strong
+                            class="text-primary">*</strong></label>
+                    <div class="form-control-area">
+                        <select class="form-control" name="ddlSyncPolicy">
+                            <option value="all" th:selected="${config?.ddlSyncPolicy == null || config?.ddlSyncPolicy == 'all'}">all - 全部自动同步</option>
+                            <option value="add_only" th:selected="${config?.ddlSyncPolicy == 'add_only'}">add_only - 仅新增字段(推荐)</option>
+                            <option value="off" th:selected="${config?.ddlSyncPolicy == 'off'}">off - 关闭 DDL 同步</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-item">
                     <label class="form-label">驱动(同步任务)总数上限<i class="fa fa-question-circle"
                                                                title="允许创建的驱动数量上限，超过后禁止新建/复制驱动，0 表示不限制"></i><strong
                             class="text-primary">*</strong></label>

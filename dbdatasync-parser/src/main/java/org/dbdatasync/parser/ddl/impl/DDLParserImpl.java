@@ -16,6 +16,7 @@ import org.dbdatasync.parser.ddl.alter.AddStrategy;
 import org.dbdatasync.parser.ddl.alter.ChangeStrategy;
 import org.dbdatasync.parser.ddl.alter.DropStrategy;
 import org.dbdatasync.parser.ddl.alter.ModifyStrategy;
+import org.dbdatasync.parser.ddl.alter.RenameStrategy;
 import org.dbdatasync.parser.model.FieldMapping;
 import org.dbdatasync.parser.model.TableGroup;
 import org.dbdatasync.sdk.config.DDLConfig;
@@ -57,6 +58,7 @@ public class DDLParserImpl implements DDLParser {
         STRATEGIES.putIfAbsent(AlterOperation.ADD, new AddStrategy());
         STRATEGIES.putIfAbsent(AlterOperation.CHANGE, new ChangeStrategy());
         STRATEGIES.putIfAbsent(AlterOperation.DROP, new DropStrategy());
+        STRATEGIES.putIfAbsent(AlterOperation.RENAME, new RenameStrategy());
     }
 
     @Override

@@ -85,6 +85,12 @@ public class SystemConfig extends ConfigModel {
     private int maxRunningMappingSize = 20;
 
     /**
+     * DDL 同步风险策略(all=全部 ALTER 自动同步; add_only=仅新增字段自动同步, 其余拦截; off=关闭 DDL 同步)。
+     * 对标 Schema Change 风险分级: 低风险自动传播, 高风险(改类型/删列/改名)需人工确认后手动处理。
+     */
+    private String ddlSyncPolicy = "all";
+
+    /**
      * 是否打印trace信息（false-关闭; true-开启）
      */
     private boolean enablePrintTraceInfo;
@@ -269,5 +275,13 @@ public class SystemConfig extends ConfigModel {
 
     public void setMaxRunningMappingSize(int maxRunningMappingSize) {
         this.maxRunningMappingSize = maxRunningMappingSize;
+    }
+
+    public String getDdlSyncPolicy() {
+        return ddlSyncPolicy;
+    }
+
+    public void setDdlSyncPolicy(String ddlSyncPolicy) {
+        this.ddlSyncPolicy = ddlSyncPolicy;
     }
 }

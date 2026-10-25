@@ -282,6 +282,18 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
      */
     private void parseDDl(WriterResponse response, Mapping mapping, TableGroup tableGroup) {
         try {
+            // DDL 风险分级策略: off=完全关闭; add_only=仅新增字段自动同步(改类型/删列/改名需人工确认);
+            // all=全部 ALTER 自动同步(默认, 保持历史行为)
+            String policy = "all";
+            try {
+                org.dbdatasync.parser.model.SystemConfig sc = profileComponent.getSystemConfig();
+                policy = sc == null || StringUtil.isBlank(sc.getDdlSyncPolicy()) ? "all" : sc.getDdlSyncPolicy().trim().toLowerCase();
+            } catch (Exception ignored) {
+            }
+            if ("off".equals(policy)) {
+                logger.info("DDL 同步策略为 off, 跳过 DDL: {}", response.getSql());
+                return;
+            }
             ConnectorConfig sConnConfig = getConnectorConfig(mapping.getSourceConnectorId());
             ConnectorConfig tConnConfig = getConnectorConfig(mapping.getTargetConnectorId());
             String sConnType = sConnConfig.getConnectorType();
@@ -290,6 +302,12 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             ConnectorInstance tConnectorInstance = connectorFactory.connect(instanceId);
             ConnectorService connectorService = connectorFactory.getConnectorService(tConnType);
             DDLConfig targetDDLConfig = ddlParser.parse(tConnectorInstance, connectorService, tableGroup, response.getSql());
+            if ("add_only".equals(policy) && targetDDLConfig.getDdlOperationEnum() != null
+                    && targetDDLConfig.getDdlOperationEnum() != org.dbdatasync.sdk.enums.DDLOperationEnum.ALTER_ADD) {
+                logger.warn("DDL 风险策略为 add_only, 拦截非新增字段变更({}), 请人工确认后在目标端执行: {}",
+                        targetDDLConfig.getDdlOperationEnum(), response.getSql());
+                return;
+            }
             // 1.生成目标表执行SQL: 同源直接回放; 跨源按目标方言重建(列类型经 formatPhysicalType 翻译)
             if (!StringUtil.equals(sConnType, tConnType)) {
                 // 跨源: 源端 DDL 已生效, 先刷新源表列定义, 再用源列定义翻译成目标方言 DDL
@@ -344,9 +362,13 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
         }
         Database database = (Database) connectorService;
         String tableName = tableGroup.getTargetTable().getName();
+        // 限定名: PG/金仓系按 schema 前缀, MySQL 系按 catalog(库) 前缀
+        String schema = ((DatabaseConnectorInstance) tConnectorInstance).getSchema();
         String catalog = ((DatabaseConnectorInstance) tConnectorInstance).getCatalog();
-        String qualifiedName = StringUtil.isNotBlank(catalog)
-                ? catalog + "." + database.buildWithQuotation(tableName)
+        String namePart = StringUtil.isNotBlank(schema) ? schema
+                : (StringUtil.isNotBlank(catalog) ? catalog : StringUtil.EMPTY);
+        String qualifiedName = StringUtil.isNotBlank(namePart)
+                ? namePart + "." + database.buildWithQuotation(tableName)
                 : database.buildWithQuotation(tableName);
 
         switch (ddlConfig.getDdlOperationEnum()) {
@@ -380,10 +402,32 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             case ALTER_DROP:
                 return database.buildDropColumnsSql((DatabaseConnectorInstance) tConnectorInstance, tableName,
                         qualifiedName, ddlConfig.getDroppedFieldNames());
-            case ALTER_CHANGE:
-                logger.warn("跨源 DDL 暂不支持字段重命名, 已跳过: table={}, change={}",
-                        tableName, ddlConfig.getChangedFieldNames());
-                return StringUtil.EMPTY;
+            case ALTER_CHANGE: {
+                // 跨源改名: 源端 RENAME 已生效, changedFieldNames 为 旧名->新名;
+                // 生成目标方言 ALTER TABLE t RENAME COLUMN old TO new(MySQL 8+/PG/Kingbase/Oracle 语法一致)
+                java.util.List<String> renames = new ArrayList<>();
+                for (java.util.Map.Entry<String, String> e : ddlConfig.getChangedFieldNames().entrySet()) {
+                    String newName = e.getValue();
+                    boolean exists = false;
+                    for (Field column : tableGroup.getSourceTable().getColumn()) {
+                        if (column != null && StringUtil.equals(column.getName(), newName)) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (exists) {
+                        renames.add("ALTER TABLE " + qualifiedName + " RENAME COLUMN "
+                                + database.buildWithQuotation(e.getKey()) + " TO " + database.buildWithQuotation(newName));
+                    }
+                }
+                if (renames.isEmpty()) {
+                    return StringUtil.EMPTY;
+                }
+                if (renames.size() > 1) {
+                    logger.warn("跨源 DDL 批量改名仅执行第一条, 其余请人工处理: {}", renames);
+                }
+                return renames.get(0);
+            }
             default:
                 return StringUtil.EMPTY;
         }
