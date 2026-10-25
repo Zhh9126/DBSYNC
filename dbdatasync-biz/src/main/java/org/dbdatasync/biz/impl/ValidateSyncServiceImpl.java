@@ -91,6 +91,9 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
     private TaskService<ValidateSyncTask> taskService;
 
     @Resource
+    private org.dbdatasync.sdk.spi.TaskService<org.dbdatasync.sdk.model.DatabaseSyncTask> databaseSyncTaskService;
+
+    @Resource
     private ValidateSyncDetailService validateSyncDetailService;
 
     @Resource
@@ -145,6 +148,11 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         checkTask(task, params);
         // 默认检查行数据
         task.setEnableRowData(true);
+        // 关联整库迁移任务: 按库映射直接复制其表组, 用于迁移/同步完成后的数据一致性对比
+        String databaseSyncTaskId = params.get("databaseSyncTaskId");
+        if (StringUtil.isNotBlank(databaseSyncTaskId)) {
+            return addFromDatabaseSyncTask(task, params, databaseSyncTaskId);
+        }
         // 关联同步任务
         String mappingId = params.get("mappingId");
         if (StringUtil.isNotBlank(mappingId)) {
@@ -784,6 +792,66 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
             String t = tableGroup.getTargetTable().getName();
             logService.log(log, "%s订正校验任务%s(%s)%s:[%s] >> [%s]", log.getMessage(), name, type.getMessage(), log.getName(), s, t);
         }
+    }
+
+    /**
+     * 从整库迁移任务创建数据对比任务(迁移/同步完成后的数据一致性校验入口)。
+     * <p>整库迁移运行时使用 stub Mapping 不落独立驱动, 故直接按库映射 index 复制其表组。</p>
+     *
+     * @param task               已通过 checkTask 的空任务
+     * @param params             databaseSyncTaskId + mappingIndex(默认0) + name
+     * @param databaseSyncTaskId 整库迁移任务 ID
+     * @return 对比任务 ID
+     */
+    private String addFromDatabaseSyncTask(ValidateSyncTask task, Map<String, String> params, String databaseSyncTaskId) {
+        org.dbdatasync.sdk.model.DatabaseSyncTask dsTask = databaseSyncTaskService.get(databaseSyncTaskId);
+        org.springframework.util.Assert.notNull(dsTask, "整库迁移任务不存在");
+        java.util.List<org.dbdatasync.sdk.model.DatabaseMapping> mappings =
+                org.dbdatasync.parser.util.DatabaseSyncMappingUtil.sortByIndex(dsTask.getDatabaseMappings());
+        org.springframework.util.Assert.notEmpty(mappings, "整库迁移任务缺少库映射");
+        int index = org.dbdatasync.common.util.NumberUtil.toInt(params.get("mappingIndex"), 0);
+        org.springframework.util.Assert.isTrue(index >= 0 && index < mappings.size(), "库映射下标越界");
+        org.dbdatasync.sdk.model.DatabaseMapping dm = mappings.get(index);
+
+        task.setSourceConnectorId(dm.getSourceConnectorId());
+        task.setSourceDatabase(dm.getSourceDatabase());
+        task.setSourceSchema(dm.getSourceSchema());
+        task.setTargetConnectorId(dm.getTargetConnectorId());
+        task.setTargetDatabase(dm.getTargetDatabase());
+        task.setTargetSchema(dm.getTargetSchema());
+        task.setReadNum(dsTask.getReadNum());
+        task.setBatchNum(dsTask.getBatchNum());
+        task.setThreadNum(dsTask.getThreadNum());
+
+        String id = taskService.add(task);
+        // 复制整库迁移任务名下的表组(其 taskId 即整库任务 ID)
+        final String sourceTableNamePattern = null;
+        final java.util.List<TableGroup> copied = new java.util.ArrayList<>();
+        tableGroupProfile.pageScanTableGroups(databaseSyncTaskId, ConfigConstant.PAGE_SIZE, groups -> {
+            if (org.dbdatasync.common.util.CollectionUtils.isEmpty(groups)) {
+                return;
+            }
+            for (TableGroup group : groups) {
+                if (group == null) {
+                    continue;
+                }
+                // 只复制当前库映射的表组(源/目标连接器匹配)
+                if (!StringUtil.equals(group.getSourceConnectorId(), dm.getSourceConnectorId())
+                        || !StringUtil.equals(group.getTargetConnectorId(), dm.getTargetConnectorId())) {
+                    continue;
+                }
+                TableGroup newTable = deepCopy(group);
+                newTable.setId(String.valueOf(snowflakeIdWorker.nextId()));
+                newTable.setTaskId(id);
+                tableGroupProfile.addTableGroup(newTable);
+                copied.add(newTable);
+            }
+        });
+        org.springframework.util.Assert.notEmpty(copied, "该任务尚未生成同步映射, 无法发起数据对比");
+        taskProfile.createRunDetailTable(id);
+        validateSyncDetailService.syncTaskTableMetaDetails(id);
+        preloadTemplate.reConnect(task);
+        return id;
     }
 
     private void mergeTaskColumn(ValidateSyncTask task) {

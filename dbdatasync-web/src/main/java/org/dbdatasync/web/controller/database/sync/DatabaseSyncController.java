@@ -212,14 +212,14 @@ public class DatabaseSyncController extends BaseController {
         try {
             DatabaseSyncTaskVO task = databaseSyncService.get(id);
             Assert.notNull(task, "整库迁移任务不存在");
-            List<String> mappingIds = task.getMappingIds();
-            Assert.notEmpty(mappingIds, "该任务尚未生成同步映射, 无法发起数据对比");
+            Assert.notEmpty(task.getDatabaseMappings(), "该任务缺少库映射, 无法发起数据对比");
             String prefix = org.dbdatasync.common.util.StringUtil.isNotBlank(name) ? name
                     : task.getName() + "-数据对比";
             List<String> created = new ArrayList<>();
-            for (String mappingId : mappingIds) {
+            for (int i = 0; i < task.getDatabaseMappings().size(); i++) {
                 Map<String, String> params = new HashMap<>();
-                params.put("mappingId", mappingId);
+                params.put("databaseSyncTaskId", id);
+                params.put("mappingIndex", String.valueOf(i));
                 params.put("name", prefix);
                 created.add(validateSyncService.add(params));
             }
