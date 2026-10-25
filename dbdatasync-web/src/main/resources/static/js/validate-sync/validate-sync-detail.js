@@ -1,5 +1,5 @@
 /**
- * 订正校验结果详情页
+ * 数据对比结果详情页
  */
 (function (window) {
     'use strict';
