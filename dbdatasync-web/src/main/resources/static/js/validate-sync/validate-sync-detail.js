@@ -247,6 +247,12 @@
             } else {
                 html += '<div class="text-secondary">' + escapeHtml(item.msg || '-') + '</div>';
             }
+            if (item.repairSql) {
+                html += '<div class="mt-2">'
+                    + '<div class="text-xs font-medium mb-1" style="color: var(--primary-color);"><i class="fa fa-wrench"></i> 修复 SQL(可复制到目标端执行):</div>'
+                    + '<pre class="p-2 text-xs" style="background: var(--bg-tertiary); border-radius: 6px; white-space: pre-wrap; word-break: break-all; user-select: all;">'
+                    + escapeHtml(item.repairSql) + '</pre></div>';
+            }
             html += '</div>';
             return html;
         }

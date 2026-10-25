@@ -442,9 +442,11 @@ public class ValidateSyncExecutor {
             if (CollectionUtils.isEmpty(tgtPage)) {
                 break;
             }
+            // 批量存在性检查: 每页一次 IN 查询(替代逐行 EXISTS 的 N+1)
+            java.util.Set<String> existsKeys = existsByKeysBatch(source, sourceTable, pkNames, tgtPage);
             for (Map<String, Object> tgtRow : tgtPage) {
                 String key = buildKey(tgtRow, pkNames);
-                boolean exists = existsByKey(source, sourceTable, pkNames, tgtRow);
+                boolean exists = existsKeys.contains(key);
                 if (!exists) {
                     diff++;
                     List<Map<String, Object>> details = buildDetails(null, tgtRow, pkNames, pkNames);
@@ -1068,6 +1070,78 @@ public class ValidateSyncExecutor {
         Object found = db.execute(t -> t.query(sql.toString(), rs -> rs.next() ? Boolean.TRUE : Boolean.FALSE,
                 args.toArray()));
         return Boolean.TRUE.equals(found);
+    }
+
+    /**
+     * 批量存在性检查: 对一页目标行, 用一次 IN 查询取得源端已存在的主键集合。
+     * 参数按批次拆分(单批上限 500), 键值统一走 castKey 类型对齐。
+     */
+    private java.util.Set<String> existsByKeysBatch(DatabaseConnectorInstance db, String table,
+                                                    List<String> pkNames, List<Map<String, Object>> rows) {
+        java.util.Set<String> exists = new java.util.HashSet<>();
+        if (CollectionUtils.isEmpty(rows) || CollectionUtils.isEmpty(pkNames)) {
+            return exists;
+        }
+        int batchSize = 500;
+        for (int from = 0; from < rows.size(); from += batchSize) {
+            List<Map<String, Object>> batch = rows.subList(from, Math.min(from + batchSize, rows.size()));
+            StringBuilder sql = new StringBuilder("SELECT ").append(quote(db, pkNames.get(0)));
+            for (int i = 1; i < pkNames.size(); i++) {
+                sql.append(", ").append(quote(db, pkNames.get(i)));
+            }
+            sql.append(" FROM ").append(quote(db, table)).append(" WHERE ");
+            if (pkNames.size() == 1) {
+                sql.append(quote(db, pkNames.get(0))).append(" IN (");
+                for (int i = 0; i < batch.size(); i++) {
+                    if (i > 0) {
+                        sql.append(",");
+                    }
+                    sql.append("?");
+                }
+                sql.append(")");
+            } else {
+                // 联合主键: (pk1,pk2) IN ((?,?),(?,?)...)
+                sql.append("(");
+                for (int i = 0; i < pkNames.size(); i++) {
+                    if (i > 0) {
+                        sql.append(",");
+                    }
+                    sql.append(quote(db, pkNames.get(i)));
+                }
+                sql.append(") IN (");
+                for (int i = 0; i < batch.size(); i++) {
+                    if (i > 0) {
+                        sql.append(",");
+                    }
+                    sql.append("(");
+                    for (int j = 0; j < pkNames.size(); j++) {
+                        if (j > 0) {
+                            sql.append(",");
+                        }
+                        sql.append("?");
+                    }
+                    sql.append(")");
+                }
+                sql.append(")");
+            }
+            List<Object> args = new ArrayList<>(batch.size() * pkNames.size());
+            for (Map<String, Object> row : batch) {
+                for (String pk : pkNames) {
+                    Object kv = row.get(pk);
+                    if (kv instanceof String) {
+                        kv = castKey((String) kv);
+                    }
+                    args.add(kv);
+                }
+            }
+            List<Map<String, Object>> found = db.execute(t -> t.queryForList(sql.toString(), args.toArray()));
+            if (!CollectionUtils.isEmpty(found)) {
+                for (Map<String, Object> row : found) {
+                    exists.add(buildKey(row, pkNames));
+                }
+            }
+        }
+        return exists;
     }
 
     private int executeUpdate(DatabaseConnectorInstance db, String sql, List<Object> args) {
