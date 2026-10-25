@@ -1091,6 +1091,11 @@ $(function () {
     // 初始化水印
     doGetter("/index/version.json", {}, function (response) {
         if (response.success === true) {
+            // 侧边栏发布版本号(随每次发布自动更新)
+            var versionTag = document.getElementById('sidebarVersionTag');
+            if (versionTag && response.data.version) {
+                versionTag.textContent = 'v' + response.data.version;
+            }
             // 水印信息
             settings.watermark_txt = response.data.watermark;
             watermark();
