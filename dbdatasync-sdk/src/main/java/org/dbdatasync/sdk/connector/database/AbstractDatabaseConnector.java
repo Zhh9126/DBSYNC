@@ -348,6 +348,9 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         } else if (context.isForceUpdate()) {
             // 开启覆盖
             executeSql = context.getCommand().get(ConnectorConstant.OPERTION_UPSERT);
+            // UPSERT 参数按列名去重: quartz/全字段链路的 targetFields 可能含重复主键列,
+            // 而 excluded 型 upsert(SQLite/PG/金仓等)占位数=去重列数, 重复列导致参数不匹配批量写失败
+            fields = dedupeFieldsByName(fields);
         } else if (isUpdate(event)) {
             // 修改操作
             fields.addAll(PrimaryKeyUtil.findPrimaryKeyFields(fields));
@@ -362,6 +365,8 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
             if (StringUtil.isNotBlank(upsertSql) && !isDelete(event)) {
                 logger.warn("事件:{} 未配置独立SQL(疑似 forceUpdate 模式切换), 降级使用 UPSERT", event);
                 executeSql = upsertSql;
+                // excluded 型 upsert 占位数 = 去重列数; isUpdate 分支已追加了主键列, 需去重对齐
+                fields = dedupeFieldsByName(fields);
             }
         }
         if (StringUtil.isBlank(executeSql)) {
@@ -372,9 +377,10 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         Result result = new Result();
         int[] execute = null;
         final String finalExecuteSql = executeSql;
+        final List<Field> batchFields = fields;
         try {
             // 2、设置参数
-            execute = connectorInstance.execute(databaseTemplate -> batchUpdate(databaseTemplate, finalExecuteSql, fields, data));
+            execute = connectorInstance.execute(databaseTemplate -> batchUpdate(databaseTemplate, finalExecuteSql, batchFields, data));
         } catch (Exception e) {
             // 出现失败时，服务降级为逐条处理
             forceUpdate(connectorInstance, context, executeSql, fields, event, data, result);
@@ -433,6 +439,21 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         } finally {
             connection.setAutoCommit(true);
         }
+    }
+
+    private static List<Field> dedupeFieldsByName(List<Field> fields) {
+        if (CollectionUtils.isEmpty(fields)) {
+            return fields;
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        List<Field> result = new ArrayList<>(fields.size());
+        for (Field f : fields) {
+            if (f == null || !seen.add(f.getName())) {
+                continue;
+            }
+            result.add(f);
+        }
+        return result;
     }
 
     private void forceUpdate(DatabaseConnectorInstance connectorInstance, PluginContext context, String executeSql, List<Field> fields, String event, List<Map> data, Result result) {

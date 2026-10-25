@@ -13,6 +13,9 @@ import org.dbdatasync.sdk.connector.ConfigValidator;
 import org.dbdatasync.sdk.connector.ConnectorInstance;
 import org.dbdatasync.sdk.connector.ConnectorServiceContext;
 import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
+import org.dbdatasync.sdk.enums.ListenerTypeEnum;
+import org.dbdatasync.sdk.listener.DatabaseQuartzListener;
+import org.dbdatasync.sdk.listener.Listener;
 import org.dbdatasync.sdk.schema.SchemaResolver;
 
 import java.util.Collections;
@@ -56,6 +59,18 @@ public final class TiDBConnector extends MySQLConnector {
     public ConnectorInstance connect(DatabaseConfig config, ConnectorServiceContext context) {
         TiDBConstant.enrichJdbcProperties(config);
         return super.connect(config, context);
+    }
+
+    /**
+     * TiDB 5.0+ 不再兼容 MySQL binlog 协议(官方增量通道为 TiCDC), 故仅提供定时轮询增量:
+     * 基于时间戳/自增列的 {@link DatabaseQuartzListener} 周期抽取。
+     */
+    @Override
+    public Listener getListener(String listenerType) {
+        if (ListenerTypeEnum.isTiming(listenerType)) {
+            return new DatabaseQuartzListener();
+        }
+        return null;
     }
 
     @Override
