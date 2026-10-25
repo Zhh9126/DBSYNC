@@ -360,6 +360,15 @@ public class ValidateSyncExecutor {
 
         List<String> commonCols = commonColumnNames(sourceCols, targetCols);
         List<String> pkNames = columnNames(pkCols);
+        // 对比模式: sample=抽样(按 sampleStep 跳页读, 大表快速健康检查), 抽样模式禁用自动订正
+        boolean sampleMode = "sample".equalsIgnoreCase(task.getCompareMode());
+        int sampleStep = Math.max(1, task.getSampleStep());
+        if (sampleMode) {
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "抽样对比模式(每 " + sampleStep + " 页取 1 页), 差异定位请改用全量模式", "", null,
+                    Collections.emptyList()));
+            autoSync = false;
+        }
         int pageSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
         int offset = 0;
         while (true) {
@@ -382,7 +391,9 @@ public class ValidateSyncExecutor {
                 if (tgtRow == null) {
                     diff++;
                     List<Map<String, Object>> details = buildDetails(srcRow, null, commonCols, pkNames);
-                    addItem(content, rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames));
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标缺失", targetTable, key, details, pkNames, srcRow, null, commonCols));
+                    addItem(content, item);
                     if (autoSync && repairInsert(target, targetTable, commonCols, srcRow)) {
                         fixed++;
                         markRepaired(content, key, "目标缺失");
@@ -392,14 +403,16 @@ public class ValidateSyncExecutor {
                 List<Map<String, Object>> differs = compareRows(srcRow, tgtRow, commonCols, pkNames);
                 if (!differs.isEmpty()) {
                     diff++;
-                    addItem(content, rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames));
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames);
+                    item.put("repairSql", buildRepairSql("数据不一致", targetTable, key, differs, pkNames, srcRow, tgtRow, commonCols));
+                    addItem(content, item);
                     if (autoSync && repairUpdate(target, targetTable, pkNames, key, differs)) {
                         fixed++;
                         markRepaired(content, key, "数据不一致");
                     }
                 }
             }
-            offset += srcPage.size();
+            offset += srcPage.size() * (sampleMode ? sampleStep : 1);
             if (srcPage.size() < pageSize) {
                 break;
             }
@@ -435,14 +448,16 @@ public class ValidateSyncExecutor {
                 if (!exists) {
                     diff++;
                     List<Map<String, Object>> details = buildDetails(null, tgtRow, pkNames, pkNames);
-                    addItem(content, rowDataItem(sourceTable, targetTable, "目标多余", key, details, pkNames));
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标多余", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标多余", targetTable, key, details, pkNames, null, tgtRow, null));
+                    addItem(content, item);
                     if (autoDelete && repairDelete(target, targetTable, pkNames, tgtRow)) {
                         fixed++;
                         markRepaired(content, key, "目标多余");
                     }
                 }
             }
-            offset += tgtPage.size();
+            offset += tgtPage.size() * ("sample".equalsIgnoreCase(task.getCompareMode()) ? Math.max(1, task.getSampleStep()) : 1);
             if (tgtPage.size() < pageSize) {
                 break;
             }
@@ -462,6 +477,101 @@ public class ValidateSyncExecutor {
         // 主键定位信息（订正 UPDATE 需要 WHERE 条件；details 仅含差异字段）
         item.put("pkFields", pkNames == null ? Collections.emptyList() : pkNames);
         return item;
+    }
+
+    /**
+     * 生成目标端修复 SQL(对标 NineData"差异生成变更脚本"):
+     * 目标缺失 -> INSERT(源值); 数据不一致 -> UPDATE(源值覆盖差异列); 目标多余 -> DELETE。
+     * 仅供展示/人工执行, 系统内订正走 manualRevise/autoSync。
+     */
+    private String buildRepairSql(String msg, String targetTable, String key,
+                                  List<Map<String, Object>> details, List<String> pkNames,
+                                  Map<String, Object> srcRow, Map<String, Object> tgtRow,
+                                  List<String> commonCols) {
+        try {
+            String q = "'";
+            java.util.function.Function<Object, String> lit = v -> {
+                if (v == null) {
+                    return "NULL";
+                }
+                if (v instanceof byte[]) {
+                    // 二进制 -> 0x 十六进制字面量(避免 Java toString 污染修复 SQL)
+                    byte[] bytes = (byte[]) v;
+                    if (bytes.length == 0) {
+                        return "NULL";
+                    }
+                    StringBuilder hex = new StringBuilder("0x");
+                    for (byte b : bytes) {
+                        hex.append(String.format("%02X", b));
+                    }
+                    return hex.toString();
+                }
+                if (v instanceof Number || v instanceof Boolean) {
+                    return String.valueOf(v);
+                }
+                String t = String.valueOf(v);
+                if (DATETIME_PATTERN.matcher(t).matches() || DATE_PATTERN.matcher(t).matches()
+                        || TIME_PATTERN.matcher(t).matches()) {
+                    return q + t + q;
+                }
+                return q + t.replace(q, q + q) + q;
+            };
+            StringBuilder where = new StringBuilder();
+            if (tgtRow != null) {
+                for (String pk : pkNames) {
+                    if (where.length() > 0) {
+                        where.append(" AND ");
+                    }
+                    where.append(pk).append(" = ").append(lit.apply(tgtRow.get(pk)));
+                }
+            } else if (srcRow != null) {
+                for (String pk : pkNames) {
+                    if (where.length() > 0) {
+                        where.append(" AND ");
+                    }
+                    where.append(pk).append(" = ").append(lit.apply(srcRow.get(pk)));
+                }
+            }
+            if (where.length() == 0) {
+                where.append(key == null ? "NULL" : key);
+            }
+            if (msg.contains("目标多余")) {
+                return "DELETE FROM " + targetTable + " WHERE " + where + ";";
+            }
+            if (msg.contains("目标缺失") && srcRow != null && commonCols != null) {
+                StringBuilder cols = new StringBuilder();
+                StringBuilder vals = new StringBuilder();
+                for (String col : commonCols) {
+                    if (cols.length() > 0) {
+                        cols.append(", ");
+                        vals.append(", ");
+                    }
+                    cols.append(col);
+                    vals.append(lit.apply(srcRow.get(col)));
+                }
+                return "INSERT INTO " + targetTable + " (" + cols + ") VALUES (" + vals + ");";
+            }
+            if (msg.contains("数据不一致") && srcRow != null && details != null) {
+                StringBuilder sets = new StringBuilder();
+                for (Map<String, Object> d : details) {
+                    Object field = d.get("field");
+                    if (field == null) {
+                        continue;
+                    }
+                    if (sets.length() > 0) {
+                        sets.append(", ");
+                    }
+                    sets.append(field).append(" = ").append(lit.apply(d.get("source")));
+                }
+                if (sets.length() == 0) {
+                    return "";
+                }
+                return "UPDATE " + targetTable + " SET " + sets + " WHERE " + where + ";";
+            }
+        } catch (Exception e) {
+            logger.debug("buildRepairSql failed: {}", e.getMessage());
+        }
+        return "";
     }
 
     private List<Map<String, Object>> compareRows(Map<String, Object> srcRow, Map<String, Object> tgtRow,

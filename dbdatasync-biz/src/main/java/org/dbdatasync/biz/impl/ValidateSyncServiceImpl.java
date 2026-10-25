@@ -148,6 +148,15 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         checkTask(task, params);
         // 默认检查行数据
         task.setEnableRowData(true);
+        // 对比模式: full(默认全量逐行)/sample(抽样, 大表快速健康检查)
+        String compareMode = params.get("compareMode");
+        if (StringUtil.isNotBlank(compareMode)) {
+            task.setCompareMode(compareMode.trim().toLowerCase());
+        }
+        int sampleStep = NumberUtil.toInt(params.get("sampleStep"), 10);
+        if (sampleStep >= 1) {
+            task.setSampleStep(sampleStep);
+        }
         // 关联整库迁移任务: 按库映射直接复制其表组, 用于迁移/同步完成后的数据一致性对比
         String databaseSyncTaskId = params.get("databaseSyncTaskId");
         if (StringUtil.isNotBlank(databaseSyncTaskId)) {
