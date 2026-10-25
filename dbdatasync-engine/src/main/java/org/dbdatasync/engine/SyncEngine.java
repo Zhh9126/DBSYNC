@@ -7,10 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * DataX 式同步引擎（核心编排）。
@@ -68,36 +67,54 @@ public class SyncEngine {
     public long run(Reader reader, Writer writer) throws Exception {
         Channel channel = new Channel(config.getChannelCapacity(),
                 config.getRecordsPerSecond(), config.getBytesPerSecond());
-        AtomicLong total = new AtomicLong(0);
-        CountDownLatch latch = new CountDownLatch(1);
+        final AtomicLong total = new AtomicLong(0);
+        // writer 异常不再被吞没: 捕获后向调用方上抛, 避免上游误认为同步成功(静默数据丢失)
+        final AtomicReference<Throwable> writerError = new AtomicReference<>(null);
+        final CountDownLatch latch = new CountDownLatch(1);
+
+        // writer 始终在独立线程消费: 同步模式下若 reader 推送量超过 channel 容量,
+        // 顺序执行(reader 完成后才启动 writer)必然死锁, 必须并行生产/消费
+        Thread writerThread = new Thread(() -> {
+            try {
+                long w = writer.write(channel);
+                if (w >= 0) {
+                    total.addAndGet(w);
+                }
+            } catch (Throwable e) {
+                writerError.compareAndSet(null, e);
+            } finally {
+                latch.countDown();
+            }
+        }, "engine-writer");
+        writerThread.setDaemon(true);
+        writerThread.start();
+
+        try {
+            // total 仅以 writer 实际写入计数为准, 避免读写双计
+            reader.read(channel);
+        } finally {
+            // reader 异常也必须关闭通道并回收 writer, 避免线程泄漏
+            channel.close();
+        }
 
         if (config.isAsync()) {
-            // 异步模式：writer 独立线程消费 channel
-            ExecutorService writerPool = Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "engine-writer");
-                t.setDaemon(true);
-                return t;
-            });
-            writerPool.submit(() -> {
-                try {
-                    long w = writer.write(channel);
-                    total.addAndGet(w);
-                } catch (Exception e) {
-                    logger.error("async writer error", e);
-                } finally {
-                    latch.countDown();
-                }
-            });
-            reader.read(channel);
-            channel.close();
-            latch.await(1, TimeUnit.HOURS);
-            writerPool.shutdownNow();
+            // 异步模式: 受安全超时保护, 超时中断 writer 并显式报错(不得静默 shutdownNow 丢弃批写)
+            if (!latch.await(config.getWriterTimeoutSeconds(), TimeUnit.SECONDS)) {
+                writerThread.interrupt();
+                throw new IllegalStateException("engine writer timeout after "
+                        + config.getWriterTimeoutSeconds() + "s, task aborted");
+            }
         } else {
-            // 同步模式：reader 与 writer 同线程协作（reader 推满一批后 writer 消费）
-            long r = reader.read(channel);
-            channel.close();
-            long w = writer.write(channel);
-            total.addAndGet(r >= 0 ? r : w);
+            // 同步模式: 等待 writer 完成(强一致)
+            latch.await();
+        }
+
+        Throwable error = writerError.get();
+        if (error != null) {
+            if (error instanceof Exception) {
+                throw (Exception) error;
+            }
+            throw new RuntimeException(error);
         }
         return total.get();
     }

@@ -5,6 +5,7 @@
 
 /* ========== 导入设计系统 ========== */
 @import url('./theme/variables.css');
+@import url('./theme/dark.css');
 @import url('./theme/colors.css');
 @import url('./theme/utilities.css');
 

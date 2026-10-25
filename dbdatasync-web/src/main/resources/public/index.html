@@ -19,7 +19,8 @@
     <!-- FontAwesome 图标库 -->
     <link type="text/css" rel="stylesheet" th:href="@{/plugins/css/font-awesome.min.css}"/>
     <!-- 主题样式 -->
-    <link type="text/css" rel="stylesheet" th:href="@{/css/DBDataSync-theme.css}">
+    <link type="text/css" rel="stylesheet" th:href="@{/css/dbdatasync-theme.css}">
+    <script>(function(){try{var t=localStorage.getItem('dbdatasync-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
     <script th:src="@{/plugins/js/jquery/jquery-1.11.3.min.js}"></script>
     <script th:src="@{/plugins/js/chartjs/chart.umd.min.js}" onerror="console.error('Chart.js 加载失败，请检查文件是否完整或版本是否兼容');"></script>
 </head>
@@ -40,6 +41,7 @@
         </main>
     </div>
 </body>
+<script th:src="@{/js/theme-toggle.js}"></script>
 <script th:src="@{/js/framework.js}"></script>
 <script th:src="@{/js/components/confirm.js}"></script>
 <script th:src="@{/js/components/notify.js}"></script>

@@ -48,7 +48,7 @@ public abstract class TimestampType extends AbstractDataType<Timestamp> {
 
         if (val instanceof byte[]) {
             byte[] bytes = (byte[]) val;
-            String s = new String(bytes);
+            String s = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
             Timestamp timestamp = DateFormatUtil.stringToTimestamp(s);
             if (null != timestamp) {
                 return timestamp;

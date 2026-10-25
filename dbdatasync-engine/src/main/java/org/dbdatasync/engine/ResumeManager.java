@@ -27,8 +27,10 @@ public class ResumeManager {
     private final AtomicReference<String> lastCursor = new AtomicReference<>(null);
 
     public ResumeManager(String taskId) {
+        // taskId 清洗: 防止 null/路径分隔符污染检查点文件名(多任务共用 tmpdir)
+        String safe = taskId == null ? "default" : taskId.replaceAll("[^\\w-]", "_");
         this.checkpointFile = Paths.get(System.getProperty("java.io.tmpdir"),
-                "dbdatasync_resume_" + taskId + ".ckpt");
+                "dbdatasync_resume_" + safe + ".ckpt");
     }
 
     /**
@@ -57,15 +59,42 @@ public class ResumeManager {
     public synchronized void report(Object cursor) {
         if (cursor == null) return;
         String value = cursor.toString();
-        // 仅当新值"更大"（字符串/数值统一按字符串比较，数值场景建议调用方保证格式）时更新
-        if (lastCursor.get() == null || value.compareTo(lastCursor.get()) > 0) {
+        // 仅当新值"更大"时更新: 纯数字游标按数值比较("9" < "10"), 其余按字符串比较
+        if (lastCursor.get() == null || compareCursor(value, lastCursor.get()) > 0) {
             lastCursor.set(value);
-            try (BufferedWriter w = Files.newBufferedWriter(checkpointFile, StandardCharsets.UTF_8)) {
-                w.write(value);
+            // 原子落盘: 先写临时文件再原子替换, 崩溃不产生截断的检查点
+            try {
+                Path tmp = checkpointFile.resolveSibling(checkpointFile.getFileName() + ".tmp");
+                try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
+                    w.write(value);
+                }
+                try {
+                    Files.move(tmp, checkpointFile,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException amnse) {
+                    Files.move(tmp, checkpointFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
             } catch (IOException ignored) {
                 // 持久化失败不影响内存态，下次上报会重试
             }
         }
+    }
+
+    private static int compareCursor(String a, String b) {
+        boolean numeric = isNumeric(a) && isNumeric(b);
+        if (numeric) {
+            try {
+                return new java.math.BigDecimal(a).compareTo(new java.math.BigDecimal(b));
+            } catch (NumberFormatException ignored) {
+                // 退化为字符串比较
+            }
+        }
+        return a.compareTo(b);
+    }
+
+    private static boolean isNumeric(String s) {
+        return s != null && s.matches("-?\\d+(\\.\\d+)?");
     }
 
     public String current() {

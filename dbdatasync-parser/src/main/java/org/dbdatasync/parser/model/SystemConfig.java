@@ -75,6 +75,16 @@ public class SystemConfig extends ConfigModel {
     private int maxBufferActuatorSize = 50;
 
     /**
+     * 驱动(同步任务)总数上限, <=0 表示不限制
+     */
+    private int maxMappingSize = 100;
+
+    /**
+     * 运行中驱动(同步任务)并发上限, <=0 表示不限制
+     */
+    private int maxRunningMappingSize = 20;
+
+    /**
      * 是否打印trace信息（false-关闭; true-开启）
      */
     private boolean enablePrintTraceInfo;
@@ -243,5 +253,21 @@ public class SystemConfig extends ConfigModel {
 
     public void setNoticeConfig(NoticeConfig noticeConfig) {
         this.noticeConfig = noticeConfig;
+    }
+
+    public int getMaxMappingSize() {
+        return maxMappingSize;
+    }
+
+    public void setMaxMappingSize(int maxMappingSize) {
+        this.maxMappingSize = maxMappingSize;
+    }
+
+    public int getMaxRunningMappingSize() {
+        return maxRunningMappingSize;
+    }
+
+    public void setMaxRunningMappingSize(int maxRunningMappingSize) {
+        this.maxRunningMappingSize = maxRunningMappingSize;
     }
 }

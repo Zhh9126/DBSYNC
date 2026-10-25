@@ -18,7 +18,7 @@ import org.dbdatasync.biz.vo.MappingVO;
 import org.dbdatasync.biz.vo.MetaVO;
 import org.dbdatasync.biz.vo.TableVO;
 import org.dbdatasync.common.dispatch.DispatchTaskService;
-import org.dbdatasync.common.model.ConfigModel;import org.dbdatasync.common.model.Paging;
+import org.dbdatasync.common.enums.CommonTaskStatusEnum;import org.dbdatasync.common.model.ConfigModel;import org.dbdatasync.common.model.Paging;
 import org.dbdatasync.common.rsa.RsaManager;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.JsonUtil;
@@ -138,6 +138,7 @@ public class MappingServiceImpl extends BaseServiceImpl implements MappingServic
 
     @Override
     public String add(Map<String, String> params) {
+        assertMappingCountLimit();
         ConfigModel model = mappingChecker.checkAddConfigModel(params);
         log(LogType.MappingLog.INSERT, model);
 
@@ -166,6 +167,7 @@ public class MappingServiceImpl extends BaseServiceImpl implements MappingServic
 
     @Override
     public String copy(String id) {
+        assertMappingCountLimit();
         Mapping mapping = profileComponent.getMapping(id);
         Assert.notNull(mapping, "The mapping id is invalid.");
 
@@ -367,12 +369,69 @@ public class MappingServiceImpl extends BaseServiceImpl implements MappingServic
         synchronized (LOCK) {
             assertRunning(metaId);
             Assert.isTrue(!dispatchTaskService.isRunning(id), "驱动表映射正在匹配或统计中，请稍候再启动");
+            // 运行中驱动并发上限
+            assertRunningMappingLimit();
             // 启动
             managerFactory.start(mapping);
 
             log(LogType.MappingLog.RUNNING, mapping);
         }
         return "驱动启动成功";
+    }
+
+    /**
+     * 驱动(同步任务)总数上限校验(系统配置 maxMappingSize, <=0 不限制)。
+     */
+    private void assertMappingCountLimit() {
+        int max = getMaxMappingLimit();
+        if (max <= 0) {
+            return;
+        }
+        Paging<Mapping> paging = taskProfile.queryTasks(Mapping.class, 1, 1, null);
+        long total = paging == null ? 0 : paging.getTotal();
+        Assert.isTrue(total < max,
+                String.format("驱动(同步任务)数量已达上限 %d, 无法继续创建. 请先清理无效驱动, 或在系统配置中调整上限.", max));
+    }
+
+    /**
+     * 运行中驱动并发上限校验(系统配置 maxRunningMappingSize, <=0 不限制)。
+     */
+    private void assertRunningMappingLimit() {
+        int max = getRunningMappingLimit();
+        if (max <= 0) {
+            return;
+        }
+        final int[] running = {0};
+        metaProfile.pageScanMetas(0, 500, metas -> {
+            if (metas == null) {
+                return;
+            }
+            for (Meta meta : metas) {
+                if (meta != null && CommonTaskStatusEnum.isRunning(meta.getState())) {
+                    running[0]++;
+                }
+            }
+        });
+        Assert.isTrue(running[0] < max,
+                String.format("运行中驱动已达上限 %d, 请先停止部分驱动后再启动. 可在系统配置中调整并发上限.", max));
+    }
+
+    private int getMaxMappingLimit() {
+        try {
+            org.dbdatasync.parser.model.SystemConfig config = profileComponent.getSystemConfig();
+            return config == null ? 0 : config.getMaxMappingSize();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int getRunningMappingLimit() {
+        try {
+            org.dbdatasync.parser.model.SystemConfig config = profileComponent.getSystemConfig();
+            return config == null ? 0 : config.getMaxRunningMappingSize();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     @Override

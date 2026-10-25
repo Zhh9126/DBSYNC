@@ -5,6 +5,9 @@
 <!-- 顶部导航栏 -->
 <header th:fragment="header" class="h-14 border-b border-gray-200 flex items-center justify-end">
     <div class="flex items-center">
+        <button id="themeToggleBtn" class="theme-toggle" type="button" title="切换深色/浅色主题">
+            <i class="fa fa-moon"></i><i class="fa fa-sun"></i>
+        </button>
         <div class="dropdown flex items-center m-2">
             <button class="flex items-center text-gray-500" data-toggle>
                 <i class="fa fa-user-circle user-avatar badge-primary"></i>

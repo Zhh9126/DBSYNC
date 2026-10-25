@@ -118,6 +118,23 @@ public final class SqlServerConnector extends AbstractDatabaseConnector {
     }
 
     @Override
+    public String buildAddColumnsSql(DatabaseConnectorInstance targetInstance, String targetTableName,
+                                      String qualifiedName, List<Field> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return StringUtil.EMPTY;
+        }
+        // SqlServer 方言: ALTER TABLE t ADD c1 t1, c2 t2 (无 COLUMN 关键字)
+        StringBuilder clauses = new StringBuilder();
+        for (Field field : fields) {
+            if (clauses.length() > 0) {
+                clauses.append(", ");
+            }
+            clauses.append(buildWithQuotation(field.getName())).append(" ").append(formatPhysicalType(field));
+        }
+        return "ALTER TABLE " + qualifiedName + " ADD " + clauses;
+    }
+
+    @Override
     public String getTargetTableDDL(DatabaseConnectorInstance targetInstance, String tableName, String sourceDDL) {
         String createSql = "CREATE TABLE " + tableName + " (" + sourceDDL + ")";
         String escapedTableName = tableName.replace("'", "''");

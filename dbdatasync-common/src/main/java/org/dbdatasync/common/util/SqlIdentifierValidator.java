@@ -166,6 +166,15 @@ public final class SqlIdentifierValidator {
         if (trimmed.replaceAll(";\\s*$", "").contains(";")) {
             throw new IllegalArgumentException("Illegal custom SQL (multiple statements): " + trimmed);
         }
+        // 危险关键字黑名单同样作用于只读 SQL:
+        // SELECT/WITH 开头不足以保证只读, 如 WITH x AS (DELETE ... RETURNING *) / SELECT ... INTO OUTFILE
+        String lower = trimmed.toLowerCase();
+        for (Pattern pattern : DANGEROUS_PATTERNS) {
+            if (pattern.matcher(lower).find()) {
+                throw new IllegalArgumentException(
+                        "Illegal custom SQL (read-only) contains forbidden token '" + pattern.pattern() + "': " + trimmed);
+            }
+        }
         return trimmed;
     }
 }

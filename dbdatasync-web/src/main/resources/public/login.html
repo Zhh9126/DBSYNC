@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>数据同步工具 - 登录</title>
 
+    <link type="text/css" rel="stylesheet" th:href="@{/css/theme/variables.css}"/>
+    <link type="text/css" rel="stylesheet" th:href="@{/css/theme/dark.css}"/>
     <link type="text/css" rel="stylesheet" th:href="@{/css/login.css}"/>
+    <script>(function(){try{var t=localStorage.getItem('dbdatasync-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
 </head>
 <body class="font-inter bg-gray-50 min-h-screen flex items-center justify-center p-4">
 <!-- 背景粒子特效画布：固定铺满屏幕，位于内容层之下 -->
@@ -380,5 +383,9 @@
         }
     });
 </script>
+<button id="themeToggleBtn" class="theme-toggle" type="button" style="position:fixed;top:16px;right:16px;z-index:9999;" title="切换深色/浅色主题">
+    <i class="fa fa-moon"></i><i class="fa fa-sun"></i>
+</button>
+<script type="text/javascript" th:src="@{/js/theme-toggle.js}"></script>
 </body>
 </html>

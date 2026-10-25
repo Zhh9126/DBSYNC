@@ -32,7 +32,8 @@ public abstract class StringType extends AbstractDataType<String> {
             return val;
         }
         if (val instanceof byte[]) {
-            return new String((byte[]) val);
+            // 显式 UTF-8: 不依赖平台默认字符集(中文Windows=GBK / Linux=UTF-8, 否则中文乱码)
+            return new String((byte[]) val, java.nio.charset.StandardCharsets.UTF_8);
         }
 
         if (val instanceof Number) {

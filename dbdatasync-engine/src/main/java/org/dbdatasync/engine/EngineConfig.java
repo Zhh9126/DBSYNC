@@ -36,6 +36,9 @@ public class EngineConfig {
     /** 断点续传游标值（null 表示从头部开始） */
     private String resumePoint;
 
+    /** 异步模式 writer 安全超时（秒）, 超时中断并显式报错 */
+    private long writerTimeoutSeconds = 3600;
+
     public EngineConfig() {
     }
 
@@ -56,4 +59,6 @@ public class EngineConfig {
     public void setSplitPk(String splitPk) { this.splitPk = splitPk; }
     public String getResumePoint() { return resumePoint; }
     public void setResumePoint(String resumePoint) { this.resumePoint = resumePoint; }
+    public long getWriterTimeoutSeconds() { return writerTimeoutSeconds; }
+    public void setWriterTimeoutSeconds(long writerTimeoutSeconds) { this.writerTimeoutSeconds = writerTimeoutSeconds; }
 }

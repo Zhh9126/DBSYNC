@@ -25,7 +25,7 @@ public abstract class SHA1Util {
         if (null == instance) {
             return null;
         }
-        byte[] sha1 = instance.digest(s.getBytes());
+        byte[] sha1 = instance.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         if (null == sha1) {
             return null;
         }

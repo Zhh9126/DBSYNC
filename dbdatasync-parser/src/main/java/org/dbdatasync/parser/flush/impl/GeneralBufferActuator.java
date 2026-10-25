@@ -36,6 +36,9 @@ import org.dbdatasync.plugin.enums.ProcessEnum;
 import org.dbdatasync.plugin.impl.IncrementPluginContext;
 import org.dbdatasync.sdk.config.DDLConfig;
 import org.dbdatasync.sdk.connector.ConnectorInstance;
+import org.dbdatasync.sdk.connector.database.Database;
+import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
+import org.dbdatasync.sdk.model.ValidateSyncTask;
 import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
 import org.dbdatasync.sdk.enums.ChangedEventTypeEnum;
 import org.dbdatasync.sdk.model.ChangedOffset;
@@ -287,8 +290,14 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             ConnectorInstance tConnectorInstance = connectorFactory.connect(instanceId);
             ConnectorService connectorService = connectorFactory.getConnectorService(tConnType);
             DDLConfig targetDDLConfig = ddlParser.parse(tConnectorInstance, connectorService, tableGroup, response.getSql());
-            // 1.生成目标表执行SQL(暂支持同源)
-            if (mapping.getListener().isEnableDDL() && StringUtil.equals(sConnType, tConnType)) {
+            // 1.生成目标表执行SQL: 同源直接回放; 跨源按目标方言重建(列类型经 formatPhysicalType 翻译)
+            if (!StringUtil.equals(sConnType, tConnType)) {
+                // 跨源: 源端 DDL 已生效, 先刷新源表列定义, 再用源列定义翻译成目标方言 DDL
+                updateTableColumn(mapping, ConnectorInstanceUtil.SOURCE_SUFFIX, tableGroup.getSourceTable());
+                String crossTypeSql = buildCrossTypeDdl(tConnectorInstance, connectorService, tableGroup, targetDDLConfig);
+                targetDDLConfig.setSql(crossTypeSql);
+            }
+            if (mapping.getListener().isEnableDDL() && StringUtil.isNotBlank(targetDDLConfig.getSql())) {
                 Result result = connectorFactory.writerDDL(tConnectorInstance, targetDDLConfig);
                 // 2.持久化增量事件数据
                 result.setTableGroupId(tableGroup.getId());
@@ -317,6 +326,66 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             }
         } catch (Exception e) {
             logger.error(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 跨源 DDL 重建: 源端 ALTER 已生效, 依据源表最新列定义 + 目标连接器方言能力,
+     * 生成目标端等价 DDL(列类型经目标方言 formatPhysicalType 翻译)。
+     * 仅支持目标为数据库类连接器; 不支持的操作(如跨源重命名)返回空串跳过执行。
+     */
+    private String buildCrossTypeDdl(ConnectorInstance tConnectorInstance, ConnectorService connectorService,
+                                     TableGroup tableGroup, DDLConfig ddlConfig) {
+        if (ddlConfig == null || ddlConfig.getDdlOperationEnum() == null) {
+            return StringUtil.EMPTY;
+        }
+        if (!(connectorService instanceof Database)) {
+            return StringUtil.EMPTY;
+        }
+        Database database = (Database) connectorService;
+        String tableName = tableGroup.getTargetTable().getName();
+        String catalog = ((DatabaseConnectorInstance) tConnectorInstance).getCatalog();
+        String qualifiedName = StringUtil.isNotBlank(catalog)
+                ? catalog + "." + database.buildWithQuotation(tableName)
+                : database.buildWithQuotation(tableName);
+
+        switch (ddlConfig.getDdlOperationEnum()) {
+            case ALTER_ADD: {
+                List<Field> addFields = new ArrayList<>();
+                for (Field column : tableGroup.getSourceTable().getColumn()) {
+                    if (column != null && ddlConfig.getAddedFieldNames().contains(column.getName())) {
+                        addFields.add(column);
+                    }
+                }
+                return database.buildAddColumnsSql((DatabaseConnectorInstance) tConnectorInstance, tableName,
+                        qualifiedName, addFields);
+            }
+            case ALTER_MODIFY: {
+                List<Field> modifyFields = new ArrayList<>();
+                List<String> modifyNames = new ArrayList<>();
+                for (Field column : tableGroup.getSourceTable().getColumn()) {
+                    if (column != null && ddlConfig.getModifiedFieldNames().contains(column.getName())) {
+                        modifyFields.add(column);
+                        modifyNames.add(column.getName());
+                    }
+                }
+                if (modifyFields.isEmpty()) {
+                    return StringUtil.EMPTY;
+                }
+                ValidateSyncTask pseudoTask = new ValidateSyncTask();
+                pseudoTask.setTargetDatabase(catalog);
+                return database.buildModifyColumnsSql((DatabaseConnectorInstance) tConnectorInstance, pseudoTask,
+                        tableName, modifyFields, modifyNames);
+            }
+            case ALTER_DROP:
+                return database.buildDropColumnsSql((DatabaseConnectorInstance) tConnectorInstance, tableName,
+                        qualifiedName, ddlConfig.getDroppedFieldNames());
+            case ALTER_CHANGE:
+                logger.warn("跨源 DDL 暂不支持字段重命名, 已跳过: table={}, change={}",
+                        tableName, ddlConfig.getChangedFieldNames());
+                return StringUtil.EMPTY;
+            default:
+                return StringUtil.EMPTY;
         }
     }
 
