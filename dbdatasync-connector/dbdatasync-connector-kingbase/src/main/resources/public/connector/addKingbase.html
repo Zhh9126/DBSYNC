@@ -62,8 +62,12 @@
         <div class="form-item">
             <label class="form-label">插件</label>
             <select class="form-control" id="pluginName" name="pluginName">
+                <option value="syslogical_output"
+                        th:selected="${#maps.isEmpty(connector?.config?.extInfo) or connector?.config?.extInfo?.pluginName eq 'syslogical_output'}">
+                    syslogical_output
+                </option>
                 <option value="test_decoding"
-                        th:selected="${#maps.isEmpty(connector?.config?.extInfo) or connector?.config?.extInfo?.pluginName eq 'test_decoding'}">
+                        th:selected="${connector?.config?.extInfo?.pluginName eq 'test_decoding'}">
                     test_decoding
                 </option>
             </select>
