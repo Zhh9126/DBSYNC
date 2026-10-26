@@ -3,7 +3,7 @@
 conf/*
 data
 lib
-plugins
+/plugins
 *.iml
 out
 gen
