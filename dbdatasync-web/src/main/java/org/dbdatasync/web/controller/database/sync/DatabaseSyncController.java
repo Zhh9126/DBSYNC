@@ -51,6 +51,9 @@ public class DatabaseSyncController extends BaseController {
     @Resource
     private org.dbdatasync.biz.precheck.PreCheckService preCheckService;
 
+    @Resource
+    private org.dbdatasync.biz.service.DatabaseSyncPerfAdviceService databaseSyncPerfAdviceService;
+
     @RequestMapping("/list")
     public String list(ModelMap model) {
         initEditionInfo(model);
@@ -86,6 +89,11 @@ public class DatabaseSyncController extends BaseController {
             model.put("task", task);
             Integer metaState = task.getMetaState();
             model.put("readOnly", metaState != null && CommonTaskStatusEnum.isRunning(metaState));
+        } else if ("perf".equals(page)) {
+            Assert.hasText(id, "任务 ID 不能为空");
+            model.put("taskId", id);
+            DatabaseSyncTaskVO task = databaseSyncService.get(id);
+            model.put("taskName", task != null ? task.getName() : id);
         }
         return "database-sync/" + page;
     }
@@ -161,6 +169,35 @@ public class DatabaseSyncController extends BaseController {
     public RestResult precheck(@RequestParam("id") String id) {
         try {
             return RestResult.restSuccess(preCheckService.preCheckDatabaseSync(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 整库迁移性能适配报告（文档级建议，不自动执行 DDL）。
+     */
+    @PostMapping("/perfAdvice")
+    @ResponseBody
+    public RestResult perfAdvice(@RequestParam("id") String id) {
+        try {
+            return RestResult.restSuccess(databaseSyncPerfAdviceService.analyze(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 迁移阶段推进：schedule → full → increment → validate → switchover。
+     * 阶段持久化到任务级 Meta.SNAPSHOT（migrationStage），链完成后再次调用返回当前阶段。
+     */
+    @PostMapping("/advanceStage")
+    @ResponseBody
+    public RestResult advanceStage(@RequestParam("id") String id) {
+        try {
+            return RestResult.restSuccess(databaseSyncService.advanceMigrationStage(id));
         } catch (Exception e) {
             logger.error(e.getLocalizedMessage(), e);
             return RestResult.restFail(e.getMessage());

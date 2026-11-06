@@ -17,6 +17,7 @@
         </div>
 
         <form id="mappingAddForm">
+
             <!-- 数据源和目标源 -->
             <div class="grid grid-cols-2">
                 <!-- 数据源 -->
@@ -134,6 +135,31 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 全量分片并发读（对标 DataX splitPk） -->
+            <div class="mt-5">
+                <div class="text-sm text-gray-700 font-weight-bold">
+                    <i class="fa fa-tasks text-primary"></i> 全量分片并发读
+                    <span class="badge badge-info text-xs align-middle">对标 DataX splitPk</span>
+                </div>
+                <div class="grid grid-cols-2 gap-4 mt-2">
+                    <div class="form-item">
+                        <label class="form-label">分片键（源表列，建议整型主键/索引列）</label>
+                        <input type="text" class="form-control form-control-sm" id="fullSplitKey"
+                               placeholder="如 id，留空表示不启用分片" />
+                    </div>
+                    <div class="form-item">
+                        <label class="form-label">分片数（&gt;1 启用并发）</label>
+                        <input type="number" class="form-control form-control-sm" id="fullSplitCount" min="2" max="1024"
+                               placeholder="如 4" />
+                    </div>
+                </div>
+                <div class="text-xs text-gray-500 mt-2">
+                    <i class="fa fa-info-circle text-primary"></i> 全量同步按分片键值域切分为多个区间并发读取，分片数超过执行线程数自动收敛；
+                    分片键非法或值域探测失败自动降级串行。适合大数据量整表搬迁。
+                </div>
+            </div>
+            <input type="hidden" name="params" id="mappingParams" value="{}" />
         </form>
     </div>
 </div>
@@ -260,6 +286,16 @@
             try { paramsObj = JSON.parse(paramsStr); } catch (e) { paramsObj = {}; }
             var syncMode = ($form.find('input[name="syncMode"]:checked').val() || 'SYNC').toUpperCase();
             paramsObj.syncMode = (syncMode === 'ASYNC') ? 'ASYNC' : 'SYNC';
+            // 全量分片并发读配置合并入 params JSON
+            var splitKey = $.trim($('#fullSplitKey').val() || '');
+            var splitCount = $.trim($('#fullSplitCount').val() || '');
+            if (splitKey === '' || splitCount === '' || parseInt(splitCount, 10) <= 0) {
+                delete paramsObj.fullSplitKey;
+                delete paramsObj.fullSplitCount;
+            } else {
+                paramsObj.fullSplitKey = splitKey;
+                paramsObj.fullSplitCount = parseInt(splitCount, 10);
+            }
             $paramsInput.val(JSON.stringify(paramsObj));
 
             if (validateForm($form)) {

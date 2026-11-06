@@ -157,6 +157,13 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         if (sampleStep >= 1) {
             task.setSampleStep(sampleStep);
         }
+        // 分片并发校验数: full 模式单列主键时按主键值域分片并发(对标 Wave4 全量分片读); 非法回退 0=串行
+        String fullSplitCount = params.get("fullSplitCount");
+        if (StringUtil.isNotBlank(fullSplitCount) && fullSplitCount.matches("\\d+")) {
+            task.setFullSplitCount(fullSplitCount);
+        } else {
+            task.setFullSplitCount("0");
+        }
         // 关联整库迁移任务: 按库映射直接复制其表组, 用于迁移/同步完成后的数据一致性对比
         String databaseSyncTaskId = params.get("databaseSyncTaskId");
         if (StringUtil.isNotBlank(databaseSyncTaskId)) {
@@ -790,6 +797,15 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         task.setReadNum(NumberUtil.toInt(params.get("readNum"), task.getReadNum()));
         task.setBatchNum(NumberUtil.toInt(params.get("batchNum"), task.getBatchNum()));
         task.setThreadNum(NumberUtil.toInt(params.get("threadNum"), task.getThreadNum()));
+        // 分片并发校验数: 仅接受数字, 否则保持原值(存量任务兼容)
+        String fullSplitCount = params.get("fullSplitCount");
+        if (StringUtil.isNotBlank(fullSplitCount)) {
+            if (fullSplitCount.matches("\\d+")) {
+                task.setFullSplitCount(fullSplitCount);
+            } else {
+                task.setFullSplitCount("0");
+            }
+        }
     }
 
     private void log(LogType log, ValidateSyncTask task, TableGroup tableGroup) {

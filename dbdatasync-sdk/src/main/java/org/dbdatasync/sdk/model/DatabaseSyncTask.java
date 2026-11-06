@@ -72,6 +72,20 @@ public class DatabaseSyncTask extends ConfigModel {
      */
     private boolean enableAutoDiscover;
 
+    /**
+     * 迁移编排阶段: schedule(编排就绪) → full(全量迁移) → increment(增量追平) → validate(一致性校验) → switchover(切换)
+     * <p>由 {@code DatabaseSyncServiceImpl} 推进；持久化到 Meta.SNAPSHOT（migrationStage），不随任务配置导出。</p>
+     */
+    private String migrationStage = "schedule";
+
+    public String getMigrationStage() {
+        return migrationStage;
+    }
+
+    public void setMigrationStage(String migrationStage) {
+        this.migrationStage = migrationStage == null ? "schedule" : migrationStage;
+    }
+
     public boolean isEnableAutoDiscover() {
         return enableAutoDiscover;
     }
@@ -150,5 +164,78 @@ public class DatabaseSyncTask extends ConfigModel {
 
     public void setMappingIds(List<String> mappingIds) {
         this.mappingIds = mappingIds == null ? new ArrayList<>() : mappingIds;
+    }
+
+    /**
+     * 每秒最多迁移行数（0 = 不限速）
+     */
+    private long recordsPerSecond = 0;
+    /**
+     * 每秒最多迁移字节数（0 = 不限速）
+     */
+    private long bytesPerSecond = 0;
+    /**
+     * 是否仅在低峰时间窗内启动
+     */
+    private boolean enableOffPeakWindow = false;
+    /**
+     * 低峰窗口开始时间（HH:mm，24 小时制）
+     */
+    private String windowStart = "";
+    /**
+     * 低峰窗口结束时间（HH:mm，24 小时制）；start &gt; end 表示跨越 24:00
+     */
+    private String windowEnd = "";
+    /**
+     * 全量完成后是否自动推进到增量追平阶段
+     */
+    private boolean autoAdvanceStage = false;
+
+    public long getRecordsPerSecond() {
+        return recordsPerSecond;
+    }
+
+    public void setRecordsPerSecond(long recordsPerSecond) {
+        this.recordsPerSecond = recordsPerSecond;
+    }
+
+    public long getBytesPerSecond() {
+        return bytesPerSecond;
+    }
+
+    public void setBytesPerSecond(long bytesPerSecond) {
+        this.bytesPerSecond = bytesPerSecond;
+    }
+
+    public boolean isEnableOffPeakWindow() {
+        return enableOffPeakWindow;
+    }
+
+    public void setEnableOffPeakWindow(boolean enableOffPeakWindow) {
+        this.enableOffPeakWindow = enableOffPeakWindow;
+    }
+
+    public String getWindowStart() {
+        return windowStart;
+    }
+
+    public void setWindowStart(String windowStart) {
+        this.windowStart = windowStart == null ? "" : windowStart;
+    }
+
+    public String getWindowEnd() {
+        return windowEnd;
+    }
+
+    public void setWindowEnd(String windowEnd) {
+        this.windowEnd = windowEnd == null ? "" : windowEnd;
+    }
+
+    public boolean isAutoAdvanceStage() {
+        return autoAdvanceStage;
+    }
+
+    public void setAutoAdvanceStage(boolean autoAdvanceStage) {
+        this.autoAdvanceStage = autoAdvanceStage;
     }
 }

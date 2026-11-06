@@ -15,7 +15,21 @@
             <groupId>org.ghi</groupId>
             <artifactId>DBDataSync-manager</artifactId>
             <version>${project.parent.version}</version>
+            <exclusions>
+                <!-- 项目主日志为 log4j2（spring-boot-starter-log4j2）；
+                     排除其默认 logback/log4j-to-slf4j，避免双 SLF4J 绑定冲突 -->
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-logging</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
+        <!-- 单元测试 -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

@@ -1421,6 +1421,19 @@
     }
 
     function syncMappingsJson() {
+        // Wave10 P0-2：前后端统一为数组契约。异常形态在此就地归一，正常路径行为零变化。
+        // 保证 databaseMappingsJson 恒为 JSON 数组，且每个 block 的 tableMappings 恒为数组。
+        if (!Array.isArray(state.mappings)) {
+            state.mappings = [];
+        }
+        state.mappings = state.mappings.filter(function (block) {
+            return block && typeof block === 'object';
+        });
+        state.mappings.forEach(function (block) {
+            if (!Array.isArray(block.tableMappings)) {
+                block.tableMappings = [];
+            }
+        });
         reindexMappings();
         $('#databaseMappingsJson').val(JSON.stringify(state.mappings));
     }

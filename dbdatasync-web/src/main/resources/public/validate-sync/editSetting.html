@@ -3,7 +3,7 @@
       xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 
 <div th:fragment="content" id="validate_sync_advanced_setting">
-    <div class="grid grid-cols-3">
+    <div class="grid grid-cols-4">
         <div class="form-item">
             <label class="form-label">
                 批量读取 <strong class="text-primary">*</strong>
@@ -34,6 +34,19 @@
                 <input type="number" name="threadNum" class="form-control" min="1" max="64" required
                        placeholder="1-64"
                        th:value="${task != null and task.threadNum > 0 ? task.threadNum : 10}" />
+            </div>
+        </div>
+
+        <div class="form-item">
+            <label class="form-label">
+                分片并发数
+                <i class="fa fa-question-circle" title="full 模式单列主键时按主键值域分片并发校验; 0 或 1 = 串行"></i>
+            </label>
+            <div class="form-control-area">
+                <input type="number" name="fullSplitCount" class="form-control" min="0" max="1024"
+                       placeholder="0-1024"
+                       th:value="${task != null and task.fullSplitCount != null ? task.fullSplitCount : '0'}" />
+                <span class="text-xs text-gray-500">0 或 1 = 串行</span>
             </div>
         </div>
     </div>

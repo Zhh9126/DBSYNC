@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- SQL 兼容度扫描（迁移前应用适配评估） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">SQL 兼容度扫描</h3>
+    </div>
+    <div class="card-body">
+        <div class="tip-box mb-3">
+            <i class="fa fa-info-circle"></i>
+            用于<strong>迁移前应用适配评估</strong>：粘贴源库 SQL（可多条），选择源/目标方言，
+            静态扫描不兼容的函数、操作符、语法结构与数据类型，输出分级问题清单与改写建议。
+            <br><span class="text-tertiary">仅做兼容度评估，不自动转换 SQL；复杂项请按建议人工重写。</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 mb-3">
+            <div>
+                <label class="form-label">源方言</label>
+                <select id="sourceDialect" class="form-input">
+                    <option value="" th:if="${dialects}">请选择源数据库</option>
+                    <option th:each="d : ${dialects}" th:value="${d}" th:text="${d}"></option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label">目标方言</label>
+                <select id="targetDialect" class="form-input">
+                    <option value="" th:if="${dialects}">请选择目标数据库</option>
+                    <option th:each="d : ${dialects}" th:value="${d}" th:text="${d}"></option>
+                </select>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">目标字段长度不足（示例：同名映射自动生成字段映射）</label>
+            <textarea id="sqlText" class="form-input" rows="12"
+                      placeholder="粘贴 SQL，支持多条语句（以分号分隔）&#10;示例：&#10;SELECT NVL(a.amount, 0) FROM t a WHERE ROWNUM <= 10;&#10;SELECT * FROM t CONNECT BY PRIOR id = pid;"
+                      style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+        </div>
+
+        <div class="flex items-center justify-between mb-3">
+            <div>
+                <button class="btn btn-primary" id="scanBtn" onclick="doScan()">
+                    <i class="fa fa-search"></i> 开始扫描
+                </button>
+                <button class="btn btn-secondary" onclick="clearScan()">
+                    <i class="fa fa-times"></i> 清空
+                </button>
+            </div>
+            <span class="text-xs text-tertiary" id="scanStat"></span>
+        </div>
+
+        <!-- 结果区 -->
+        <div id="scanResult" style="display:none;">
+            <div class="mb-2" id="scanSummary"></div>
+            <div style="max-height:420px;overflow:auto;">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th style="width:90px;">级别</th>
+                        <th style="width:110px;">代号</th>
+                        <th style="width:120px;">元素</th>
+                        <th>SQL</th>
+                        <th style="width:200px;">说明</th>
+                        <th style="width:260px;">建议</th>
+                        <th style="width:300px;">改写草稿（warn 可机械改）</th>
+                    </tr>
+                    </thead>
+                    <tbody id="scanTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="scanEmpty" style="display:none;" class="text-center py-4 text-tertiary">暂无扫描结果</div>
+
+        <!-- Wave10 P1-1：独立 DDL 建表语句转换草稿区块（沿用 Wave8 草稿列风格） -->
+        <div class="mt-5 pt-4 border-t">
+            <h4 class="mb-2 font-medium text-sm">
+                <i class="fa fa-file-code-o text-primary"></i> DDL 建表语句转换草稿
+            </h4>
+            <div class="tip-box mb-3 text-xs">
+                粘贴源库 CREATE TABLE DDL，生成<strong>类型映射草稿</strong>
+                （VARCHAR2/NVARCHAR2→VARCHAR、NUMBER→DECIMAL、CLOB→TEXT、BOOLEAN→TINYINT(1)）。
+                <br><span class="text-tertiary">草稿仅供人工确认，不自动执行；ROWID/UROWID 等 error 级类型需人工重写，不生成草稿。</span>
+            </div>
+            <div class="grid grid-cols-2 gap-4 mb-3">
+                <div>
+                    <label class="form-label">源方言（DDL）</label>
+                    <select id="ddlSourceDialect" class="form-input">
+                        <option value="">请选择源数据库</option>
+                        <option th:each="d : ${dialects}" th:value="${d}" th:text="${d}"></option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">目标方言（DDL）</label>
+                    <select id="ddlTargetDialect" class="form-input">
+                        <option value="">请选择目标数据库</option>
+                        <option th:each="d : ${dialects}" th:value="${d}" th:text="${d}"></option>
+                    </select>
+                </div>
+            </div>
+            <div class="mb-3">
+                <textarea id="ddlText" class="form-input" rows="5"
+                          placeholder="CREATE TABLE t (id NUMBER(10), name VARCHAR2(64), memo CLOB, flag BOOLEAN, addr NVARCHAR2(32));"
+                          style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+            </div>
+            <div class="mb-3">
+                <button class="btn btn-primary" id="ddlDraftBtn" onclick="doDdlDraft()">
+                    <i class="fa fa-magic"></i> 生成 DDL 草稿
+                </button>
+            </div>
+            <div id="ddlDraftResult" style="display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    // 方言列表注入
+    const SCAN_DIALECTS = /*[[${dialects}]]*/ [];
+
+    function doScan() {
+        const sql = document.getElementById('sqlText').value.trim();
+        const source = document.getElementById('sourceDialect').value;
+        const target = document.getElementById('targetDialect').value;
+        if (!sql) {
+            bootGrowl('请先粘贴要扫描的 SQL', 'warning');
+            return;
+        }
+        if (!source || !target) {
+            bootGrowl('请选择源方言与目标方言', 'warning');
+            return;
+        }
+        if (source === target) {
+            bootGrowl('源与目标相同，无需扫描', 'warning');
+            return;
+        }
+        const btn = document.getElementById('scanBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 扫描中…';
+        doPoster('/sql-scan/scan', {
+            sql: sql,
+            sourceDialect: source,
+            targetDialect: target
+        }, function (response) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-search"></i> 开始扫描';
+            if (!response.success) {
+                bootGrowl(response.message || '扫描失败', 'danger');
+                return;
+            }
+            renderScanResult(response.data, source, target);
+        });
+    }
+
+    function renderScanResult(data, source, target) {
+        document.getElementById('scanResult').style.display = 'block';
+        document.getElementById('scanEmpty').style.display = 'none';
+        const issues = (data && data.issues) ? data.issues : [];
+        const errors = issues.filter(function (x) { return x && x.level === 'error'; });
+        const warns = issues.filter(function (x) { return x && x.level === 'warn'; });
+        const infos = issues.filter(function (x) { return x && x.level === 'info'; });
+
+        const scanned = data && data.scanned;
+        let summary = '<span class="badge badge-primary">' + source + ' → ' + target + '</span> ';
+        if (!scanned) {
+            summary += '<span class="badge badge-warning">方言不受支持，未扫描</span>';
+        } else {
+            summary += '<span class="badge badge-error">阻断 ' + errors.length + '</span> '
+                + '<span class="badge badge-warning">告警 ' + warns.length + '</span> '
+                + '<span class="badge badge-info">提示 ' + infos.length + '</span> '
+                + '<span class="text-xs text-tertiary ml-2">共 '
+                + (data ? (data.statementCount || 0) : 0) + ' 条语句</span>';
+        }
+        document.getElementById('scanSummary').innerHTML = summary;
+
+        const body = document.getElementById('scanTableBody');
+        body.innerHTML = '';
+        if (issues.length === 0) {
+            document.getElementById('scanResult').style.display = 'none';
+            document.getElementById('scanEmpty').style.display = 'block';
+            return;
+        }
+        function renderRewriteDraft(x) {
+            if (x && x.rewrittenSql) {
+                return '<code class="text-xs" style="word-break:break-all;color:#0a7d33;">' + escapeHtml(x.rewrittenSql) + '</code>';
+            }
+            if (x && x.level === 'error') {
+                return '<span class="text-xs text-tertiary">需人工重写</span>';
+            }
+            return '<span class="text-xs text-tertiary">—</span>';
+        }
+        issues.forEach(function (x) {
+            const badge = x.level === 'error'
+                ? '<span class="badge badge-error">阻断</span>'
+                : (x.level === 'warn'
+                    ? '<span class="badge badge-warning">告警</span>'
+                    : '<span class="badge badge-info">提示</span>');
+            const sqlSnippet = (x.sql || '').length > 120
+                ? escapeHtml((x.sql || '').substring(0, 120)) + '…'
+                : escapeHtml(x.sql || '');
+            const tr = document.createElement('tr');
+            tr.innerHTML = ''
+                + '<td>' + badge + '</td>'
+                + '<td class="text-xs text-tertiary whitespace-nowrap">' + escapeHtml(x.code || '') + '</td>'
+                + '<td class="text-xs">' + escapeHtml(x.element || '') + '</td>'
+                + '<td class="text-xs" style="word-break:break-all;">' + sqlSnippet + '</td>'
+                + '<td class="text-xs">' + escapeHtml(x.message || '') + '</td>'
+                + '<td class="text-xs text-secondary">' + escapeHtml(x.suggestion || '') + '</td>'
+                + '<td class="text-xs" style="word-break:break-all;">' + renderRewriteDraft(x) + '</td>';
+            body.appendChild(tr);
+        });
+    }
+
+    function clearScan() {
+        document.getElementById('sqlText').value = '';
+        document.getElementById('sourceDialect').value = '';
+        document.getElementById('targetDialect').value = '';
+        document.getElementById('scanResult').style.display = 'none';
+        document.getElementById('scanEmpty').style.display = 'none';
+        document.getElementById('scanStat').textContent = '';
+    }
+
+    // Wave10 P1-1：DDL 建表语句转换草稿（独立接口 /sql-scan/ddlDraft）
+    function doDdlDraft() {
+        const ddl = document.getElementById('ddlText').value.trim();
+        const source = document.getElementById('ddlSourceDialect').value;
+        const target = document.getElementById('ddlTargetDialect').value;
+        if (!ddl) {
+            bootGrowl('请先粘贴 CREATE TABLE DDL', 'warning');
+            return;
+        }
+        if (!source || !target) {
+            bootGrowl('请选择源方言与目标方言', 'warning');
+            return;
+        }
+        const btn = document.getElementById('ddlDraftBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 生成中…';
+        doPoster('/sql-scan/ddlDraft', {
+            sql: ddl,
+            sourceDialect: source,
+            targetDialect: target
+        }, function (response) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-magic"></i> 生成 DDL 草稿';
+            if (!response.success) {
+                bootGrowl(response.message || '生成 DDL 草稿失败', 'danger');
+                return;
+            }
+            renderDdlDraft(response.data || {});
+        });
+    }
+
+    function renderDdlDraft(d) {
+        const box = document.getElementById('ddlDraftResult');
+        box.style.display = 'block';
+        let html = '';
+        if (d.level === 'error') {
+            html += '<div class="p-2 mb-2 text-xs text-danger border rounded bg-surface">'
+                + 'error 级类型需人工重写，不生成草稿。</div>';
+        } else if (!d.changed) {
+            html += '<div class="p-2 mb-2 text-xs text-tertiary border rounded bg-surface">'
+                + '无映射命中，返回原 SQL。</div>';
+        } else {
+            html += '<div class="p-2 mb-2 text-xs border rounded bg-surface">'
+                + '<span class="badge badge-warning">草稿 / 需人工确认 / 不自动执行</span></div>';
+        }
+        if (d.mappedTypes && d.mappedTypes.length) {
+            html += '<div class="text-xs mb-2">命中类型：' + escapeHtml(d.mappedTypes.join('、')) + '</div>';
+        }
+        const shown = d.draftDdl || d.originalDdl || '';
+        if (shown) {
+            html += '<pre class="text-xs p-2 border rounded bg-surface" '
+                + 'style="white-space:pre-wrap;word-break:break-all;font-family:Consolas,Menlo,monospace;">'
+                + escapeHtml(shown) + '</pre>';
+        }
+        if (d.note) {
+            html += '<div class="text-xs text-tertiary mt-1">' + escapeHtml(d.note) + '</div>';
+        }
+        box.innerHTML = html;
+    }
+</script>

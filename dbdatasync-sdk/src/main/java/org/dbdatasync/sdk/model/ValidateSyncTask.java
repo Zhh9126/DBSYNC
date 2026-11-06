@@ -82,6 +82,11 @@ public class ValidateSyncTask extends ConfigModel {
     private int sampleStep = 10;
 
     /**
+     * 分片数: full 模式下单列主键且 fullSplitCount>1 时按主键值域分片并发校验(对标 Wave4 全量分片读); 默认 0=串行
+     */
+    private String fullSplitCount = "0";
+
+    /**
      * 任务执行时是否自动删除目标库中源表不存在的多余行
      */
     private boolean enableReverseSync = false;
@@ -234,6 +239,8 @@ public class ValidateSyncTask extends ConfigModel {
     public void setCompareMode(String compareMode) { this.compareMode = compareMode; }
     public int getSampleStep() { return sampleStep; }
     public void setSampleStep(int sampleStep) { this.sampleStep = sampleStep; }
+    public String getFullSplitCount() { return fullSplitCount; }
+    public void setFullSplitCount(String fullSplitCount) { this.fullSplitCount = fullSplitCount; }
 
     public boolean isEnableReverseScan() {
         return enableReverseScan;

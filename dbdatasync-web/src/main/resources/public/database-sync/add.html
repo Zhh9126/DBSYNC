@@ -132,6 +132,70 @@
 
             <input type="hidden" name="databaseMappingsJson" id="databaseMappingsJson" value="[]"/>
         </form>
+
+        <!-- Wave10 P1-3：应用 SQL 兼容度预检（可选，默认收起 / 不填不生效）。
+             置于 form 之外且所有控件无 name，保存时 $form.serializeJson() 不会携带任何预检字段。 -->
+        <details class="mt-5 border rounded bg-surface" id="sqlPrecheckSection">
+            <summary class="p-3 font-medium text-sm cursor-pointer">
+                <i class="fa fa-search text-primary"></i> 应用 SQL 兼容度预检
+                <span class="text-xs text-tertiary ml-2">（可选 · 默认收起 · 不填不生效）</span>
+            </summary>
+            <div class="p-3 border-t">
+                <div class="tip-box mb-3 text-xs">
+                    输入应用 SQL 文本（多语句）或本地 SQL 目录，生成<strong>兼容度预检报告</strong>。
+                    <br><span class="text-tertiary">仅提示、不阻断任务创建；报告仅展示，不执行任何 SQL、不连库、不自动执行 DDL。</span>
+                </div>
+                <div class="grid grid-cols-2 gap-4 mb-3">
+                    <div>
+                        <label class="form-label">源方言</label>
+                        <select id="precheckSourceDialect" class="form-control">
+                            <option value="">请选择源数据库</option>
+                            <option value="MySQL">MySQL</option>
+                            <option value="TiDB">TiDB</option>
+                            <option value="Oracle">Oracle</option>
+                            <option value="OceanBase">OceanBase</option>
+                            <option value="DM">DM</option>
+                            <option value="PostgreSQL">PostgreSQL</option>
+                            <option value="Kingbase">Kingbase</option>
+                            <option value="SQLServer">SQLServer</option>
+                            <option value="ClickHouse">ClickHouse</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">目标方言</label>
+                        <select id="precheckTargetDialect" class="form-control">
+                            <option value="">请选择目标数据库</option>
+                            <option value="MySQL">MySQL</option>
+                            <option value="TiDB">TiDB</option>
+                            <option value="Oracle">Oracle</option>
+                            <option value="OceanBase">OceanBase</option>
+                            <option value="DM">DM</option>
+                            <option value="PostgreSQL">PostgreSQL</option>
+                            <option value="Kingbase">Kingbase</option>
+                            <option value="SQLServer">SQLServer</option>
+                            <option value="ClickHouse">ClickHouse</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">应用 SQL 文本（多语句，以分号分隔）</label>
+                    <textarea id="precheckSqlText" class="form-control" rows="5"
+                              placeholder="SELECT NVL(a,0) FROM t WHERE ROWNUM <= 10;&#10;SELECT * FROM t CONNECT BY PRIOR id = pid;"
+                              style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">本地 SQL 目录（可选，纯文件 IO，仅读取 *.sql）</label>
+                    <input id="precheckSqlDir" class="form-control" type="text"
+                           placeholder="例如：E:/app/sql（服务端本地目录，深度≤3 / 200 文件 / 单文件 1MB / 总计 10MB）"/>
+                </div>
+                <div class="mb-3">
+                    <button type="button" class="btn btn-outline" id="precheckRunBtn" onclick="runSqlPrecheck()">
+                        <i class="fa fa-search"></i> 生成预检报告
+                    </button>
+                </div>
+                <div id="precheckReport" style="display:none;"></div>
+            </div>
+        </details>
     </div>
     <div class="blank-block"></div>
 </div>
@@ -142,6 +206,78 @@
         readOnly: false,
         task: null
     };
+
+    // Wave10 P1-3：可选预检（独立接口 /database-sync/sqlPrecheck）。
+    // 默认收起，不填不生效；报告仅展示，不写入任务、不阻断保存。
+    function runSqlPrecheck() {
+        const text = document.getElementById('precheckSqlText').value.trim();
+        const dir = document.getElementById('precheckSqlDir').value.trim();
+        const source = document.getElementById('precheckSourceDialect').value;
+        const target = document.getElementById('precheckTargetDialect').value;
+        if (!text && !dir) {
+            bootGrowl('请填写 SQL 文本或本地 SQL 目录（可选，不填不生效）', 'warning');
+            return;
+        }
+        const btn = document.getElementById('precheckRunBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 预检中…';
+        doPoster('/database-sync/sqlPrecheck', {
+            appSqlText: text,
+            appSqlDir: dir,
+            sourceDialect: source,
+            targetDialect: target
+        }, function (response) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-search"></i> 生成预检报告';
+            const box = document.getElementById('precheckReport');
+            box.style.display = 'block';
+            if (!response.success) {
+                box.innerHTML = '<div class="p-2 text-xs text-danger border rounded bg-surface">'
+                    + escapeHtml(response.message || '预检失败') + '</div>';
+                return;
+            }
+            renderPrecheckReport(response.data || {});
+        });
+    }
+
+    function renderPrecheckReport(report) {
+        const box = document.getElementById('precheckReport');
+        const result = report.result || null;
+        let html = '<div class="p-2 mb-2 text-xs text-tertiary border rounded bg-surface">'
+            + '输入模式：' + escapeHtml(report.inputMode || 'none')
+            + ' ｜ ' + escapeHtml(report.inputSummary || '')
+            + ' ｜ ' + escapeHtml(report.hint || '仅提示，不阻断任务创建')
+            + ' ｜ 阻断任务创建：' + (report.blocking ? '是' : '否') + '</div>';
+        if (!result) {
+            html += '<div class="p-2 text-xs text-tertiary">未输入有效 SQL，未执行扫描。</div>';
+            box.innerHTML = html;
+            return;
+        }
+        html += '<div class="mb-2">'
+            + '<span class="badge badge-error">阻断 ' + (result.errorCount || 0) + '</span> '
+            + '<span class="badge badge-warning">告警 ' + (result.warnCount || 0) + '</span> '
+            + '<span class="badge badge-info">提示 ' + (result.infoCount || 0) + '</span> '
+            + '<span class="text-xs text-tertiary ml-2">共 '
+            + (result.statementCount || 0) + ' 条语句</span></div>';
+        const issues = result.issues || [];
+        if (!issues.length) {
+            html += '<div class="p-2 text-xs text-tertiary">暂无问题清单。</div>';
+        } else {
+            html += '<div style="max-height:360px;overflow:auto;">'
+                + '<table class="table table-compact"><thead><tr>'
+                + '<th>级别</th><th>代号</th><th>元素</th><th>说明</th><th>建议</th>'
+                + '</tr></thead><tbody>';
+            issues.forEach(function (x) {
+                html += '<tr><td class="text-xs">' + escapeHtml(x.level || '') + '</td>'
+                    + '<td class="text-xs whitespace-nowrap">' + escapeHtml(x.code || '') + '</td>'
+                    + '<td class="text-xs">' + escapeHtml(x.element || '') + '</td>'
+                    + '<td class="text-xs">' + escapeHtml(x.message || '') + '</td>'
+                    + '<td class="text-xs">' + escapeHtml(x.suggestion || '') + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+        box.innerHTML = html;
+    }
 </script>
 <script th:src="@{/js/database-sync/database-sync.js}"></script>
 </html>

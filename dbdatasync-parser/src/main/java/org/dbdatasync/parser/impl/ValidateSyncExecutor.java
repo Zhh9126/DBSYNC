@@ -48,9 +48,15 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 订正校验任务执行引擎：连接源/目标库，执行表结构、行数据、索引比对，
@@ -83,6 +89,9 @@ public class ValidateSyncExecutor {
 
     /** 明细类型：索引 */
     public static final String CHECK_TYPE_INDEX = "index";
+
+    /** 快速体检模式（count+min/max 秒级粗检）：compareMode=health */
+    public static final String COMPARE_MODE_HEALTH = "health";
 
     private static final java.util.regex.Pattern DATETIME_PATTERN =
             java.util.regex.Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?");
@@ -342,11 +351,33 @@ public class ValidateSyncExecutor {
 
     /**
      * 行数据比对（分页读取 + 主键映射）。返回 [sourceTotal, targetTotal, diff, fixed]。
+     * <p>校验模式（compareMode）：
+     * <ul>
+     *   <li>full：默认，逐行精确比对；单列主键且配置 fullSplitCount&gt;1 时按主键值域分片并发，否则串行；</li>
+     *   <li>sample：抽样比对（每 sampleStep 页取 1 页），大表快速健康检查，禁用自动订正；</li>
+     *   <li>health：快速体检（count + min/max），秒级粗检，不订正。</li>
+     * </ul>
      */
     private long[] checkRowData(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
                                 String sourceTable, String targetTable,
                                 List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
                                 List<Map<String, Object>> content, boolean autoSync, String taskId) throws Exception {
+        String mode = fullCompareMode(task.getCompareMode());
+        boolean sampleMode = "sample".equalsIgnoreCase(mode);
+        boolean healthMode = COMPARE_MODE_HEALTH.equalsIgnoreCase(mode);
+        boolean sliceMode = !sampleMode && !healthMode && sliceable(pkCols == null ? 0 : pkCols.size(), task.getFullSplitCount());
+
+        // 快速体检：count + min/max，秒级粗检，无行级定位不订正
+        if (healthMode) {
+            return healthCheck(task, source, target, sourceTable, targetTable,
+                    pkCols, content, autoSync);
+        }
+        // 分片并发：单列主键值域切分 + 多线程逐行比对
+        if (sliceMode) {
+            return checkRowDataSliced(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, autoSync, taskId);
+        }
+
         long sourceTotal = countRows(source, sourceTable);
         long targetTotal = countRows(target, targetTable);
         long diff = 0L;
@@ -361,7 +392,6 @@ public class ValidateSyncExecutor {
         List<String> commonCols = commonColumnNames(sourceCols, targetCols);
         List<String> pkNames = columnNames(pkCols);
         // 对比模式: sample=抽样(按 sampleStep 跳页读, 大表快速健康检查), 抽样模式禁用自动订正
-        boolean sampleMode = "sample".equalsIgnoreCase(task.getCompareMode());
         int sampleStep = Math.max(1, task.getSampleStep());
         if (sampleMode) {
             addItem(content, rowDataItem(sourceTable, targetTable,
@@ -418,6 +448,343 @@ public class ValidateSyncExecutor {
             }
         }
         return new long[]{sourceTotal, targetTotal, diff, fixed};
+    }
+
+    /**
+     * 规范化校验模式：空白/非法值回退为 full（存量任务兼容）。包级可见以便单元测试。
+     */
+    static String fullCompareMode(String mode) {
+        if (StringUtil.isBlank(mode)) {
+            return "full";
+        }
+        if ("full".equalsIgnoreCase(mode) || "sample".equalsIgnoreCase(mode)
+                || COMPARE_MODE_HEALTH.equalsIgnoreCase(mode)) {
+            return mode.toLowerCase(Locale.ROOT);
+        }
+        return "full";
+    }
+
+    /**
+     * 分片并发适用性判定：仅当单列主键且任务配置了 fullSplitCount&gt;1 时启用（存量任务零影响）。包级可见以便单元测试。
+     */
+    static boolean sliceable(int pkSize, String fullSplitCount) {
+        if (pkSize != 1) {
+            return false;
+        }
+        return fullSplitCount != null && fullSplitCount.matches("\\d+") && Integer.parseInt(fullSplitCount) > 1;
+    }
+
+    /**
+     * 快速体检：源/目标各执行 COUNT + MIN/MAX（单列主键时），秒级粗检，不订正。
+     * <p>体检通过 = 行数一致（count 相等）且（无主键或主键 min/max 一致）；不一致产出差异明细表项。</p>
+     */
+    private long[] healthCheck(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
+                               String sourceTable, String targetTable, List<Field> pkCols,
+                               List<Map<String, Object>> content, boolean autoSync) {
+        long sCount = countRows(source, sourceTable);
+        long tCount = countRows(target, targetTable);
+        Object[] sRange = pkCols == null || pkCols.size() != 1 ? null
+                : queryRange(source, sourceTable, pkCols.get(0).getName());
+        Object[] tRange = pkCols == null || pkCols.size() != 1 ? null
+                : queryRange(target, targetTable, pkCols.get(0).getName());
+        long diff = 0L;
+        // 行数不一致
+        if (sCount != tCount) {
+            diff++;
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "行数不一致，source: " + sCount + ", target: " + tCount, "", null, null));
+        }
+        // 主键值域不一致
+        if (sRange != null && tRange != null && !sameRange(sRange, tRange)) {
+            diff++;
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "主键值域不一致，source: " + rangeText(sRange) + ", target: " + rangeText(tRange), "", null, null));
+        }
+        if (diff == 0) {
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "快速体检通过（行数 + 主键值域一致）", "", null, null));
+        }
+        logger.info("快速体检 [{} -> {}]: source={}, target={}, range={}~{}, diff={}",
+                sourceTable, targetTable, sCount, tCount,
+                sRange == null ? "-" : rangeText(sRange), tRange == null ? "-" : rangeText(tRange), diff);
+        return new long[]{sCount, tCount, diff, 0L};
+    }
+
+    private Object[] queryRange(DatabaseConnectorInstance db, String table, String pkName) {
+        String sql = "SELECT MIN(" + quote(db, pkName) + ") AS mn, MAX(" + quote(db, pkName) + ") AS mx FROM "
+                + quote(db, table);
+        return db.execute(t -> t.query(sql, rs -> {
+            if (!rs.next() || rs.getObject(1) == null) {
+                return null;
+            }
+            return new Object[]{normalize(rs.getObject(1)), normalize(rs.getObject(2))};
+        }));
+    }
+
+    private boolean sameRange(Object[] a, Object[] b) {
+        return a != null && b != null && String.valueOf(a[0]).equals(String.valueOf(b[0]))
+                && String.valueOf(a[1]).equals(String.valueOf(b[1]));
+    }
+
+    private String rangeText(Object[] r) {
+        return r == null ? "-" : "[" + r[0] + ", " + r[1] + "]";
+    }
+
+    /**
+     * 分片并发逐行比对：单列主键按 MIN/MAX 值域切分为左闭右开区间，
+     * 每个分片独立范围条件 + 独立 OFFSET 游标，多线程并发比对源/目标，共享任务启停信号。
+     * <p>目标端按主键 IN 批量取（天然落在分片主键区间，无重叠遗漏）。</p>
+     * <p>任一子分片失败即取消父任务并上抛首个异常，其余分片尽力退出。</p>
+     */
+    private long[] checkRowDataSliced(ValidateSyncTask task, DatabaseConnectorInstance source,
+                                      DatabaseConnectorInstance target, String sourceTable, String targetTable,
+                                      List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
+                                      List<Map<String, Object>> content, boolean autoSync, String taskId) throws Exception {
+        String pkName = pkCols.get(0).getName();
+        int sliceCount = Integer.parseInt(task.getFullSplitCount());
+        // 1、探测源端主键值域
+        Object[] range = queryRange(source, sourceTable, pkName);
+        if (range == null || range[0] == null || range[1] == null) {
+            logger.warn("分片校验值域探测失败/空表，降级串行:{} 表[{}]", taskId, sourceTable);
+            return checkRowDataSerial(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, autoSync, taskId);
+        }
+        Long min = toLong(range[0]);
+        Long max = toLong(range[1]);
+        // 2、值域切分（复用 Wave4 splitHalfOpenRange：左闭右开，最后一片闭到 max）
+        long[][] intervals = sliceRanges(min, max, sliceCount);
+        if (intervals.length <= 1) {
+            logger.info("分片校验值域不足2片，降级串行:{} 表[{}]", taskId, sourceTable);
+            return checkRowDataSerial(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, autoSync, taskId);
+        }
+        logger.info("分片并发校验:{} 表[{}] 主键[{}] 值域[{}~{}] 分片数[{}]", taskId, sourceTable,
+                pkName, range[0], range[1], intervals.length);
+
+        List<String> commonCols = commonColumnNames(sourceCols, targetCols);
+        List<String> pkNames = columnNames(pkCols);
+        int pageSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
+        // 对源行内容缓冲区与差异计数的并发聚合
+        List<Map<String, Object>> sliceContent = Collections.synchronizedList(content);
+        AtomicLong totalDiff = new AtomicLong(0L);
+        AtomicLong totalFixed = new AtomicLong(0L);
+
+        final int count = intervals.length;
+        final int poolSize = Math.min(count, task.getThreadNum() > 0 ? task.getThreadNum() : count);
+        final CountDownLatch latch = new CountDownLatch(count);
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
+            Thread t = new Thread(r, "vs-slice-" + taskId + "-" + r.hashCode());
+            t.setDaemon(true);
+            return t;
+        });
+        for (int i = 0; i < count; i++) {
+            final long[] interval = intervals[i];
+            pool.execute(() -> {
+                try {
+                    long[] counters = compareSlice(task, source, target, sourceTable, targetTable,
+                            pkName, interval[0], interval[1], commonCols, pkNames, pageSize,
+                            sliceContent, taskId);
+                    totalDiff.addAndGet(counters[0]);
+                    totalFixed.addAndGet(counters[1]);
+                } catch (Throwable e) {
+                    failure.compareAndSet(null, e);
+                    requestStop(taskId);
+                    logger.error(String.format("分片校验失败[%s] 区间[%d, %d):%s", taskId, interval[0], interval[1]), e);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        pool.shutdown();
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            requestStop(taskId);
+        }
+        if (failure.get() != null) {
+            Throwable e = failure.get();
+            if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            }
+            throw new RuntimeException(e);
+        }
+        logger.info("分片并发校验完成:{} 表[{}] 共{}个分片", taskId, sourceTable, count);
+        return new long[]{0L, 0L, totalDiff.get(), totalFixed.get()};
+    }
+
+    /**
+     * 单个分片比对：源端按主键范围 + OFFSET 游标逐页读，目标按主键 IN 批量取，逐行比对。
+     * <p>返回 [diff, fixed]（本分片内）。</p>
+     */
+    private long[] compareSlice(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
+                                String sourceTable, String targetTable, String pkName,
+                                long start, long end, List<String> commonCols, List<String> pkNames,
+                                int pageSize, List<Map<String, Object>> content, String taskId) throws Exception {
+        long diff = 0L;
+        long fixed = 0L;
+        boolean autoSync = task.isEnableSync();
+        int offset = 0;
+        while (true) {
+            if (isStopping(taskId)) {
+                break;
+            }
+            List<Map<String, Object>> srcPage = pageRowsByRange(source, sourceTable, pkNames, commonCols,
+                    pageSize, offset, pkName, start, end);
+            if (CollectionUtils.isEmpty(srcPage)) {
+                break;
+            }
+            List<String> keys = new ArrayList<>(srcPage.size());
+            for (Map<String, Object> row : srcPage) {
+                keys.add(buildKey(row, pkNames));
+            }
+            Map<String, Map<String, Object>> tgtPage = fetchByKeys(target, targetTable, pkNames, commonCols, keys, target);
+            for (Map<String, Object> srcRow : srcPage) {
+                String key = buildKey(srcRow, pkNames);
+                Map<String, Object> tgtRow = tgtPage.get(key);
+                if (tgtRow == null) {
+                    diff++;
+                    List<Map<String, Object>> details = buildDetails(srcRow, null, commonCols, pkNames);
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标缺失", targetTable, key, details, pkNames, srcRow, null, commonCols));
+                    addItem(content, item);
+                    if (autoSync && repairInsert(target, targetTable, commonCols, srcRow)) {
+                        fixed++;
+                        markRepaired(content, key, "目标缺失");
+                    }
+                    continue;
+                }
+                List<Map<String, Object>> differs = compareRows(srcRow, tgtRow, commonCols, pkNames);
+                if (!differs.isEmpty()) {
+                    diff++;
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames);
+                    item.put("repairSql", buildRepairSql("数据不一致", targetTable, key, differs, pkNames, srcRow, tgtRow, commonCols));
+                    addItem(content, item);
+                    if (autoSync && repairUpdate(target, targetTable, pkNames, key, differs)) {
+                        fixed++;
+                        markRepaired(content, key, "数据不一致");
+                    }
+                }
+            }
+            offset += srcPage.size();
+            if (srcPage.size() < pageSize) {
+                break;
+            }
+        }
+        return new long[]{diff, fixed};
+    }
+
+    /**
+     * 带主键范围条件的分页读取（分片并发用）：{@code WHERE pk >= ? AND pk < ? ORDER BY pk LIMIT ? OFFSET ?}。
+     */
+    private List<Map<String, Object>> pageRowsByRange(DatabaseConnectorInstance db, String table, List<String> orderCols,
+                                                      List<String> cols, int pageSize, int offset,
+                                                      String rangeKey, long start, long end) {
+        String select = cols.isEmpty() ? "*" : joinQuoted(db, cols);
+        StringBuilder sql = new StringBuilder("SELECT ").append(select).append(" FROM ").append(quote(db, table))
+                .append(" WHERE ").append(quote(db, rangeKey)).append(" >= ? AND ")
+                .append(quote(db, rangeKey)).append(" < ?");
+        if (!orderCols.isEmpty()) {
+            sql.append(" ORDER BY ").append(joinQuoted(db, orderCols));
+        }
+        sql.append(" LIMIT ? OFFSET ?");
+        return db.execute(t -> t.query(sql.toString(), rs -> {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            ResultSetMetaData md = rs.getMetaData();
+            int n = md.getColumnCount();
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                for (int i = 1; i <= n; i++) {
+                    row.put(md.getColumnLabel(i), normalize(rs.getObject(i)));
+                }
+                rows.add(row);
+            }
+            return rows;
+        }, start, end, pageSize, offset));
+    }
+
+    /**
+     * 原串行逐行比对（分片降级的共用实现，与 checkRowData 原串行分支逻辑一致）。
+     */
+    private long[] checkRowDataSerial(ValidateSyncTask task, DatabaseConnectorInstance source,
+                                      DatabaseConnectorInstance target, String sourceTable, String targetTable,
+                                      List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
+                                      List<Map<String, Object>> content, boolean autoSync, String taskId) throws Exception {
+        List<String> commonCols = commonColumnNames(sourceCols, targetCols);
+        List<String> pkNames = columnNames(pkCols);
+        boolean autoSyncFinal = autoSync;
+        if ("sample".equalsIgnoreCase(task.getCompareMode())) {
+            autoSyncFinal = false;
+        }
+        long sourceTotal = countRows(source, sourceTable);
+        long targetTotal = countRows(target, targetTable);
+        long diff = 0L;
+        long fixed = 0L;
+        int pageSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
+        int offset = 0;
+        while (true) {
+            if (isStopping(taskId)) {
+                break;
+            }
+            List<Map<String, Object>> srcPage = pageRows(source, sourceTable, pkNames, commonCols, pageSize, offset);
+            if (CollectionUtils.isEmpty(srcPage)) {
+                break;
+            }
+            List<String> keys = new ArrayList<>(srcPage.size());
+            for (Map<String, Object> row : srcPage) {
+                keys.add(buildKey(row, pkNames));
+            }
+            Map<String, Map<String, Object>> tgtPage = fetchByKeys(target, targetTable, pkNames, commonCols, keys, target);
+
+            for (Map<String, Object> srcRow : srcPage) {
+                String key = buildKey(srcRow, pkNames);
+                Map<String, Object> tgtRow = tgtPage.get(key);
+                if (tgtRow == null) {
+                    diff++;
+                    List<Map<String, Object>> details = buildDetails(srcRow, null, commonCols, pkNames);
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标缺失", targetTable, key, details, pkNames, srcRow, null, commonCols));
+                    addItem(content, item);
+                    if (autoSyncFinal && repairInsert(target, targetTable, commonCols, srcRow)) {
+                        fixed++;
+                        markRepaired(content, key, "目标缺失");
+                    }
+                    continue;
+                }
+                List<Map<String, Object>> differs = compareRows(srcRow, tgtRow, commonCols, pkNames);
+                if (!differs.isEmpty()) {
+                    diff++;
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames);
+                    item.put("repairSql", buildRepairSql("数据不一致", targetTable, key, differs, pkNames, srcRow, tgtRow, commonCols));
+                    addItem(content, item);
+                    if (autoSyncFinal && repairUpdate(target, targetTable, pkNames, key, differs)) {
+                        fixed++;
+                        markRepaired(content, key, "数据不一致");
+                    }
+                }
+            }
+            offset += srcPage.size();
+            if (srcPage.size() < pageSize) {
+                break;
+            }
+        }
+        return new long[]{sourceTotal, targetTotal, diff, fixed};
+    }
+
+    private static long toLong(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        return Long.parseLong(String.valueOf(value).trim());
+    }
+
+    /**
+     * 分片区间切片：把 [min,max] 按 count 切成左闭右开区间（复用 Wave4 的 splitHalfOpenRange）。
+     * 值域不足 2 片返回空数组（调用方据此降级串行）。包级可见以便单元测试。
+     */
+    static long[][] sliceRanges(long min, long max, int count) {
+        return ParserComponentImpl.splitHalfOpenRange(min, max, count);
     }
 
     /**

@@ -27,6 +27,7 @@ import org.dbdatasync.sdk.connector.ConnectorInstance;
 import org.dbdatasync.sdk.connector.database.Database;
 import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
 import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
+import org.dbdatasync.sdk.constant.ConfigConstant;
 import org.dbdatasync.sdk.enums.DatabaseMigrationDetailTypeEnum;
 import org.dbdatasync.sdk.enums.TableTypeEnum;
 import org.dbdatasync.sdk.model.CommonTaskSnapshot;
@@ -35,6 +36,7 @@ import org.dbdatasync.sdk.model.DatabaseSyncTask;
 import org.dbdatasync.sdk.model.Field;
 import org.dbdatasync.sdk.model.MetaInfo;
 import org.dbdatasync.sdk.model.Table;
+import org.dbdatasync.sdk.util.MigrationStageUtil;
 import org.dbdatasync.sdk.util.TaskSnapshotUtil;
 import org.dbdatasync.storage.impl.SnowflakeIdWorker;
 import org.slf4j.Logger;
@@ -216,7 +218,9 @@ public class DatabaseSyncTaskRunner {
                 }
             }
             // 6、收尾：任务级状态（正常跑完=DONE，中止/有失败=READY 待重跑）
-            finishTaskMeta(taskMeta, allOk && rootTask.isRunning());
+            boolean success = allOk && rootTask.isRunning();
+            finishTaskMeta(taskMeta, success);
+            maybeAutoAdvanceStage(task, success);
             logger.info("整库迁移任务 [{}] 执行结束: {}", taskId, allOk ? "完成" : "存在失败/中止");
         } catch (Exception e) {
             logger.error("整库迁移任务 [{}] 执行异常: {}", taskId, e.getMessage(), e);
@@ -479,6 +483,21 @@ public class DatabaseSyncTaskRunner {
         mapping.setReadNum(task.getReadNum() > 0 ? task.getReadNum() : 10000);
         mapping.setBatchNum(task.getBatchNum() > 0 ? task.getBatchNum() : 1000);
         mapping.setForceUpdate(task.isOverwriteData());
+        // Wave11：仅当限速值 >0 时写入 params（避免污染既有 params 语义与 splitSupported 判定；
+        // 绝不写 FULL_SPLIT_KEY/FULL_SPLIT_COUNT，否则会意外开启分片）。
+        if (task.getRecordsPerSecond() > 0 || task.getBytesPerSecond() > 0) {
+            Map<String, String> params = mapping.getParams();
+            if (params == null) {
+                params = new HashMap<>();
+                mapping.setParams(params);
+            }
+            if (task.getRecordsPerSecond() > 0) {
+                params.put(ConfigConstant.RATE_RECORDS_PER_SECOND, String.valueOf(task.getRecordsPerSecond()));
+            }
+            if (task.getBytesPerSecond() > 0) {
+                params.put(ConfigConstant.RATE_BYTES_PER_SECOND, String.valueOf(task.getBytesPerSecond()));
+            }
+        }
         return mapping;
     }
 
@@ -654,6 +673,36 @@ public class DatabaseSyncTaskRunner {
             metaProfile.updateMeta(taskMeta);
         } catch (Exception e) {
             logger.error("整库迁移任务收尾状态更新失败: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Wave11：全量完成（success）且开启自动推进时，仅把编排阶段从 full 推进到 increment。
+     * 读任务级 Meta.SNAPSHOT；其它阶段与未命中一律不动。整个方法吞异常只记 warn，绝不影响收尾。
+     */
+    private void maybeAutoAdvanceStage(DatabaseSyncTask task, boolean success) {
+        if (!success || !task.isAutoAdvanceStage()) {
+            return;
+        }
+        try {
+            Meta meta = metaProfile.getMetaByTaskId(task.getId(), TaskLevelEnum.TASK);
+            if (meta == null) {
+                return;
+            }
+            Map<String, String> snapshot = meta.getSnapshot();
+            if (snapshot == null) {
+                snapshot = new ConcurrentHashMap<>();
+                meta.setSnapshot(snapshot);
+            }
+            String current = MigrationStageUtil.normalize(snapshot.get(MigrationStageUtil.SNAPSHOT_KEY_STAGE));
+            if (!"full".equals(current)) {
+                return;
+            }
+            snapshot.put(MigrationStageUtil.SNAPSHOT_KEY_STAGE, MigrationStageUtil.advance("full"));
+            metaProfile.updateMeta(meta);
+            logger.info("整库迁移任务 [{}] 自动推进编排阶段: full -> increment", task.getId());
+        } catch (Exception e) {
+            logger.warn("整库迁移任务 [{}] 自动推进阶段失败（不影响收尾）: {}", task.getId(), e.getMessage(), e);
         }
     }
 

@@ -121,12 +121,13 @@
                 <div class="grid grid-cols-2 mt-5">
                     <div class="form-item">
                         <label class="form-label">对比模式
-                            <i class="fa fa-question-circle" title="full=全量逐行对比(精确定位差异); sample=抽样对比(按步长跳页采样, 大表快速健康检查)"></i>
+                            <i class="fa fa-question-circle" title="full=全量逐行对比(精确定位差异); sample=抽样对比(按步长跳页采样, 大表快速健康检查); health=快速体检(count+主键值域, 秒级粗检不订正)"></i>
                         </label>
                         <div class="form-control-area">
                             <select class="form-control" name="compareMode" id="compareModeSelect">
                                 <option value="full">全量逐行对比(推荐)</option>
                                 <option value="sample">抽样对比(大表快速检查)</option>
+                                <option value="health">快速体检(count+主键值域)</option>
                             </select>
                         </div>
                     </div>
@@ -136,6 +137,15 @@
                         </label>
                         <div class="form-control-area">
                             <input type="number" class="form-control" name="sampleStep" value="10" min="1" max="100"/>
+                        </div>
+                    </div>
+                    <div class="form-item" id="fullSplitItem">
+                        <label class="form-label">分片并发数
+                            <i class="fa fa-question-circle" title="full 模式单列主键时按主键值域分片并发校验(对标全量分片读); 1=串行, 建议 4~8"></i>
+                        </label>
+                        <div class="form-control-area">
+                            <input type="number" class="form-control" name="fullSplitCount" value="0" min="0" max="1024"/>
+                            <span class="text-xs text-gray-500">0 或 1 = 串行</span>
                         </div>
                     </div>
                 </div>
@@ -349,6 +359,8 @@
         var $mode = $('#compareModeSelect');
         $mode.on('change', function(){
             $('#sampleStepItem').toggle($mode.val() === 'sample');
+            // 分片并发仅 full 模式有意义（sample 抽样/health 体检模式下隐藏，避免歧义配置）
+            $('#fullSplitItem').toggle($mode.val() === 'full');
         }).trigger('change');
         initDBSelect($('#sourceConnectorId'), $('#sourceDatabase'), $('#sourceSchema'), 'source');
         initDBSelect($('#targetConnectorId'), $('#targetDatabase'), $('#targetSchema'), 'target');

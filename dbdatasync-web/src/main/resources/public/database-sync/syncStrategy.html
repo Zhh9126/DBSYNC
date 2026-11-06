@@ -147,6 +147,72 @@
                 </span>
             </div>
         </div>
+        <!-- Wave11：限速 / 低峰时间窗 / 自动推进阶段（默认 0 / false / 空，存量任务零影响） -->
+        <div class="col-span-2">
+            <div class="grid grid-cols-2 gap-4 rounded border border-gray-200 p-4">
+                <div class="form-item mb-0">
+                    <label class="form-label" for="dbSyncRecordsPerSecond">每秒行数上限</label>
+                    <div class="form-control-area">
+                        <input type="number" min="0" step="1" name="recordsPerSecond" id="dbSyncRecordsPerSecond"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm"
+                               th:value="${task == null ? 0 : task.recordsPerSecond}"
+                               th:disabled="${readOnly}"/>
+                        <span class="text-xs text-tertiary">每秒最多迁移行数，0 表示不限速</span>
+                    </div>
+                </div>
+                <div class="form-item mb-0">
+                    <label class="form-label" for="dbSyncBytesPerSecond">每秒字节数上限</label>
+                    <div class="form-control-area">
+                        <input type="number" min="0" step="1" name="bytesPerSecond" id="dbSyncBytesPerSecond"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm"
+                               th:value="${task == null ? 0 : task.bytesPerSecond}"
+                               th:disabled="${readOnly}"/>
+                        <span class="text-xs text-tertiary">每秒最多迁移字节数，0 表示不限速</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="checkbox-group checkbox-group-inline mb-0">
+                        <input type="checkbox" name="enableOffPeakWindow" id="dbSyncEnableOffPeakWindow"
+                               value="true"
+                               th:checked="${task == null ? false : task.enableOffPeakWindow}"
+                               th:disabled="${readOnly}"/>
+                        <label for="dbSyncEnableOffPeakWindow">仅在低峰时间窗内启动</label>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="form-item mb-0">
+                        <label class="form-label" for="dbSyncWindowStart">窗口开始（HH:mm）</label>
+                        <div class="form-control-area">
+                            <input type="time" name="windowStart" id="dbSyncWindowStart"
+                                   class="border border-gray-300 rounded px-2 py-1 text-sm"
+                                   th:value="${task == null ? '' : task.windowStart}"
+                                   th:disabled="${readOnly}"/>
+                        </div>
+                    </div>
+                    <div class="form-item mb-0">
+                        <label class="form-label" for="dbSyncWindowEnd">窗口结束（HH:mm）</label>
+                        <div class="form-control-area">
+                            <input type="time" name="windowEnd" id="dbSyncWindowEnd"
+                                   class="border border-gray-300 rounded px-2 py-1 text-sm"
+                                   th:value="${task == null ? '' : task.windowEnd}"
+                                   th:disabled="${readOnly}"/>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-span-2">
+                    <div class="checkbox-group checkbox-group-inline mb-0">
+                        <input type="checkbox" name="autoAdvanceStage" id="dbSyncAutoAdvanceStage"
+                               value="true"
+                               th:checked="${task == null ? false : task.autoAdvanceStage}"
+                               th:disabled="${readOnly}"/>
+                        <label for="dbSyncAutoAdvanceStage">全量完成后自动推进到增量追平阶段</label>
+                    </div>
+                    <div>
+                        <span class="text-xs text-tertiary">默认关闭；需人工推进到 full 阶段后才会自动升为 increment</span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 

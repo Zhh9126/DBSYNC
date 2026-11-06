@@ -112,4 +112,22 @@ public interface DatabaseSyncService {
      * 分页查询迁移结果明细
      */
     Paging searchResult(Map<String, String> params);
+
+    /**
+     * 迁移阶段推进：schedule → full → increment → validate → switchover。
+     * <p>阶段持久化到任务级 Meta.SNAPSHOT（migrationStage），不随任务配置导出；
+     * 到达 fswitchover 后再推进返回提示（链已完成）。</p>
+     *
+     * @param id 整库迁移任务 ID
+     * @return 推进后的阶段 code（如 "increment"）
+     */
+    String advanceMigrationStage(String id);
+
+    /**
+     * 读取任务当前迁移阶段（无 meta 时返回配置默认 schedule）。
+     *
+     * @param id 整库迁移任务 ID
+     * @return 阶段 code
+     */
+    String currentMigrationStage(String id);
 }

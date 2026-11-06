@@ -97,6 +97,26 @@
         };
     }
 
+    /**
+     * 迁移编排阶段徽标：schedule → full → increment → validate → switchover。
+     * 附「推进」按钮（点击调 /database-sync/advanceStage），展示当前阶段并允许手动推进。
+     */
+    function renderMigrationStage(stage, taskId) {
+        const stages = ['schedule', 'full', 'increment', 'validate', 'switchover'];
+        const texts = {schedule: '编排就绪', full: '全量迁移', increment: '增量追平', validate: '一致性校验', switchover: '切换'};
+        const cls = {schedule: 'badge-secondary', full: 'badge-info', increment: 'badge-warning', validate: 'badge-primary', switchover: 'badge-success'};
+        const cur = stages.indexOf(stage) >= 0 ? stage : 'schedule';
+        const next = stages[stages.indexOf(cur) + 1];
+        return '<span class="flex items-center gap-1">'
+            + '<span class="badge ' + (cls[cur] || 'badge-secondary') + '">' + (texts[cur] || cur) + '</span>'
+            + (next
+                ? '<button class="table-action-btn stage" title="推进到「' + (texts[next] || next) + '」" '
+                    + 'onclick="databaseSyncAdvanceStage(\'' + taskId + '\', this)">'
+                    + '<i class="fa fa-forward"></i></button>'
+                : '')
+            + '</span>';
+    }
+
     function renderTaskStateText(state) {
         const stateConfig = getTaskStateConfig();
         const config = stateConfig[state] || stateConfig[0];
@@ -229,6 +249,20 @@
         });
     }
 
+    /**
+     * 迁移编排阶段推进：调 /database-sync/advanceStage，成功后刷新列表。
+     */
+    function databaseSyncAdvanceStage(taskId, btn) {
+        doPoster('/database-sync/advanceStage', { id: taskId }, function (response) {
+            if (response.success) {
+                bootGrowl('已推进到阶段：' + (response.data || ''), 'success');
+                refreshIndexList();
+            } else {
+                bootGrowl(response.message || '推进阶段失败', 'danger');
+            }
+        });
+    }
+
     function initDatabaseSyncerListPage() {
         window.backIndexPage = function () {
             doLoader('/database-sync/list');
@@ -237,6 +271,8 @@
         window.databaseSyncStop = databaseSyncStop;
         window.databaseSyncRemove = databaseSyncRemove;
         window.databaseSyncUpgrade = databaseSyncUpgrade;
+        window.databaseSyncAdvanceStage = databaseSyncAdvanceStage;
+        window.databaseSyncPerfAdvice = databaseSyncPerfAdvice;
         window.databaseSyncCreateValidateSync = databaseSyncCreateValidateSync;
 
         const pagination = new PaginationManager({
@@ -256,6 +292,7 @@
                     + '</td>'
                     + '<td>' + mappingCount + '</td>'
                     + '<td>' + renderResultColumn(task) + '</td>'
+                    + '<td>' + renderMigrationStage(task.migrationStage, taskId) + '</td>'
                     + '<td>' + renderTaskStateText(task.metaState || 0) + '</td>'
                     + '<td>' + formatDate(task.updateTime || '') + '</td>'
                     + '<td><div class="flex items-center">'
@@ -265,6 +302,9 @@
                     + '<button class="table-action-btn info" title="预检测（启动前校验）" onclick="runPreCheck(\'/database-sync/precheck\',\''
                     + taskId + '\',\'' + escapeHtml(task.name || '') + '\')">'
                     + '<i class="fa fa-list-alt"></i></button>'
+                    + '<button class="table-action-btn perf" title="性能适配建议（迁移数据量/耗时/吞吐与目标库索引分区建议）" '
+                    + 'onclick="doLoader(\'/database-sync/page/perf?id=' + taskId + '\')">'
+                    + '<i class="fa fa-tachometer"></i></button>'
                     + (Number(task.metaState) === META_STATE_DONE
                         ? '<button class="table-action-btn compare" title="一键数据对比（迁移完成后校验一致性）" '
                         + 'onclick="databaseSyncCreateValidateSync(\'' + taskId + '\')"><i class="fa fa-exchange"></i></button>'
@@ -277,7 +317,7 @@
                     + '</div></td>'
                     + '</tr>';
             },
-            emptyHtml: '<td colspan="8" class="text-center">'
+            emptyHtml: '<td colspan="9" class="text-center">'
                 + '<i class="fa fa-database empty-icon"></i>'
                 + '<p class="empty-text">暂无任务</p>'
                 + '<p class="empty-description">点击「添加」创建第一个任务</p></td>',

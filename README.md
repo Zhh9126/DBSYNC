@@ -510,7 +510,116 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 17. 许可声明
+## 17. 2026-10-26 更新摘要（全量分片并发读）
+
+对标 DataX `splitPk` / CloudCanal `chunk` 的「全量单表分片并发读」能力落地，缩小与业界先进工具在全量迁移吞吐上的差距：
+
+- **全量单表分片并发读（Wave4 核心）**：映射级配置 `fullSplitKey`（分片键）+ `fullSplitCount`（分片数），全量同步时按分片键值域切分为 N 个左闭右开区间，每分片独立游标循环并发执行；并发池 = min(分片数, 执行线程数)。存量映射未配置参数时完全走原串行路径，零影响。
+- **值域自动探测**：复用 QUERY_COUNT SQL 把 `COUNT(*)` 替换为 `MIN(x), MAX(x)` 探测分片键值域（方言表名/过滤条件自动沿用）；探测失败/空表/等值表自动降级串行。
+- **防注入**：分片键经 `SqlIdentifierValidator` 白名单校验后才拼接进 SQL；范围条件参数化 `?` 绑定，参数顺序与游标参数天然对齐（`[splitStart, splitEnd, cursorArgs..., offset, limit]`）。
+- **失败即停**：任一子分片异常 → 中止父任务 → 聚合上抛，其余分片尽力退出，不产生静默丢数。
+- **Web UI**：映射编辑/新增页新增「全量分片并发读」配置区（对标 DataX splitPk 标识），写入 params JSON 并回显。
+- **单元测试 13 项**全通过（区间切分边界/无缝拼接/空值域/SQL 注入 4 形态/复合主键游标/恶意列名拦截/探测 SQL 形状），全模块 Maven 离线打包通过。
+- 设计论证、落点与验证细节见 `reports/OPTIMIZATION_REPORT_WAVE4_FULL_SPLIT.md`。
+
+---
+
+## 18. 2026-11-05 更新摘要（SQL 兼容度扫描器）
+
+针对数据库信创迁移「应用端 SQL 语法兼容」这一核心适配成本，新增**迁移前 SQL 兼容度评估**能力（对标 NineData SQL 转换 / 阿里 DMS / 达梦迁移助手的评估环节，纯离线）：
+
+- **纯离线静态扫描**：输入「源方言 + 目标方言 + SQL 文本（可多条）」，输出分级（error/warn/info）问题清单与改写建议，在连库之前暴露应用适配成本；不做自动转换（避免误导），复杂项给人工重写方向。
+- **四条规则族**：函数族（NVL→COALESCE、DECODE→CASE WHEN、GROUP_CONCAT→STRING_AGG、LISTAGG 等，pair 定向）、操作符族（`||`/`:=`/`%`/`::`）、结构族（CONNECT BY/MINUS/START WITH/ROWNUM/LIMIT/ON DUPLICATE KEY/PIVOT）、类型族（VARCHAR2/CLOB/BLOB/NUMBER/BOOLEAN，支持带长度形态）。
+- **方言家族豁免**：达梦/OceanBase Oracle 兼容模式支持 ROWNUM/NVL 等时不误报；MySQL 系支持 LIMIT 时不报。
+- **多语句 + 降级**：按分号拆分逐条 jsqlparser 解析，单条失败不中断整体（PL/SQL 块给 unparseable 提示）；未知方言降级为「未扫描」提示。
+- **支持方言**：MySQL / Oracle / PostgreSQL / Kingbase / DM / OceanBase / SQLServer / ClickHouse / TiDB。
+- **接口与页面**：`POST /sql-scan/scan` 扫描接口 + `GET /sql-scan` 独立扫描页（侧边栏菜单入口）。
+- **单元测试 12 项**全通过（四向迁移样本 + 同族豁免 + 降级路径 + 防重复命中回归），模块离线编译通过，前端 `node --check` 通过。
+- 设计论证与验证细节见 `reports/OPTIMIZATION_REPORT_WAVE5_SQL_SCAN.md`。
+
+---
+
+## 19. 2026-11-05 更新摘要（订正校验增强：快速体检 + 分片并发）
+
+针对迁移后「数据一致性校验闭环」，在既有 validate-sync 订正校验模块上补齐两大能力（对标 SeaTunnel/NineData 校验环节）：
+
+- **快速体检模式（compareMode=health）**：源/目标各执行 `COUNT + MIN/MAX(主键)` 一条 SQL，秒级完成行数与主键值域双维度粗检；不定位行级差异、不自动订正，适合迁移完成后第一时间健康检查。
+- **分片并发校验（full 模式增强）**：单列主键 + 配置分片并发数（>1）时，按主键 MIN/MAX 值域切分为左闭右开区间，多线程并发逐行比对（复用 Wave4 `splitHalfOpenRange` 切分；目标端按主键 IN 批量回查天然落在分片区间，无重叠遗漏）。任一子分片失败即取消任务并上抛，其余分片尽力退出。
+- **存量零影响**：`fullSplitCount` 默认 0、compareMode 保持 full/sample 语义，不满足分片条件自动降级原串行路径。
+- **前端**：新增任务页「对比模式」增加 health 选项 + 「分片并发数」输入（full 模式显示）；编辑页高级设置支持分片数回显。
+- **单元测试**：新增 `ValidateSyncExecutorTest` 8 项（模式规范化 / 分片适用判定 / 区间切片边界），回归 `FullSplitLogicTest` 13 项全绿，parser 模块累计 22 项通过；模块离线编译与前端 `node --check` 通过。
+- 设计论证与验证细节见 `reports/OPTIMIZATION_REPORT_WAVE6_VALIDATE_SYNC.md`。
+
+---
+
+## 20. 2026-11-05 更新摘要（整库迁移编排阶段状态机）
+
+为整库迁移任务补齐**迁移编排阶段状态机**（方案方向三收敛落地；勘察确认断点续传/表级进度/全量→增量位点/任务重启恢复/一键接续增量/一键数据对比均已具备，本轮只补缺失的「阶段编排可视化」）：
+
+- **阶段链**：`schedule(编排就绪) → full(全量迁移) → increment(增量追平) → validate(一致性校验) → switchover(切换)`，人工显式推进，避免误越级。
+- **持久化**：阶段写任务级 `Meta.SNAPSHOT(migrationStage)`，与任务配置解耦（不随编辑/导出污染配置）；读取 SNAPSHOT 优先、回落配置默认。
+- **纯逻辑工具**：`MigrationStageUtil`（sdk）提供阶段链/文案/归一化/推进计算，8 项单测覆盖。
+- **接口与前端**：`POST /database-sync/advanceStage` + 整库迁移列表新增「迁移阶段」列（徽标 + 推进按钮）。
+- **验证**：sdk 9 项测试全绿（新增 7）、biz/web 离线编译通过、前端 `node --check` 通过。
+- 设计论证与验证细节见 `reports/OPTIMIZATION_REPORT_WAVE7_MIGRATION_ORCHESTRATION.md`。
+
+---
+
+## 21. 2026-11-05 更新摘要（SQL 兼容扫描器增强：改写草稿）
+
+在 Wave5 扫描器基础上增加**语法转换辅助**（方向二）——从「评估」进到「评估 + 改写草稿」：
+
+- **改写草稿**：对 `warn` 级可机械映射项自动生成改写后的 SQL（绿色展示），如 NVL→COALESCE、SYSDATE→NOW()、TO_CHAR→DATE_FORMAT、IFNULL→COALESCE、ILIKE→LIKE、VARCHAR2→VARCHAR、`::timestamp` 移除等；
+- **error 级保留人工**：目标无等价语义（CONNECT BY 递归、LISTAGG 等）草稿留空，标「需人工重写」；
+- **保守定位**：草稿仅字符串级替换、供复制确认，不自动落地；复杂项仍给建议由人工写，不破坏「评估不误导」；
+- **前端**：sql-scan 表格新增「改写草稿」列（有草稿=绿色 code 块，error=需人工，info=—）。
+- **验证**：扫描器测试 12→17 项全绿（新增 5 项草稿用例），biz/web 离线编译通过，前端 `node --check` 通过。
+- 设计论证与验证细节见 `reports/OPTIMIZATION_REPORT_WAVE8_SQL_CONVERT_DRAFT.md`。
+
+---
+
+## 22. 2026-11-05 更新摘要（整库迁移性能适配建议）
+
+- **新增**「性能适配建议」：迁移完成后一键生成**文档级**建议报告——
+  - 总览：总数据量、净吞吐（行/s）、耗时、表数；
+  - 大表 Top10（≥100 万源行）→ 目标库索引 / 分区专项建议；
+  - 差异 / 失败表 → 建议补迁或重校验；
+  - 读写参数建议（readNum/batchNum/threadNum 与吞吐关系）；
+  - 目标库参数建议（按方言：MySQL/Oracle/DM/PG/KB）；
+  - 汇总结论（是否可进入校验/切换）。
+- **保守定位**：只输出建议，不自动执行任何 DDL / 参数修改；未执行迁移时给提示。
+- 入口：整库迁移列表 → 操作列「性能建议」（带宽表按钮）；路径 `/database-sync/page/perf?id=`。
+- 验证：biz/web 离线编译通过，前端 JS `node --check` 通过。
+- 设计论证与细节见 `reports/OPTIMIZATION_REPORT_WAVE9_PERF_ADVICE.md`。（限速暴露、低峰时间窗调度留作后续，见报告§5）
+
+---
+
+## 23. 2026-11-06 更新摘要（遗留 BUG 修复 + 方向二语法转换补齐）
+
+- **P0 `perfAdvice` 行数口径**：收敛为唯一口径（总数据量 = 成功 + 失败，取自任务级 Meta；吞吐分子只用成功行；大表行数取该表明细 `sourceTotal`），删除只累加前 10 张表的死计算，修正「数据总量与差异均为 0」的矛盾结论；报告页新增成功/失败行数、口径标注与精确数值。
+- **P0 整库迁移创建任务 `syntax error : {`**：根因是 fastjson2 `JSON.parseArray` 要求 `databaseMappingsJson` 根为数组，服务端未捕获并把第三方解析器异常原文透传前端。现前后端统一数组契约 + 服务端 6 步兼容归一化，非法输入统一返回可读业务提示。
+- **P1 方向二补齐**：① DDL 建表语句类型映射转换草稿（VARCHAR2→VARCHAR、NUMBER→DECIMAL(18,4)、CLOB→TEXT、BOOLEAN→TINYINT(1) 等，error 级不生成、纯字符串处理不执行 DDL）；② 存储过程/函数/触发器/视图定义纳入扫描（文本降级粗粒度提示）；③ 创建页可选应用 SQL 兼容度预检（文本 + 本地目录，独立接口、默认收起、仅提示不阻断）。
+- **保守定位**：所有新输出均为草稿/建议，不自动执行 DDL、不连库；存量任务零影响。
+- **验证**：全模块离线编译通过；biz 单测 77/77 全绿（新增 47 + QA 边界 13 + 既有扫描器 17 回归）；前端内联 JS `node --check` 通过。
+- 设计论证与验证细节见 `reports/WAVE10_INCREMENTAL_DESIGN.md`、`reports/OPTIMIZATION_REPORT_WAVE10_DDL_CONVERT.md`、`reports/TEST_REPORT_WAVE10.md`。
+
+---
+
+## 24. 2026-11-06 更新摘要（迁移策略与成本管控 + 编排补齐）
+
+把《数据库迁移深度优化方案》剩余的方向五、方向三剩余、方向二 P2 收口：
+
+- **方向五 限速暴露**：整库迁移策略新增「每秒最多行数 / 每秒最多字节数」（默认 0 = 不限速），经 `Mapping.params` 传入主链路，在批次级按令牌桶语义平滑限流；`dbdatasync-engine` 的 `Channel` 是孤立副本、运行时未接入，故不引入该模块依赖，也不改动任何 `pom.xml`。
+- **方向五 低峰时间窗**：新增「仅在低峰时间窗内启动」开关与起止时刻（支持跨午夜），窗口外启动自动预约到窗口开始时刻（复用既有 `ScheduledTaskService`）；开关默认关闭、预约失败降级立即启动，服务重启后预约失效需重新触发。
+- **方向五 成本统计**：性能建议报告新增限速/时间窗配置回显、每千行平均耗时、按限速估算的理论最短耗时与成本摘要，全部为**纯派生**，不改 Wave10 行数口径、不写 Meta；分片并发读补充耗时/分片数/平均耗时统计日志。
+- **方向三 阶段自动推进**：新增「全量完成后自动推进到增量追平」开关（默认关闭），仅在任务成功收尾、且当前阶段为 `full` 时推进一次；人工推进按钮与末位不越界语义不变。**回滚预案按方案要求落为文档级**：`reports/MIGRATION_SWITCHOVER_ROLLBACK_PLAN.md`（切换检查清单、切换流程、回退触发条件、数据回退策略、演练模板），系统不自动切流/回切。
+- **方向二 P2-1 自定义规则文件**：支持通过 `-Ddbdatasync.sqlscan.custom.rules=<classpath 资源>` 加载外部 `.properties`/`.json` 规则并与预置规则合并；未配置或文件非法时降级为仅预置规则，扫描结果与 Wave5/Wave8 完全一致。示例见 `dbdatasync-biz/src/main/resources/sqlscan-custom-rules.example.properties`。
+- **QA 观察项补齐**：SQL 预检目录输入的「单文件超 1MB 被跳过」「目录内无 *.sql」两类场景补充可读提示。
+- 验证与落地清单见 `reports/OPTIMIZATION_REPORT_WAVE11_STRATEGY_COST.md`、`reports/TEST_REPORT_WAVE11.md`。
+
+---
+
+## 25. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 
