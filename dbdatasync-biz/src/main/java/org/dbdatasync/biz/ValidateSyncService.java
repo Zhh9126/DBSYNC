@@ -124,6 +124,27 @@ public interface ValidateSyncService {
      */
     Object manualReviseDetail(String taskId, String detailId);
 
+    /**
+     * 对账报告导出取数（只读）：detailId 非空时只取单条明细，否则按状态筛选分页遍历全任务。
+     * <p>仅读取结果明细，不修改任何明细 / Meta / 任务配置。
+     *
+     * @param taskId       校验任务ID
+     * @param detailStatus 状态筛选（可空）
+     * @param detailId     明细ID（可空，非空时忽略分页与状态筛选）
+     * @return 已铺平的明细行列表
+     */
+    List<Map<String, Object>> listResultDetails(String taskId, String detailStatus, String detailId);
+
+    /**
+     * 对单条明细中指定下标的差异条目执行重推（只处理该 1 条）。
+     *
+     * @param taskId    校验任务ID
+     * @param detailId  明细ID
+     * @param itemIndex 0-based 差异条目下标，与对账报告「差异序号」一致
+     * @return 更新后的明细
+     */
+    Object reviseDiffItem(String taskId, String detailId, int itemIndex);
+
     String addTableGroup(Map<String, String> params);
 
     String editTableGroup(Map<String, String> params);

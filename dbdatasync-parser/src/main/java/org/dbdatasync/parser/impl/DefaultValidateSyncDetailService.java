@@ -13,6 +13,7 @@ import org.dbdatasync.parser.TaskProfile;
 import org.dbdatasync.parser.model.Meta;
 import org.dbdatasync.parser.model.TableGroup;
 import org.dbdatasync.parser.model.TaskDetailQuery;
+import org.dbdatasync.parser.util.DiffItemRepushUtil;
 import org.dbdatasync.sdk.constant.ConfigConstant;
 import org.dbdatasync.sdk.enums.StorageEnum;
 import org.dbdatasync.sdk.model.ValidateSyncTask;
@@ -27,6 +28,7 @@ import org.springframework.util.CollectionUtils;
 
 import javax.annotation.Resource;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -115,6 +117,34 @@ public class DefaultValidateSyncDetailService implements ValidateSyncDetailServi
         storageService.editBatch(StorageEnum.TASK_DETAIL, taskId, rows);
 
         // 重新装配返回（避免行内残留旧铺平字段 content/diffTotal 等）
+        Map<String, Object> fresh = taskDetailProfile.getDetail(TaskDetailQuery.of(taskId).setDetailId(detailId));
+        return fresh != null ? fresh : detail;
+    }
+
+    @Override
+    public Map<String, Object> reviseDiffItem(String taskId, String detailId, int itemIndex) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.hasText(detailId, "明细ID不能为空");
+        Map<String, Object> detail = taskDetailProfile.getDetail(TaskDetailQuery.of(taskId).setDetailId(detailId));
+        Assert.notNull(detail, "明细不存在");
+        Map<String, Object> data = parseData(detail);
+        Object content = data.get(ConfigConstant.TASK_CONTENT);
+        Map<String, Object> item = DiffItemRepushUtil.selectItem(content, itemIndex);
+        Assert.isTrue(DiffItemRepushUtil.isRepushable(item), "该差异条目不可重推（仅支持未订正的行数据差异）");
+        int repaired = 0;
+        try {
+            repaired = validateSyncExecutor.repairContent(taskId, DiffItemRepushUtil.singleItemContent(item));
+        } catch (Exception e) {
+            logger.warn("订正校验任务 [{}] 单条重推失败: {}", taskId, e.getMessage());
+        }
+        long diffTotal = getLong(data, ConfigConstant.TASK_DIFF_TOTAL);
+        long fixedTotal = DiffItemRepushUtil.nextFixedTotal(diffTotal, getLong(data, ConfigConstant.TASK_FIXED_TOTAL), repaired);
+        data.put(ConfigConstant.TASK_FIXED_TOTAL, fixedTotal);
+        data.put(ConfigConstant.TASK_CONTENT, content);
+        detail.put(ConfigConstant.BINLOG_DATA, JsonUtil.objToJson(data));
+        detail.put(ConfigConstant.DETAIL_IS_SUCCESS, DiffItemRepushUtil.isDone(diffTotal, fixedTotal) ? 1 : 0);
+        detail.put(ConfigConstant.CONFIG_MODEL_UPDATE_TIME, System.currentTimeMillis());
+        storageService.editBatch(StorageEnum.TASK_DETAIL, taskId, Collections.singletonList(detail));
         Map<String, Object> fresh = taskDetailProfile.getDetail(TaskDetailQuery.of(taskId).setDetailId(detailId));
         return fresh != null ? fresh : detail;
     }

@@ -55,4 +55,11 @@ public interface ValidateSyncDetailService {
      * @param taskId 校验任务ID
      */
     void markRunningDetailsDone(String taskId);
+
+    /**
+     * 单条差异重推；默认实现抛 UnsupportedOperationException，避免破坏外部实现
+     */
+    default Map<String, Object> reviseDiffItem(String taskId, String detailId, int itemIndex) {
+        throw new UnsupportedOperationException("当前实现不支持差异条目单条重推");
+    }
 }

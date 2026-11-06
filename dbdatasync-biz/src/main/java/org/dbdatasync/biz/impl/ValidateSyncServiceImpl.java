@@ -84,6 +84,11 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    /** 对账报告导出取数：分页大小 / 明细行上限 / 最大页数（防止无界分页与内存膨胀） */
+    private static final int EXPORT_PAGE_SIZE = 200;
+    private static final int MAX_EXPORT_DETAIL_ROWS = 5000;
+    private static final int EXPORT_MAX_PAGES = MAX_EXPORT_DETAIL_ROWS / EXPORT_PAGE_SIZE;
+
     @Resource
     private SnowflakeIdWorker snowflakeIdWorker;
 
@@ -591,6 +596,58 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         Assert.hasText(taskId, "任务ID不能为空");
         Assert.hasText(detailId, "明细ID不能为空");
         return validateSyncDetailService.manualRevise(taskId, detailId);
+    }
+
+    @Override
+    public List<Map<String, Object>> listResultDetails(String taskId, String detailStatus, String detailId) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (StringUtil.isNotBlank(detailId)) {
+            Object detail = getValidateResultDetail(taskId, detailId);
+            if (detail == null) {
+                throw new BizException("明细不存在");
+            }
+            if (detail instanceof Map) {
+                rows.add((Map<String, Object>) detail);
+            }
+            return rows;
+        }
+
+        Map<String, String> params = new HashMap<>();
+        params.put("taskId", taskId);
+        params.put("pageSize", String.valueOf(EXPORT_PAGE_SIZE));
+        params.put("detailStatus", StringUtil.trimToEmpty(detailStatus));
+        for (int pageNum = 1; pageNum <= EXPORT_MAX_PAGES; pageNum++) {
+            params.put("pageNum", String.valueOf(pageNum));
+            Paging paging = searchResult(params);
+            Collection<?> data = paging == null ? null : paging.getData();
+            if (data == null || data.isEmpty()) {
+                break;
+            }
+            for (Object row : data) {
+                if (row instanceof Map) {
+                    rows.add((Map<String, Object>) row);
+                    if (rows.size() >= MAX_EXPORT_DETAIL_ROWS) {
+                        break;
+                    }
+                }
+            }
+            if (rows.size() >= MAX_EXPORT_DETAIL_ROWS) {
+                logger.warn("对账报告导出行数达到上限 {}，后续明细未导出: taskId={}", MAX_EXPORT_DETAIL_ROWS, taskId);
+                break;
+            }
+            if (data.size() < EXPORT_PAGE_SIZE) {
+                break;
+            }
+        }
+        return rows;
+    }
+
+    @Override
+    public Object reviseDiffItem(String taskId, String detailId, int itemIndex) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.hasText(detailId, "明细ID不能为空");
+        return validateSyncDetailService.reviseDiffItem(taskId, detailId, itemIndex);
     }
 
     @Override

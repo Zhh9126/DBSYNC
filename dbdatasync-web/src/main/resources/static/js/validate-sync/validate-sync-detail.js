@@ -9,6 +9,7 @@
         var currentTaskId = config.taskId || '';
         var currentDetailId = '';
         var manualReviseSubmitting = false;
+        var diffRepushSubmitting = false;
         var diffModalInstance = null;
         var currentDetailContent = null;
         var $taskSelect = $('#detailTaskSelect');
@@ -46,6 +47,31 @@
                 detailStatus: getFilterValue('#detailStatusFilter')
             };
         }
+
+        window.exportReport = function () {
+            if (!currentTaskId) {
+                bootGrowl('请先选择任务', 'warning');
+                return;
+            }
+            var detailStatus = getFilterValue('#detailStatusFilter') || '';
+            window.location.href = '/validate-sync/exportReport?taskId=' + encodeURIComponent(currentTaskId)
+                + '&detailStatus=' + encodeURIComponent(detailStatus);
+        };
+
+        window.exportDetailReport = function () {
+            if (!currentTaskId) {
+                bootGrowl('请先选择任务', 'warning');
+                return;
+            }
+            if (!currentDetailId) {
+                bootGrowl('请先打开差异详情', 'warning');
+                return;
+            }
+            var detailStatus = getFilterValue('#detailStatusFilter') || '';
+            window.location.href = '/validate-sync/exportReport?taskId=' + encodeURIComponent(currentTaskId)
+                + '&detailStatus=' + encodeURIComponent(detailStatus)
+                + '&detailId=' + encodeURIComponent(currentDetailId);
+        };
 
         function triggerSearch() {
             resultPagination.doSearch(buildSearchParams(), 1);
@@ -302,20 +328,28 @@
 
         function buildDiffDetailBodyHtml(data, tableNameOuter) {
             var html = '<div class="white-space-none">';
+            html += '<div class="mb-2"><button type="button" class="btn btn-outline" onclick="exportDetailReport()">'
+                + '<i class="fa fa-download"></i> 导出本条明细</button></div>';
             var headHtml = '<tr>'
                 + '<th class="width18p">源表名称</th>'
                 + '<th class="width10p">类型</th>'
                 + '<th class="width12p">主键/标识</th>'
                 + '<th class="width40p">异常</th></tr>';
             var bodyHtml = '';
-            data.forEach(function (d) {
+            data.forEach(function (d, idx) {
                 var msgHtml = buildDiffMsgCell(d);
                 var typeText = formatDiffTypeText(d.type);
+                var repushBtnHtml = '';
+                if (d.type === 'rowData' && !/已订正|订正失败/.test(d.msg || '')) {
+                    repushBtnHtml = '<button type="button" class="table-action-btn view diff-repush-btn"'
+                        + ' title="重推该条差异" data-item-index="' + Number(idx) + '">'
+                        + '<i class="fa fa-refresh"></i> 重推</button>';
+                }
                 bodyHtml += '<tr>'
                     + '<td>' + escapeHtml(tableNameOuter) + '</td>'
                     + '<td>' + escapeHtml(typeText) + '</td>'
                     + '<td>' + escapeHtml(d.key || '-') + '</td>'
-                    + '<td class="p-3">' + msgHtml + '</td>'
+                    + '<td class="p-3">' + msgHtml + repushBtnHtml + '</td>'
                     + '</tr>';
             });
             if (data.length === 0) {
@@ -448,6 +482,55 @@
             if (id) {
                 window.showDiffDetail(String(id));
             }
+        });
+
+        $(document).on('click', '.diff-repush-btn', function () {
+            if (!currentDetailId || diffRepushSubmitting) {
+                return;
+            }
+            var idx = Number($(this).data('item-index'));
+            var item = currentDetailContent && currentDetailContent[idx];
+            var isTargetExtra = item && String(item.msg || '') === '目标多余';
+            var title = '确定重推该条差异？';
+            var body = '';
+            var confirmType = 'primary';
+            if (isTargetExtra) {
+                title = '确定反向订正？';
+                body = '以源库为权威基准删除目标库冗余记录，删除操作不可恢复，请确认后继续。';
+                confirmType = 'danger';
+            }
+            showConfirm({
+                title: title,
+                body: body,
+                icon: 'warning',
+                size: 'large',
+                position: 'center',
+                confirmType: confirmType,
+                onConfirm: function () {
+                    diffRepushSubmitting = true;
+                    var confirmBtn = getDiffDetailConfirmBtn();
+                    if (confirmBtn) {
+                        confirmBtn.disabled = true;
+                    }
+                    doPoster('/validate-sync/reviseDiffItem', {
+                        taskId: currentTaskId,
+                        id: currentDetailId,
+                        itemIndex: idx
+                    }, function (res) {
+                        diffRepushSubmitting = false;
+                        if (confirmBtn) {
+                            confirmBtn.disabled = false;
+                        }
+                        if (!res.success) {
+                            bootGrowl(res.message || '重推失败', 'danger');
+                            return;
+                        }
+                        bootGrowl('重推完成', 'success');
+                        renderDiffDetailModal(res.data || {});
+                        resultPagination.doSearch(buildSearchParams());
+                    });
+                }
+            });
         });
 
         var resultPagination = new PaginationManager({
