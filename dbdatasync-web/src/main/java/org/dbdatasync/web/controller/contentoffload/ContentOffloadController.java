@@ -107,4 +107,37 @@ public class ContentOffloadController extends BaseController {
             return RestResult.restFail("外置内容删除失败：" + e.getMessage());
         }
     }
+
+    /** 块存储配置（Wave20）：mode=memory|file；file 需 rootDir；不传 mode 返回当前形态 */
+    @PostMapping("/storeConfig")
+    @ResponseBody
+    public RestResult storeConfig(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            String mode = params.get("mode");
+            java.util.Map<String, Object> data = new LinkedHashMap<String, Object>();
+            if (mode != null && !mode.trim().isEmpty()) {
+                if ("file".equalsIgnoreCase(mode.trim())) {
+                    String rootDir = params.get("rootDir");
+                    String before = oversizedContentService.useFileStore(rootDir);
+                    data.put("switched", true);
+                    data.put("before", before);
+                } else if ("memory".equalsIgnoreCase(mode.trim())) {
+                    String before = oversizedContentService.useMemoryStore();
+                    data.put("switched", true);
+                    data.put("before", before);
+                } else {
+                    return RestResult.restFail("mode 仅支持 memory|file");
+                }
+            }
+            data.put("storeType", oversizedContentService.storeType());
+            data.put("maxInlineBytes", oversizedContentService.getMaxInlineBytes());
+            return RestResult.restSuccess(data);
+        } catch (IllegalArgumentException e) {
+            return RestResult.restFail(e.getMessage());
+        } catch (Exception e) {
+            logger.error("content offload store config failed", e);
+            return RestResult.restFail("块存储配置失败：" + e.getMessage());
+        }
+    }
 }

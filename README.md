@@ -728,7 +728,18 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 33. 许可声明
+## 33. 2026-11-07 更新摘要（Wave20：边界收口——存储配置化 + DBLink 运行时接线）
+
+把 Wave19 §5 明示的两项待立项落地：
+
+- **ChunkStore 配置化**：`OversizedContentService` 新增 `useMemoryStore()` / `useFileStore(rootDir)` / `storeType()`——块存储可在进程内存（默认，行为零变化）与文件持久化（Wave19 FileChunkStore，跨重启恢复）之间运行时切换；新端点 `POST /content-offload/storeConfig`（零侵入新增）；「超大内容外置」页新增块存储配置区块。
+- **DBLink 运行时接线**：`DbLinkConnectionSource` 接口 + `ConnectorDbLinkConnectionSource` 生产实现（建连样板与既有 `getSchema` 同构：缓存优先、失败现场重建）+ `DbLinkQueryManager` 组合层；新控制器 `DbLinkController`——`GET /dblink` 页面（连接器下拉）、`POST /dblink/links`（all_db_links 探测）、`POST /dblink/query`（只读白名单 + @dblink + maxRows 限行）；侧边栏新增「DBLink 查询」。
+- **验证**：全模块 `clean install` BUILD SUCCESS；biz 单测 **288/288**（新增 9）；新文件 6/6 无 BOM；本轮一次通过无集成修复。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE20.md`、`reports/TEST_REPORT_WAVE20.md`。真库联调边界（Oracle 源端验证、引擎插桩、task_detail 写入链路接入）见该报告 §4。
+
+---
+
+## 34. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

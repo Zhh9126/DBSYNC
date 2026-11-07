@@ -1,10 +1,15 @@
 package org.dbdatasync.biz.storage;
 
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+
+import java.io.File;
+import java.io.IOException;
 
 /**
  * {@link OversizedContentService} 运行时接线层单测（纯逻辑，无 Spring 上下文）。
@@ -14,6 +19,10 @@ import static org.junit.Assert.assertTrue;
  * @date 2026-11-07
  */
 public class OversizedContentServiceTest {
+
+    /** JUnit 临时目录规则（文件存储切换用例） */
+    @Rule
+    public TemporaryFolder tmp = new TemporaryFolder();
 
     @Test
     public void inlinePassthroughBelowThreshold() {
@@ -68,5 +77,55 @@ public class OversizedContentServiceTest {
         // 非法配置回退默认
         service.configure(-1);
         assertEquals(OversizedContentOffloader.INLINE_THRESHOLD_DEFAULT, service.getMaxInlineBytes());
+    }
+
+    @Test
+    public void fileStoreSwitchPersistsAcrossInstances() throws IOException {
+        File root = tmp.newFolder("ofs1");
+        OversizedContentService service = new OversizedContentService();
+        assertEquals("memory", service.storeType());
+        assertEquals("memory", service.useFileStore(root.getAbsolutePath()));
+        assertEquals("file", service.storeType());
+
+        service.configure(64);
+        String content = "文件持久化内容：" + repeat("数据块", 50);
+        String stored = service.store(content);
+        assertTrue(service.isRef(stored));
+        assertEquals(content, service.resolve(stored));
+
+        // 新服务实例指向同一根目录 → 模拟进程重启后仍可反解（持久化生效）
+        OversizedContentService restarted = new OversizedContentService();
+        restarted.useFileStore(root.getAbsolutePath());
+        assertEquals(content, restarted.resolve(stored));
+
+        // 切回内存后引用串不再可解析（内存为空）
+        restarted.useMemoryStore();
+        assertEquals("memory", restarted.storeType());
+        try {
+            restarted.resolve(stored);
+            throw new AssertionError("切回内存后应解析失败");
+        } catch (IllegalStateException expected) {
+            // expected
+        }
+    }
+
+    @Test
+    public void fileStoreEmptyRootDirRejected() {
+        OversizedContentService service = new OversizedContentService();
+        try {
+            service.useFileStore("  ");
+            throw new AssertionError("空 rootDir 应拒绝");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        assertEquals("memory", service.storeType());
+    }
+
+    private static String repeat(String s, int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
     }
 }

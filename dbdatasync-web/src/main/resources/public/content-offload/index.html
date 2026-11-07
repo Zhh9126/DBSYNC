@@ -12,8 +12,29 @@
             <i class="fa fa-info-circle"></i>
             内容 UTF-8 字节数不超过阈值时原样内联；超限按分块协议外置，返回
             <code>DBDS-REF:&lt;refId&gt;</code> 引用串（可反解还原原文）。
-            <br><span class="text-tertiary">不改表结构；当前块存储为进程内存实现，重启后外置内容丢失。</span>
+            <br><span class="text-tertiary">不改表结构；块存储默认为进程内存实现，可切换为文件持久化（跨重启恢复）。</span>
         </div>
+
+        <!-- 块存储配置（Wave20） -->
+        <h4 class="mb-2 font-medium text-sm"><i class="fa fa-hdd-o text-primary"></i> 块存储配置</h4>
+        <div class="grid grid-cols-2 gap-4 mb-3">
+            <div>
+                <label class="form-label">存储形态</label>
+                <select id="storeMode" class="form-input">
+                    <option value="memory">memory（进程内存，默认）</option>
+                    <option value="file">file（文件持久化，跨重启恢复）</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label">文件存储根目录（file 形态必填）</label>
+                <input id="storeRootDir" class="form-input" placeholder="例如：/data/dbdatasync/chunks">
+            </div>
+        </div>
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doStoreConfig()"><i class="fa fa-check"></i> 应用</button>
+            <button class="btn btn-secondary" onclick="doStoreConfigQuery()"><i class="fa fa-refresh"></i> 查看当前形态</button>
+        </div>
+        <div id="storeCfgResult" style="display:none;" class="mb-4"></div>
 
         <!-- 存储 -->
         <div class="mb-3">
@@ -58,6 +79,48 @@
         document.getElementById('offloadResult').style.display = 'block';
         document.getElementById('offloadSummary').innerHTML = summary;
         document.getElementById('offloadOutput').textContent = text;
+    }
+
+    function doStoreConfig() {
+        const mode = document.getElementById('storeMode').value;
+        const params = { mode: mode };
+        if (mode === 'file') {
+            const rootDir = document.getElementById('storeRootDir').value.trim();
+            if (!rootDir) {
+                bootGrowl('file 形态需填写根目录', 'warning');
+                return;
+            }
+            params.rootDir = rootDir;
+        }
+        doPoster('/content-offload/storeConfig', params, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '配置失败', 'danger');
+                return;
+            }
+            renderStoreCfg(response.data);
+            bootGrowl('块存储已切换为 ' + response.data.storeType, 'success');
+        });
+    }
+
+    function doStoreConfigQuery() {
+        doPoster('/content-offload/storeConfig', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '查询失败', 'danger');
+                return;
+            }
+            renderStoreCfg(response.data);
+        });
+    }
+
+    function renderStoreCfg(d) {
+        const box = document.getElementById('storeCfgResult');
+        box.style.display = 'block';
+        const badge = d.storeType === 'file'
+            ? '<span class="badge badge-success">file（持久化）</span>'
+            : '<span class="badge badge-info">memory（内存）</span>';
+        box.innerHTML = badge
+            + ' <span class="text-xs text-tertiary">内联阈值：' + (d.maxInlineBytes || 0) + ' 字节</span>'
+            + (d.before ? ' <span class="text-xs text-tertiary">（切换前：' + escapeHtml(d.before) + '）</span>' : '');
     }
 
     function doStore() {

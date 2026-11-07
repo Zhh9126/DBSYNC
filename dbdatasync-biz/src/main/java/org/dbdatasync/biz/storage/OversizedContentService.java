@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>本服务是「解除 65535 字节截断」的非破坏式路径：不改既有表结构，
  * 既有 DATA 字段在超限时改存引用串。默认块存储为进程内存实现；
- * 接入 task_detail 写入链路与持久化 ChunkStore（文件/表）属后续专项。</p>
+ * Wave20 起可经 {@link #useFileStore(String)} 切换为文件持久化（跨重启恢复）。</p>
  *
  * @author DBDataSync
  * @version 2.1.4
@@ -24,7 +24,8 @@ public class OversizedContentService {
     /** 默认内联阈值：与 DBDataSync_task_detail.DATA 上限一致 */
     private volatile int maxInlineBytes = OversizedContentOffloader.INLINE_THRESHOLD_DEFAULT;
 
-    private final InMemoryChunkStore chunkStore = new InMemoryChunkStore();
+    /** 当前块存储：默认进程内存实现，可切换为文件持久化（Wave20 配置化接入） */
+    private volatile ChunkStore chunkStore = new InMemoryChunkStore();
 
     /** 调整内联阈值（null 保持当前值；&le;0 回退默认 65535） */
     public void configure(Integer maxInlineBytes) {
@@ -33,6 +34,42 @@ public class OversizedContentService {
         }
         this.maxInlineBytes = maxInlineBytes > 0
                 ? maxInlineBytes : OversizedContentOffloader.INLINE_THRESHOLD_DEFAULT;
+    }
+
+    /**
+     * 切换为进程内存存储（默认形态，重启后外置内容丢失）。
+     *
+     * @return 切换前的存储形态名
+     */
+    public String useMemoryStore() {
+        String before = storeType();
+        this.chunkStore = new InMemoryChunkStore();
+        return before;
+    }
+
+    /**
+     * 切换为文件持久化存储（{@link FileChunkStore}，进程重启后外置内容可恢复）。
+     * 同一 rootDir 多次调用指向同一批文件。
+     *
+     * @param rootDir 文件存储根目录（不可为空）
+     * @return 切换前的存储形态名
+     */
+    public String useFileStore(String rootDir) {
+        if (rootDir == null || rootDir.trim().isEmpty()) {
+            throw new IllegalArgumentException("rootDir must not be empty");
+        }
+        String before = storeType();
+        this.chunkStore = new FileChunkStore(rootDir.trim());
+        return before;
+    }
+
+    /**
+     * 当前存储形态名：memory / file。
+     *
+     * @return 形态名
+     */
+    public String storeType() {
+        return chunkStore instanceof FileChunkStore ? "file" : "memory";
     }
 
     /** 当前内联阈值 */
@@ -69,7 +106,7 @@ public class OversizedContentService {
         return stored != null && stored.startsWith(OversizedContentOffloader.REF_PREFIX);
     }
 
-    /** 当前外置块引用数（按 InMemoryChunkStore 已知键估算不可行，返回 -1 表示未统计） */
+    /** 当前外置块引用数（ChunkStore 接口无统计能力，返回 -1 表示未统计） */
     public int refCount() {
         return -1;
     }
