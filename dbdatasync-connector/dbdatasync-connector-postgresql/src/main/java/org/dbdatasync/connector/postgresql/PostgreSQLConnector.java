@@ -374,6 +374,11 @@ public class PostgreSQLConnector extends AbstractDatabaseConnector {
         if (floatMapped != null) {
             return floatMapped;
         }
+        // 跨方言二进制类型统一落为 BYTEA：Oracle RAW/BLOB、MySQL BLOB/LONGBLOB 等。
+        // 到达此处时 RAW 已被基类归一为 VARBINARY，BLOB 系列保持原名；PG/Kingbase 无 BLOB/BINARY 类型。
+        if (t.contains("BLOB") || t.contains("BINARY") || t.contains("RAW")) {
+            return "BYTEA";
+        }
         return super.formatPhysicalType(sourceDefinition);
     }
 
