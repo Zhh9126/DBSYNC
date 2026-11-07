@@ -700,7 +700,22 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 31. 许可声明
+## 31. 2026-11-07 更新摘要（Wave18：Wave17 模块运行时接线——服务层 + REST 端点）
+
+把 Wave17 交付的五个纯逻辑模块全部接入真实运行链路（产品功能化）：
+
+- **慢 SQL 采集**：`SlowSqlService`（biz Bean）+ `SlowSqlController`——`POST /slow-sql/collect`（引擎/驱动挂钩点）、`/report`（avg/max/p95/topN）、`/records`、`/config`（阈值/容量/采样率运行时调整）。
+- **逻辑导入导出**：`LogicalIoController`——`POST /logical-io/exportCsv`、`/exportInsert`（mysql/oracle/pg）、`/importCsv`；纯转换端点，库端 IO 由连接器完成。
+- **切流/影子写/回滚**：`CutoverManagerService`（按 taskId 会话）+ `CutoverController`——`POST /cutover/create`、`/transition`、`/state`、`/shadow/record`、`/shadow/flipSafe`、`/rollbackPlan`、`/remove`；状态权威+安全判定，真实切流动作按预案人工/编排执行（不自动执行）。
+- **跨明细聚合批量重推**：`AggregatedRepushService` + `RepushBatchController`——`POST /validate-sync/reviseDiffBatchAggregated`，**桥接既有 `ValidateSyncService.reviseDiffItems` 真实通道**（非模拟），聚合→分批→逐明细回调→批次汇总。
+- **存储外置**：`OversizedContentService` + `ContentOffloadController`——`POST /content-offload/store`（超 65535 字节返回 `DBDS-REF` 引用串）、`/resolve`、`/delete`；不改表结构的非破坏式扩容。
+- **PL/SQL 识别**已随扫描器自动生效（`/sql-scan/scan` 结果含 SQL-P01~P06），无需新端点。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**（web 含 5 个新控制器）；biz 单测 **236/236**（新增 15）；新文件 UTF-8 无 BOM。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE18.md`、`reports/TEST_REPORT_WAVE18.md`。剩余边界（引擎内部插桩、存储持久化接入 task_detail 写入链路、真机 E2E 执行）已在该报告 §4 明示。
+
+---
+
+## 32. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 
