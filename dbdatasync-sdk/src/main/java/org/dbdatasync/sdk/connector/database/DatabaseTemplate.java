@@ -6,6 +6,7 @@ package org.dbdatasync.sdk.connector.database;
 import org.dbdatasync.sdk.SdkException;
 import org.dbdatasync.sdk.connector.database.SqlLogMasker;
 import org.dbdatasync.sdk.connector.database.ds.SimpleConnection;
+import org.dbdatasync.sdk.observer.DatabaseExecuteObservers;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -325,11 +326,13 @@ public class DatabaseTemplate implements JdbcOperations {
         Assert.notNull(action, "Callback object must not be null");
 
         Statement stmt = null;
+        long startNanos = System.nanoTime();
         try {
             stmt = connection.createStatement();
             applyStatementSettings(stmt);
             T result = action.doInStatement(stmt);
             handleWarnings(stmt);
+            notifyExecuted(getSql(action), stmt, startNanos);
             return result;
         } catch (SQLException ex) {
             // Release Connection early, to avoid potential connection pool deadlock
@@ -567,17 +570,44 @@ public class DatabaseTemplate implements JdbcOperations {
     // Methods dealing with prepared statements
     // -------------------------------------------------------------------------
 
+    /**
+     * 通知数据库执行观察者一次 SQL 执行成功（空实现先行判断，零观察者时零开销）。
+     *
+     * @param sql           SQL 文本
+     * @param statement     执行语句（用于提取行数）
+     * @param startNanos    执行开始纳秒时间戳
+     */
+    private void notifyExecuted(@Nullable String sql, Statement statement, long startNanos) {
+        if (DatabaseExecuteObservers.size() == 0) {
+            return;
+        }
+        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+        long rows = 0;
+        if (statement != null) {
+            try {
+                rows = statement.getUpdateCount();
+            } catch (SQLException e) {
+                // 行数取不到不阻塞通知
+            }
+        }
+        // source 取底层连接驱动类名（低依赖来源标识，上层观察者可由此拼接任务上下文）
+        String source = connection != null ? connection.getClass().getSimpleName() : "unknown";
+        DatabaseExecuteObservers.notifyExecuted(sql, source, elapsedMillis, rows);
+    }
+
     @Nullable private <T> T execute(PreparedStatementCreator psc, PreparedStatementCallback<T> action, boolean closeResources) throws DataAccessException {
 
         Assert.notNull(psc, "PreparedStatementCreator must not be null");
         Assert.notNull(action, "Callback object must not be null");
 
         PreparedStatement ps = null;
+        long startNanos = System.nanoTime();
         try {
             ps = psc.createPreparedStatement(connection);
             applyStatementSettings(ps);
             T result = action.doInPreparedStatement(ps);
             handleWarnings(ps);
+            notifyExecuted(getSql(psc), ps, startNanos);
             return result;
         } catch (SQLException ex) {
             // Release Connection early, to avoid potential connection pool deadlock
