@@ -863,6 +863,16 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
                 task.setFullSplitCount("0");
             }
         }
+        // 对比模式白名单：full/sample/health/checksum，非法回退 full（存量零影响）
+        String compareMode = params.get("compareMode");
+        if (StringUtil.isNotBlank(compareMode)) {
+            String cm = compareMode.trim().toLowerCase(Locale.ROOT);
+            if ("full".equals(cm) || "sample".equals(cm) || "health".equals(cm) || "checksum".equals(cm)) {
+                task.setCompareMode(cm);
+            } else {
+                task.setCompareMode("full");
+            }
+        }
     }
 
     private void log(LogType log, ValidateSyncTask task, TableGroup tableGroup) {

@@ -31,8 +31,12 @@ public class ValidateSyncExecutorTest {
         assertEquals("full", ValidateSyncExecutor.fullCompareMode("FULL"));
         assertEquals("sample", ValidateSyncExecutor.fullCompareMode("SamPle"));
         assertEquals("health", ValidateSyncExecutor.fullCompareMode("HEALTH"));
+        // Wave13: checksum 模式归一化（大小写不敏感）
+        assertEquals("checksum", ValidateSyncExecutor.fullCompareMode("CHECKSUM"));
+        assertEquals("checksum", ValidateSyncExecutor.fullCompareMode("checksum"));
         // 非法值回退 full（存量任务兼容）
         assertEquals("full", ValidateSyncExecutor.fullCompareMode("unknown"));
+        assertEquals("full", ValidateSyncExecutor.fullCompareMode("bogusXYZ"));
     }
 
     // ---------- sliceable ----------

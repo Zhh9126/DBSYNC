@@ -50,5 +50,21 @@
             </div>
         </div>
     </div>
+
+    <div class="grid grid-cols-1 mt-3">
+        <div class="form-item">
+            <label class="form-label">对比模式
+                <i class="fa fa-question-circle" title="full=全量逐行对比(精确定位差异); sample=抽样对比(大表快速健康检查); health=快速体检(count+主键值域, 秒级粗检不订正); checksum=字段级指纹比对(分块 MD5 摘要, 纯定位不订正)"></i>
+            </label>
+            <div class="form-control-area">
+                <select class="form-control" name="compareMode">
+                    <option value="full" th:selected="${task == null or task.compareMode == null or task.compareMode == 'full'}">全量逐行对比(推荐)</option>
+                    <option value="sample" th:selected="${task != null and task.compareMode == 'sample'}">抽样对比(大表快速检查)</option>
+                    <option value="health" th:selected="${task != null and task.compareMode == 'health'}">快速体检(count+主键值域)</option>
+                    <option value="checksum" th:selected="${task != null and task.compareMode == 'checksum'}">字段级指纹(分块 MD5 摘要)</option>
+                </select>
+            </div>
+        </div>
+    </div>
 </div>
 </html>

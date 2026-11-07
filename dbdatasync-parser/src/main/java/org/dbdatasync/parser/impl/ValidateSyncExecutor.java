@@ -15,6 +15,7 @@ import org.dbdatasync.parser.TaskProfile;
 import org.dbdatasync.parser.model.Connector;
 import org.dbdatasync.parser.model.Meta;
 import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.util.RowFingerprintUtil;
 import org.dbdatasync.parser.model.TaskDetailQuery;
 import org.dbdatasync.sdk.constant.ConfigConstant;
 import org.dbdatasync.sdk.connector.ConnectorInstance;
@@ -92,6 +93,9 @@ public class ValidateSyncExecutor {
 
     /** 快速体检模式（count+min/max 秒级粗检）：compareMode=health */
     public static final String COMPARE_MODE_HEALTH = "health";
+
+    /** 字段级指纹比对模式（分块 MD5 摘要，纯计算定位，不订正）：compareMode=checksum */
+    public static final String COMPARE_MODE_CHECKSUM = "checksum";
 
     private static final java.util.regex.Pattern DATETIME_PATTERN =
             java.util.regex.Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?");
@@ -365,12 +369,19 @@ public class ValidateSyncExecutor {
         String mode = fullCompareMode(task.getCompareMode());
         boolean sampleMode = "sample".equalsIgnoreCase(mode);
         boolean healthMode = COMPARE_MODE_HEALTH.equalsIgnoreCase(mode);
-        boolean sliceMode = !sampleMode && !healthMode && sliceable(pkCols == null ? 0 : pkCols.size(), task.getFullSplitCount());
+        boolean checksumMode = COMPARE_MODE_CHECKSUM.equalsIgnoreCase(mode);
+        boolean sliceMode = !sampleMode && !healthMode && !checksumMode
+                && sliceable(pkCols == null ? 0 : pkCols.size(), task.getFullSplitCount());
 
         // 快速体检：count + min/max，秒级粗检，无行级定位不订正
         if (healthMode) {
             return healthCheck(task, source, target, sourceTable, targetTable,
                     pkCols, content, autoSync);
+        }
+        // 字段级指纹比对：分块 MD5 摘要，纯定位不订正
+        if (checksumMode) {
+            return checksumCheck(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, taskId);
         }
         // 分片并发：单列主键值域切分 + 多线程逐行比对
         if (sliceMode) {
@@ -458,7 +469,8 @@ public class ValidateSyncExecutor {
             return "full";
         }
         if ("full".equalsIgnoreCase(mode) || "sample".equalsIgnoreCase(mode)
-                || COMPARE_MODE_HEALTH.equalsIgnoreCase(mode)) {
+                || COMPARE_MODE_HEALTH.equalsIgnoreCase(mode)
+                || COMPARE_MODE_CHECKSUM.equalsIgnoreCase(mode)) {
             return mode.toLowerCase(Locale.ROOT);
         }
         return "full";
@@ -508,6 +520,81 @@ public class ValidateSyncExecutor {
                 sourceTable, targetTable, sCount, tCount,
                 sRange == null ? "-" : rangeText(sRange), tRange == null ? "-" : rangeText(tRange), diff);
         return new long[]{sCount, tCount, diff, 0L};
+    }
+
+    /**
+     * 字段级指纹比对（compareMode=checksum）：分块对源/目标行做 MD5 摘要，块摘要不一致即判定该块存在差异。
+     * <p>纯计算定位、不订正（fixed 恒 0）；仅输出「哪一块不一致」并给出块主键范围与摘要前缀，
+     * 字段级下钻需切到 full 模式。块大小复用 {@code readNum}（受 MAX_PAGE_SIZE 上限约束）。</p>
+     *
+     * @return {@code [sourceTotal, targetTotal, diff, fixed]}（fixed 恒 0）
+     */
+    private long[] checksumCheck(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
+                                String sourceTable, String targetTable,
+                                List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
+                                List<Map<String, Object>> content, String taskId) throws Exception {
+        long sourceTotal = countRows(source, sourceTable);
+        long targetTotal = countRows(target, targetTable);
+        long diff = 0L;
+        long fixed = 0L; // checksum 模式纯定位，不订正
+
+        // 无主键：无法定位行，跳过行数据校验
+        if (CollectionUtils.isEmpty(pkCols)) {
+            addItem(content, rowDataItem(sourceTable, targetTable, "无主键字段，跳过行数据校验", "", null,
+                    Collections.emptyList()));
+            return new long[]{sourceTotal, targetTotal, diff, fixed};
+        }
+
+        List<String> commonCols = commonColumnNames(sourceCols, targetCols);
+        List<String> pkNames = columnNames(pkCols);
+        // 块大小复用 readNum（默认 10000），上下夹紧到 [100, MAX_PAGE_SIZE]
+        int blockSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
+        int offset = 0;
+        while (true) {
+            if (isStopping(taskId)) {
+                break;
+            }
+            List<Map<String, Object>> srcPage = pageRows(source, sourceTable, pkNames, commonCols, blockSize, offset);
+            if (CollectionUtils.isEmpty(srcPage)) {
+                break;
+            }
+            List<String> keys = new ArrayList<>(srcPage.size());
+            for (Map<String, Object> row : srcPage) {
+                keys.add(buildKey(row, pkNames));
+            }
+            Map<String, Map<String, Object>> tgtPage = fetchByKeys(target, targetTable, pkNames, commonCols, keys, target);
+
+            // 仅收集命中的目标行，保持与 keys 一致的顺序
+            List<Map<String, Object>> tgtRows = new ArrayList<>();
+            for (String k : keys) {
+                Map<String, Object> t = tgtPage.get(k);
+                if (t != null) {
+                    tgtRows.add(t);
+                }
+            }
+
+            String srcBlock = RowFingerprintUtil.blockDigest(srcPage, commonCols, pkNames);
+            String tgtBlock = RowFingerprintUtil.blockDigest(tgtRows, commonCols, pkNames);
+            if (!srcBlock.equals(tgtBlock)) {
+                diff++;
+                String keyRange = keys.get(0) + "~" + keys.get(keys.size() - 1);
+                String msg = "校验和(块)不一致, 块主键范围[" + keyRange + "], 源摘要="
+                        + srcBlock.substring(0, Math.min(16, srcBlock.length()))
+                        + ", 目标摘要=" + tgtBlock.substring(0, Math.min(16, tgtBlock.length()))
+                        + "（仅定位差异块，请改用全量模式查看字段级差异）";
+                Map<String, Object> item = rowDataItem(sourceTable, targetTable, msg, keyRange,
+                        Collections.emptyList(), pkNames);
+                item.put("repairSql", "");
+                addItem(content, item);
+            }
+            offset += srcPage.size();
+            if (srcPage.size() < blockSize) {
+                break;
+            }
+        }
+        logger.info("字段级指纹比对 [{} -> {}]: source={}, target={}, diff={}",
+                sourceTable, targetTable, sourceTotal, targetTotal, diff);
+        return new long[]{sourceTotal, targetTotal, diff, fixed};
     }
 
     private Object[] queryRange(DatabaseConnectorInstance db, String table, String pkName) {

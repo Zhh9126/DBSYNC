@@ -121,13 +121,14 @@
                 <div class="grid grid-cols-2 mt-5">
                     <div class="form-item">
                         <label class="form-label">对比模式
-                            <i class="fa fa-question-circle" title="full=全量逐行对比(精确定位差异); sample=抽样对比(按步长跳页采样, 大表快速健康检查); health=快速体检(count+主键值域, 秒级粗检不订正)"></i>
+                            <i class="fa fa-question-circle" title="full=全量逐行对比(精确定位差异); sample=抽样对比(按步长跳页采样, 大表快速健康检查); health=快速体检(count+主键值域, 秒级粗检不订正); checksum=字段级指纹比对(分块 MD5 摘要, 纯定位不订正)"></i>
                         </label>
                         <div class="form-control-area">
                             <select class="form-control" name="compareMode" id="compareModeSelect">
                                 <option value="full">全量逐行对比(推荐)</option>
                                 <option value="sample">抽样对比(大表快速检查)</option>
                                 <option value="health">快速体检(count+主键值域)</option>
+                                <option value="checksum">字段级指纹(分块 MD5 摘要)</option>
                             </select>
                         </div>
                     </div>

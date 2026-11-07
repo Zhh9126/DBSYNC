@@ -111,6 +111,45 @@
             </div>
             <div id="ddlDraftResult" style="display:none;"></div>
         </div>
+
+        <!-- Wave13 B 线：DDL 变更辅助（ALTER TABLE 拆解） -->
+        <div class="mt-5 pt-4 border-t">
+            <h4 class="mb-2 font-medium text-sm">
+                <i class="fa fa-exchange text-primary"></i> DDL 变更辅助（ALTER TABLE 拆解）
+            </h4>
+            <div class="tip-box mb-3 text-xs">
+                粘贴源端 ALTER TABLE 语句，拆分为 ADD/MODIFY/CHANGE/DROP/RENAME 操作单元，
+                生成目标端类型映射草稿与风险标注。
+                <br><span class="text-tertiary">草稿仅供人工确认，不自动执行。</span>
+            </div>
+            <div class="grid grid-cols-2 gap-4 mb-3">
+                <div>
+                    <label class="form-label">源方言（ALTER）</label>
+                    <select id="alterSourceDialect" class="form-input">
+                        <option value="">请选择源数据库</option>
+                        <option th:each="d : ${dialects}" th:value="${d}" th:text="${d}"></option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">目标方言（ALTER）</label>
+                    <select id="alterTargetDialect" class="form-input">
+                        <option value="">请选择目标数据库</option>
+                        <option th:each="d : ${dialects}" th:value="${d}" th:text="${d}"></option>
+                    </select>
+                </div>
+            </div>
+            <div class="mb-3">
+                <textarea id="alterText" class="form-input" rows="5"
+                          placeholder="ALTER TABLE t ADD COLUMN c VARCHAR2(64);"
+                          style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+            </div>
+            <div class="mb-3">
+                <button class="btn btn-primary" id="alterAssistBtn" onclick="doDdlChangeAssist()">
+                    <i class="fa fa-exchange"></i> 生成 DDL 变更辅助
+                </button>
+            </div>
+            <div id="alterAssistResult" style="display:none;"></div>
+        </div>
     </div>
 </div>
 
@@ -273,6 +312,73 @@
             html += '<pre class="text-xs p-2 border rounded bg-surface" '
                 + 'style="white-space:pre-wrap;word-break:break-all;font-family:Consolas,Menlo,monospace;">'
                 + escapeHtml(shown) + '</pre>';
+        }
+        if (d.note) {
+            html += '<div class="text-xs text-tertiary mt-1">' + escapeHtml(d.note) + '</div>';
+        }
+        box.innerHTML = html;
+    }
+
+    // Wave13 B 线：DDL 变更辅助（ALTER TABLE 拆解，独立接口 /sql-scan/ddlChangeAssist）
+    function doDdlChangeAssist() {
+        const sql = document.getElementById('alterText').value.trim();
+        const source = document.getElementById('alterSourceDialect').value;
+        const target = document.getElementById('alterTargetDialect').value;
+        if (!sql) {
+            bootGrowl('请先粘贴 ALTER TABLE 语句', 'warning');
+            return;
+        }
+        if (!source || !target) {
+            bootGrowl('请选择源方言与目标方言', 'warning');
+            return;
+        }
+        const btn = document.getElementById('alterAssistBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 生成中…';
+        doPoster('/sql-scan/ddlChangeAssist', {
+            sql: sql,
+            sourceDialect: source,
+            targetDialect: target
+        }, function (response) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-exchange"></i> 生成 DDL 变更辅助';
+            if (!response.success) {
+                bootGrowl(response.message || '生成失败', 'danger');
+                return;
+            }
+            renderDdlChangeAssist(response.data || {});
+        });
+    }
+
+    function renderDdlChangeAssist(d) {
+        const box = document.getElementById('alterAssistResult');
+        box.style.display = 'block';
+        let html = '';
+        if (d.level === 'error') {
+            html += '<div class="p-2 mb-2 text-xs text-danger border rounded bg-surface">error 级类型需人工重写，不生成草稿。</div>';
+        } else if (!d.changed) {
+            html += '<div class="p-2 mb-2 text-xs text-tertiary border rounded bg-surface">无映射命中，返回原 SQL。</div>';
+        } else {
+            html += '<div class="p-2 mb-2 text-xs border rounded bg-surface"><span class="badge badge-warning">草稿 / 需人工确认 / 不自动执行</span></div>';
+        }
+        if (d.units && d.units.length) {
+            html += '<table class="text-xs w-full mb-2"><thead><tr><th>操作</th><th>列</th><th>源类型</th><th>目标类型</th><th>级别</th><th>风险</th></tr></thead><tbody>';
+            d.units.forEach(function (u) {
+                html += '<tr><td>' + escapeHtml(u.operation || '') + '</td>'
+                    + '<td>' + escapeHtml(u.columnName || '') + '</td>'
+                    + '<td>' + escapeHtml(u.sourceType || '') + '</td>'
+                    + '<td>' + escapeHtml(u.targetType || '') + '</td>'
+                    + '<td>' + escapeHtml(u.level || '') + '</td>'
+                    + '<td>' + escapeHtml(u.riskNote || '') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        if (d.risks && d.risks.length) {
+            html += '<div class="text-xs mb-2">风险：' + escapeHtml(d.risks.join('；')) + '</div>';
+        }
+        const shown = d.targetDdlDraft || d.originalSql || '';
+        if (shown) {
+            html += '<pre class="text-xs p-2 border rounded bg-surface" style="white-space:pre-wrap;word-break:break-all;font-family:Consolas,Menlo,monospace;">' + escapeHtml(shown) + '</pre>';
         }
         if (d.note) {
             html += '<div class="text-xs text-tertiary mt-1">' + escapeHtml(d.note) + '</div>';

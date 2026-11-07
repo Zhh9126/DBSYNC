@@ -632,7 +632,20 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 26. 许可声明
+## 26. 2026-11-07 更新摘要（Wave13：字段级指纹校验 + DDL 变更辅助）
+
+把外部文章《开源 CDC 的 DDL 黑洞与 KFS 的破局解法》点名的两大痛点映射回设计文档欠项并补齐：
+
+- **A 线 字段级指纹校验（compareMode=checksum）**：`validate-sync` 校验引擎新增分块 MD5 指纹比对模式，纯计算定位、不订正。新增 `RowFingerprintUtil`（byte[]→hex、数值 `1`/`1.0` 等价、日期 ISO 归一等，消除跨库假差异/假一致）；`fullCompareMode` 白名单追加 checksum（非法回退 full，防静默降级）；`checkRowData` 分流（checksum 不进分片并发）；块不一致产出 `type=rowData` 差异项（msg 含块主键范围 + 双摘要前缀），`fixed` 恒 0。前端 add/editSetting 增加选项与回显（修正了 `th:value` 在 `<select>` 上不生效的缺陷）。复用既有 `pageRows`/`commonColumnNames`/`buildKey`/`normalize`，Wave12 三条链路（manualRevise/reviseDiffItem/exportReport）零改动即兼容。
+- **B 线 DDL 变更辅助（ALTER TABLE 拆解）**：新增独立离线工具，输入源端 `ALTER TABLE` → 正则结构化拆解为 ADD/MODIFY/CHANGE/DROP/RENAME 单元 → 复用 `DdlTypeMapping`/`SqlCompatibilityRules` 生成目标端 DDL 草稿 + 风险标注 + 兼容度提示。**不连库、不执行 DDL、不触达运行时 DDL 链路**（与既有 `GeneralBufferActuator`/`parser/ddl/` 完全独立）。新增 `POST /sql-scan/ddlChangeAssist` 接口与 sql-scan 页面入口。
+- **保守定位与零影响**：默认 `full`，存量任务零变化；不改 DAO/存储模型、`MAX_CONTENT_ITEMS=200` 与 65535 字节约束不变；CSV 报告按 Wave12 机制标注「可能不完整」；不改 `pom.xml`、不新增依赖。
+- **明确不做**：运行时 DDL 自动执行、AST 级 PL/SQL 语义解析、KUFL/物理日志直读、checksum 自动订正/块内下钻（下钻复用 full 模式）。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**；四模块单测 **255/255**（sdk 18 / parser 65 / biz 143 / web 29，新增 25、既有 230 基线不退化）；前端 2 处 `node --check` 通过；14 文件 UTF-8 无 BOM。
+- 需求、设计与验证细节见 `reports/WAVE13_INCREMENTAL_PRD.md`、`reports/WAVE13_INCREMENTAL_DESIGN.md`、`reports/OPTIMIZATION_REPORT_WAVE13_CHECKSUM_DDL.md`、`reports/TEST_REPORT_WAVE13.md`。
+
+---
+
+## 27. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

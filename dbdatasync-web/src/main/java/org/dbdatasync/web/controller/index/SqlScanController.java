@@ -3,6 +3,8 @@
  */
 package org.dbdatasync.web.controller.index;
 
+import org.dbdatasync.biz.sqlscan.DdlChangeAssistService;
+import org.dbdatasync.biz.sqlscan.DdlChangeDraft;
 import org.dbdatasync.biz.sqlscan.DdlDraft;
 import org.dbdatasync.biz.sqlscan.DdlDraftGenerator;
 import org.dbdatasync.biz.sqlscan.SqlCompatibilityRules;
@@ -108,6 +110,39 @@ public class SqlScanController extends BaseController {
         } catch (Exception e) {
             logger.error("ddl draft failed", e);
             return RestResult.restFail("生成 DDL 转换草稿失败，请检查输入后重试");
+        }
+    }
+
+    /**
+     * Wave13 B 线：DDL 变更辅助（ALTER TABLE 拆解 → 类型映射草稿 + 风险标注，不自动执行）。
+     *
+     * <p>仅做字符串级拆解与类型映射，输出变更单元、目标端草稿与风险标注；
+     * error 级类型不生成草稿；异常统一包装为可读文案，不透传第三方异常消息。</p>
+     *
+     * @param request 表单：sql（ALTER 语句）、sourceDialect、targetDialect
+     * @return {@code RestResult<DdlChangeDraft>}
+     */
+    @PostMapping("/ddlChangeAssist")
+    @ResponseBody
+    public RestResult ddlChangeAssist(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            String sql = params.get("sql");
+            String sourceDialect = params.get("sourceDialect");
+            String targetDialect = params.get("targetDialect");
+            if (sql == null || sql.trim().isEmpty()) {
+                return RestResult.restFail("ALTER 语句不能为空");
+            }
+            if (sourceDialect == null || sourceDialect.trim().isEmpty()
+                    || targetDialect == null || targetDialect.trim().isEmpty()) {
+                return RestResult.restFail("请选择源方言与目标方言");
+            }
+            DdlChangeDraft draft = new DdlChangeAssistService().assist(
+                    sql, sourceDialect.trim(), targetDialect.trim());
+            return RestResult.restSuccess(draft);
+        } catch (Exception e) {
+            logger.error("ddl change assist failed", e);
+            return RestResult.restFail("生成 DDL 变更辅助草稿失败，请检查输入后重试");
         }
     }
 }
