@@ -4,7 +4,8 @@ package org.dbdatasync.biz.sqlscan;
  * DDL 变更单元（ALTER TABLE 拆解后的单列操作单元）。
  *
  * <p>由 {@link DdlChangeSplitter} 通过正则从 ALTER TABLE 语句中拆解得到，
- * 每条单元对应一个 ADD / MODIFY / CHANGE / DROP / RENAME 操作，
+ * 每条单元对应一个 ADD / MODIFY / CHANGE / DROP / RENAME 等列操作，
+ * 或 ADD CONSTRAINT / ADD INDEX / DROP CONSTRAINT / SET DEFAULT 等复合子句操作，
  * 并记录类型映射结果与风险级别。</p>
  *
  * @author DBDataSync
@@ -21,6 +22,9 @@ public class DdlChangeUnit {
 
     /** CHANGE/RENAME 的源列名（其它为空串） */
     private String oldName;
+
+    /** 约束/索引/主键标识名（ADD/DROP 复合子句的对象名，可空；列类型操作留空串），Wave15 新增 */
+    private String objectName;
 
     /** 源类型片段（ADD/MODIFY/CHANGE 有值；DROP/RENAME 空） */
     private String sourceType;
@@ -59,6 +63,14 @@ public class DdlChangeUnit {
 
     public void setOldName(String oldName) {
         this.oldName = oldName;
+    }
+
+    public String getObjectName() {
+        return objectName;
+    }
+
+    public void setObjectName(String objectName) {
+        this.objectName = objectName;
     }
 
     public String getSourceType() {

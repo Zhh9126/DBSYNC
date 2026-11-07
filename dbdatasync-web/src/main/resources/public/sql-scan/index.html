@@ -362,10 +362,11 @@
             html += '<div class="p-2 mb-2 text-xs border rounded bg-surface"><span class="badge badge-warning">草稿 / 需人工确认 / 不自动执行</span></div>';
         }
         if (d.units && d.units.length) {
-            html += '<table class="text-xs w-full mb-2"><thead><tr><th>操作</th><th>列</th><th>源类型</th><th>目标类型</th><th>级别</th><th>风险</th></tr></thead><tbody>';
+            html += '<table class="text-xs w-full mb-2"><thead><tr><th>操作</th><th>列</th><th>对象</th><th>源类型</th><th>目标类型</th><th>级别</th><th>风险</th></tr></thead><tbody>';
             d.units.forEach(function (u) {
                 html += '<tr><td>' + escapeHtml(u.operation || '') + '</td>'
                     + '<td>' + escapeHtml(u.columnName || '') + '</td>'
+                    + '<td>' + escapeHtml(u.objectName || '') + '</td>'
                     + '<td>' + escapeHtml(u.sourceType || '') + '</td>'
                     + '<td>' + escapeHtml(u.targetType || '') + '</td>'
                     + '<td>' + escapeHtml(u.level || '') + '</td>'

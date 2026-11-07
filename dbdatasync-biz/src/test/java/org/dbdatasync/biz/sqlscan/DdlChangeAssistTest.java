@@ -187,4 +187,134 @@ public class DdlChangeAssistTest {
             assertFalse(path + " 不应引用 DdlParserImpl", text.contains("DdlParserImpl"));
         }
     }
+
+    // ===== Wave15：复合 ALTER 子句识别（不再 UNKNOWN） =====
+
+    @Test
+    public void addNamedForeignKeyConstraint() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD CONSTRAINT fk_x FOREIGN KEY (a) REFERENCES t2(b)", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_CONSTRAINT", u.getOperation());
+        assertEquals("fk_x", u.getObjectName());
+        assertEquals("", u.getColumnName());
+        assertEquals(SqlCompatibilityIssue.LEVEL_INFO, u.getLevel());
+        assertTrue(u.getRiskNote().contains("FOREIGN KEY"));
+        assertFalse("复合子句不应退化为 UNKNOWN", "UNKNOWN".equals(u.getOperation()));
+    }
+
+    @Test
+    public void addUnnamedPrimaryKey() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD PRIMARY KEY (a, b)", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_CONSTRAINT", u.getOperation());
+        assertEquals("", u.getObjectName());
+        assertTrue(u.getRiskNote().contains("PRIMARY KEY"));
+        assertEquals(SqlCompatibilityIssue.LEVEL_INFO, u.getLevel());
+    }
+
+    @Test
+    public void addUnnamedUniqueConstraint() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD UNIQUE (a)", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_CONSTRAINT", u.getOperation());
+        assertTrue(u.getRiskNote().contains("UNIQUE"));
+    }
+
+    @Test
+    public void addNamedIndex() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD INDEX idx_name (a, b)", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_INDEX", u.getOperation());
+        assertEquals("idx_name", u.getObjectName());
+    }
+
+    @Test
+    public void addUniqueIndexNamed() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD UNIQUE INDEX idx2 (c)", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_INDEX", u.getOperation());
+        assertEquals("idx2", u.getObjectName());
+        assertTrue(u.getRiskNote().contains("唯一"));
+    }
+
+    @Test
+    public void addKeyMysqlStyle() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD KEY k_name (d)", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_INDEX", u.getOperation());
+        assertEquals("k_name", u.getObjectName());
+        assertTrue(u.getRiskNote().contains("KEY"));
+    }
+
+    @Test
+    public void dropNamedConstraint() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DROP CONSTRAINT fk_x", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_CONSTRAINT", u.getOperation());
+        assertEquals("fk_x", u.getObjectName());
+    }
+
+    @Test
+    public void dropPrimaryKey() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DROP PRIMARY KEY", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_PRIMARY_KEY", u.getOperation());
+        assertEquals("", u.getObjectName());
+    }
+
+    @Test
+    public void dropNamedIndex() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DROP INDEX idx_name", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_INDEX", u.getOperation());
+        assertEquals("idx_name", u.getObjectName());
+    }
+
+    @Test
+    public void setColumnDefault() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ALTER COLUMN c SET DEFAULT 0", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("SET_DEFAULT", u.getOperation());
+        assertEquals("c", u.getColumnName());
+        assertEquals(SqlCompatibilityIssue.LEVEL_INFO, u.getLevel());
+    }
+
+    @Test
+    public void dropColumnDefault() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ALTER COLUMN c DROP DEFAULT", "MySQL", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_DEFAULT", u.getOperation());
+        assertEquals("c", u.getColumnName());
+    }
+
+    @Test
+    public void compositeNotMisclassifiedAsColumnAdd() {
+        // 优先级校验：ADD CONSTRAINT 不能误判为通用 ADD 列
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD CONSTRAINT pk_x PRIMARY KEY (a)", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_CONSTRAINT", u.getOperation());
+        assertEquals("", u.getColumnName());
+        assertFalse("不应误判为列 ADD", "ADD".equals(u.getOperation()));
+    }
+
+    @Test
+    public void compositeUnitKeepsOriginalSqlUnchanged() {
+        // 复合子句无类型映射，应返回原 SQL（不自动改写）
+        String sql = "ALTER TABLE t ADD CONSTRAINT fk_x FOREIGN KEY (a) REFERENCES t2(b)";
+        DdlChangeDraft draft = service.assist(sql, "Oracle", "MySQL");
+        assertFalse(draft.isChanged());
+        assertEquals(sql, draft.getTargetDdlDraft());
+    }
 }

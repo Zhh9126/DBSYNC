@@ -12,9 +12,11 @@ import java.util.regex.Pattern;
  * ALTER TABLE 变更拆解器（Wave13 B 线，纯离线正则拆解，不引 jsqlparser）。
  *
  * <p>与 {@link DdlDraftGenerator} 纯字符串风格一致：把 ALTER TABLE 语句拆解为
- * ADD / MODIFY / CHANGE / DROP / RENAME 单列操作单元，并对 ADD/MODIFY/CHANGE
- * 做类型映射（只读复用 {@link DdlTypeMapping}）。解析失败降级为 {@code UNKNOWN} 单元，
- * <strong>绝不抛出</strong>。</p>
+ * ADD / MODIFY / CHANGE / DROP / RENAME 单列操作单元，以及对 ADD CONSTRAINT /
+ * ADD INDEX / DROP CONSTRAINT / SET DEFAULT 等复合子句（Wave15 扩展）识别为
+ * 明确单元（含 {@code objectName}）；对 ADD/MODIFY/CHANGE 做类型映射
+ * （只读复用 {@link DdlTypeMapping}）。解析失败或超出现有模式的子句降级为
+ * {@code UNKNOWN} 单元，<strong>绝不抛出</strong>。</p>
  *
  * @author DBDataSync
  * @version 2.1.4
@@ -37,6 +39,25 @@ public final class DdlChangeSplitter {
             Pattern.compile("ADD\\s+(COLUMN\\s+)?([\\w$]+)\\s+([^\\s,(]+(\\([^)]*\\))?)", FLAGS);
     private static final Pattern P_DROP =
             Pattern.compile("DROP\\s+(COLUMN\\s+)?([\\w$]+)", FLAGS);
+
+    /** Wave15 复合子句：ADD CONSTRAINT <name> (PRIMARY KEY|FOREIGN KEY|UNIQUE|CHECK) */
+    private static final Pattern P_ADD_NAMED_CONSTRAINT =
+            Pattern.compile("ADD\\s+CONSTRAINT\\s+([\\w$]+)\\s+(PRIMARY\\s+KEY|FOREIGN\\s+KEY|UNIQUE|CHECK)\\b", FLAGS);
+    /** Wave15 复合子句：ADD [UNIQUE] INDEX <name> */
+    private static final Pattern P_ADD_INDEX =
+            Pattern.compile("ADD\\s+(UNIQUE\\s+)?INDEX\\s+([\\w$]+)", FLAGS);
+    /** Wave15 复合子句：ADD KEY <name>（MySQL 风格） */
+    private static final Pattern P_ADD_KEY =
+            Pattern.compile("ADD\\s+KEY\\s+([\\w$]+)", FLAGS);
+    /** Wave15 复合子句：ADD (PRIMARY KEY|FOREIGN KEY|UNIQUE(...)) 无名约束 */
+    private static final Pattern P_ADD_UNNAMED_CONSTRAINT =
+            Pattern.compile("ADD\\s+(PRIMARY\\s+KEY|FOREIGN\\s+KEY|UNIQUE(?=\\s*\\())\\b", FLAGS);
+    /** Wave15 复合子句：ALTER [COLUMN] <col> SET DEFAULT <val> | DROP DEFAULT */
+    private static final Pattern P_ALTER_COLUMN_DEFAULT =
+            Pattern.compile("ALTER\\s+(COLUMN\\s+)?([\\w$]+)\\s+(SET\\s+DEFAULT\\s+[^,;]+|DROP\\s+DEFAULT)", FLAGS);
+    /** Wave15 复合子句：DROP CONSTRAINT|PRIMARY KEY|INDEX|FOREIGN KEY|KEY [name] */
+    private static final Pattern P_DROP_OBJECT =
+            Pattern.compile("DROP\\s+(CONSTRAINT|PRIMARY\\s+KEY|INDEX|FOREIGN\\s+KEY|KEY)\\s*([\\w$]*)", FLAGS);
 
     /** 类型映射表（只读复用，单例即可） */
     private static final DdlTypeMapping TYPE_MAPPING = new DdlTypeMapping();
@@ -103,6 +124,38 @@ public final class DdlChangeSplitter {
             u.setRiskNote("仅重命名，请确认目标端列名语义");
             return u;
         }
+        // ---- Wave15 复合子句识别（严格排在通用 ADD/DROP 列之前，避免误判为列操作） ----
+        if ((m = P_ADD_NAMED_CONSTRAINT.matcher(clause)).find()) {
+            return buildConstraintUnit(m.group(1), normalizeConstraintType(m.group(2)), true);
+        }
+        if ((m = P_ADD_INDEX.matcher(clause)).find()) {
+            boolean unique = m.group(1) != null
+                    && m.group(1).trim().toUpperCase(Locale.ROOT).startsWith("UNIQUE");
+            return buildIndexUnit(m.group(2), unique, false);
+        }
+        if ((m = P_ADD_KEY.matcher(clause)).find()) {
+            return buildIndexUnit(m.group(1), false, true);
+        }
+        if ((m = P_ADD_UNNAMED_CONSTRAINT.matcher(clause)).find()) {
+            return buildConstraintUnit("", normalizeConstraintType(m.group(1)), false);
+        }
+        if ((m = P_ALTER_COLUMN_DEFAULT.matcher(clause)).find()) {
+            String sub = m.group(3) == null ? "" : m.group(3).trim();
+            if (sub.toUpperCase(Locale.ROOT).startsWith("DROP")) {
+                return buildDefaultUnit(m.group(2), "DROP_DEFAULT", "删除列默认值，请确认目标端语义");
+            }
+            return buildDefaultUnit(m.group(2), "SET_DEFAULT", "设置列默认值，请确认目标端默认值语义");
+        }
+        if ((m = P_DROP_OBJECT.matcher(clause)).find()) {
+            String kind = m.group(1) == null ? "" : m.group(1).toUpperCase(Locale.ROOT).replaceAll("\\s+", "_");
+            String name = m.group(2) == null ? "" : m.group(2).trim();
+            if ("PRIMARY_KEY".equals(kind)) {
+                return buildDropObjectUnit("DROP_PRIMARY_KEY", "", "删除主键，高危，请确认目标端无下游依赖");
+            } else if ("INDEX".equals(kind) || "KEY".equals(kind) || "FOREIGN_KEY".equals(kind)) {
+                return buildDropObjectUnit("DROP_INDEX", name, "删除索引/外键，请确认目标端无下游依赖");
+            }
+            return buildDropObjectUnit("DROP_CONSTRAINT", name, "删除约束，请确认目标端无下游依赖");
+        }
         if ((m = P_ADD.matcher(clause)).find()) {
             return buildColumnUnit("ADD", null, m.group(2), m.group(3));
         }
@@ -144,6 +197,66 @@ public final class DdlChangeSplitter {
         return u;
     }
 
+    // ---- Wave15 复合子句单元构造 ----
+
+    private static String normalizeConstraintType(String raw) {
+        return raw == null ? "" : raw.toUpperCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+    }
+
+    private static DdlChangeUnit buildConstraintUnit(String name, String type, boolean named) {
+        DdlChangeUnit u = new DdlChangeUnit();
+        u.setOperation("ADD_CONSTRAINT");
+        u.setObjectName(name == null ? "" : name);
+        u.setColumnName("");
+        u.setOldName("");
+        u.setSourceType("");
+        u.setTargetType("");
+        u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);
+        String suffix = named ? "，约束名 " + (name == null ? "" : name) : "，无显式名";
+        u.setRiskNote("约束变更（" + type + suffix + "），请人工确认目标端语义（不自动执行）");
+        return u;
+    }
+
+    private static DdlChangeUnit buildIndexUnit(String name, boolean unique, boolean isKey) {
+        DdlChangeUnit u = new DdlChangeUnit();
+        u.setOperation("ADD_INDEX");
+        u.setObjectName(name == null ? "" : name);
+        u.setColumnName("");
+        u.setOldName("");
+        u.setSourceType("");
+        u.setTargetType("");
+        u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);
+        String kind = (unique ? "唯一 " : "") + (isKey ? "KEY" : "INDEX");
+        u.setRiskNote(kind + "索引变更（索引名 " + (name == null ? "" : name) + "），请人工确认（不自动执行）");
+        return u;
+    }
+
+    private static DdlChangeUnit buildDefaultUnit(String col, String op, String note) {
+        DdlChangeUnit u = new DdlChangeUnit();
+        u.setOperation(op);
+        u.setColumnName(col == null ? "" : col);
+        u.setObjectName("");
+        u.setOldName("");
+        u.setSourceType("");
+        u.setTargetType("");
+        u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);
+        u.setRiskNote(note);
+        return u;
+    }
+
+    private static DdlChangeUnit buildDropObjectUnit(String op, String name, String note) {
+        DdlChangeUnit u = new DdlChangeUnit();
+        u.setOperation(op);
+        u.setObjectName(name == null ? "" : name);
+        u.setColumnName("");
+        u.setOldName("");
+        u.setSourceType("");
+        u.setTargetType("");
+        u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);
+        u.setRiskNote(note);
+        return u;
+    }
+
     /** 取 sourceType 小写命中的 TYPE 规则 message（用于 info 级风险说明） */
     private static String lookupMessage(String sourceType) {
         if (sourceType == null || sourceType.isEmpty()) {
@@ -163,6 +276,7 @@ public final class DdlChangeSplitter {
         u.setOperation("UNKNOWN");
         u.setOldName("");
         u.setColumnName("");
+        u.setObjectName("");
         u.setSourceType("");
         u.setTargetType("");
         u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);

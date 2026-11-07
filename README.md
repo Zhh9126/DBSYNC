@@ -658,7 +658,20 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 28. 许可声明
+## 28. 2026-11-07 更新摘要（Wave15：DDL 变更辅助扩展——复合 ALTER 子句识别）
+
+继续推进方向二「语法兼容升级」中 Wave13 B 线 DDL 变更辅助的已知限制项——复合/约束/索引/主键/默认值类 ALTER 此前一律降级为 `UNKNOWN`，等于把高频、可安全识别的结构抹平成「无法解析」。
+
+- **识别扩展**：`DdlChangeSplitter` 新增 7 类复合子句识别（严格排在通用 ADD/DROP 列之前，避免误判）：`ADD CONSTRAINT <名> (PK|FK|UNIQUE|CHECK)`、`ADD [UNIQUE] INDEX <名>`、`ADD KEY <名>`（MySQL）、`ADD (PK|FK|UNIQUE)` 无名约束、`ALTER COLUMN <列> SET/DROP DEFAULT`、`DROP CONSTRAINT|PRIMARY KEY|INDEX|FOREIGN KEY|KEY <名>`。识别为明确单元（`ADD_CONSTRAINT`/`ADD_INDEX`/`DROP_CONSTRAINT`/`DROP_PRIMARY_KEY`/`DROP_INDEX`/`SET_DEFAULT`/`DROP_DEFAULT`），不再 `UNKNOWN`。
+- **新字段**：`DdlChangeUnit` 新增 `objectName`（约束/索引/主键标识名），纯增量、缺省空串、序列化向后兼容；前端 `sql-scan/index.html` 变更单元表新增「对象」列渲染 `objectName`。
+- **保守定位**：复合单元 `level=info`、`sourceType/targetType` 空（不做类型映射），因此 `DdlChangeAssistService` 的 `rebuild` 原样保留整条语句、`changed=false` 分支返回原 SQL（不自动改写/不自动执行）；分区表 `ADD/DROP PARTITION`、约束体内部列清单语义、AST 级解析均维持 `UNKNOWN` 降级。不改存储模型、不引 jsqlparser、不连库、不触达运行时 DDL 链路。
+- **零影响**：`DdlChangeAssistService`/`DdlChangeDraft` 无需改动（扩展内聚在 Splitter+Unit）；既有列操作单元 `objectName` 留空，前端视觉无副作用。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**；四模块单测 **156/156**（biz 模块 `DdlChangeAssistTest` 增至 25 用例，新增 13 覆盖复合子句、既有 12 全绿不退化）；前端内联 JS `vm.Script` 语法校验通过；4 文件 UTF-8 无 BOM。
+- 需求、设计与验证细节见 `reports/WAVE15_INCREMENTAL_PRD.md`、`reports/WAVE15_INCREMENTAL_DESIGN.md`、`reports/OPTIMIZATION_REPORT_WAVE15.md`、`reports/TEST_REPORT_WAVE15.md`。
+
+---
+
+## 29. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 
