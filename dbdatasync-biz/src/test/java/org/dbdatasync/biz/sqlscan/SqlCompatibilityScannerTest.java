@@ -215,6 +215,49 @@ public class SqlCompatibilityScannerTest {
         assertFalse(cast.getRewrittenSql().contains("::"));
     }
 
+    // ============ Wave17：PL/SQL / 存储过程对象识别 ============
+
+    @Test
+    public void plsqlProcedureDetected() {
+        String sql = "CREATE OR REPLACE PROCEDURE p_audit (p_id IN NUMBER) AS BEGIN NULL; END;";
+        SqlScanResult result = scanner.scan(sql, "Oracle", "MySQL");
+        assertTrue("应识别 PL/SQL 存储过程", hasCode(result, "SQL-P01"));
+        SqlCompatibilityIssue issue = findCode(result, "SQL-P01");
+        assertNotNull(issue);
+        assertEquals(SqlCompatibilityIssue.LEVEL_ERROR, issue.getLevel());
+        assertEquals("plsql", issue.getCategory());
+        assertEquals("p_audit", issue.getElement());
+        assertTrue(issue.getMessage().contains("p_audit"));
+    }
+
+    @Test
+    public void plsqlFunctionAndTriggerDetected() {
+        String sql = "CREATE OR REPLACE FUNCTION f_calc RETURN NUMBER IS BEGIN RETURN 1; END;"
+                + "CREATE OR REPLACE TRIGGER trg_a BEFORE INSERT ON t FOR EACH ROW BEGIN NULL; END;";
+        SqlScanResult result = scanner.scan(sql, "Oracle", "MySQL");
+        assertTrue(hasCode(result, "SQL-P02"));
+        assertTrue(hasCode(result, "SQL-P03"));
+    }
+
+    @Test
+    public void plsqlPackageAndTypeDetected() {
+        String sql = "CREATE OR REPLACE PACKAGE pkg_a AS PROCEDURE p1; END pkg_a;"
+                + "CREATE OR REPLACE PACKAGE BODY pkg_a AS PROCEDURE p1 IS BEGIN NULL; END; END pkg_a;"
+                + "CREATE OR REPLACE TYPE t_obj AS OBJECT (id NUMBER);";
+        SqlScanResult result = scanner.scan(sql, "Oracle", "MySQL");
+        assertTrue(hasCode(result, "SQL-P04"));
+        assertTrue(hasCode(result, "SQL-P05"));
+        assertTrue(hasCode(result, "SQL-P06"));
+    }
+
+    @Test
+    public void plsqlNoFalsePositiveOnPlainSelect() {
+        SqlScanResult result = scanner.scan("SELECT 1 FROM t", "Oracle", "MySQL");
+        assertFalse(hasCode(result, "SQL-P01"));
+        assertFalse(hasCode(result, "SQL-P02"));
+        assertFalse(hasCode(result, "SQL-P04"));
+    }
+
     // ============ 工具 ============
 
     private boolean hasCode(SqlScanResult result, String code) {

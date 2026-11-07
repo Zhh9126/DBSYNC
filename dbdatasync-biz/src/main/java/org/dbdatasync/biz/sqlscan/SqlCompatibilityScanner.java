@@ -47,6 +47,11 @@ public class SqlCompatibilityScanner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SqlCompatibilityScanner.class);
 
+    /** Wave17：PL/SQL / 存储过程对象识别（CREATE [OR REPLACE] PROCEDURE|FUNACTION|TRIGGER|PACKAGE|PACKAGE BODY|TYPE [BODY] <name>） */
+    private static final java.util.regex.Pattern P_PLSQL_OBJECT = java.util.regex.Pattern.compile(
+            "CREATE\\s+(?:OR\\s+REPLACE\\s+)?(PROCEDURE|FUNCTION|TRIGGER|PACKAGE\\s+BODY|PACKAGE|TYPE\\s+BODY|TYPE)\\s+([\\w$.]+)",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
     /**
      * 扫描入口。
      *
@@ -215,7 +220,10 @@ public class SqlCompatibilityScanner {
         // 4) 类型族
         applyTypeRules(tokens, sql, src, tgt, result);
 
-        // 5) 附加：未解析成功但文本含专有特征的（已在 fallback 处理）
+        // 5) Wave17：PL/SQL / 存储过程对象识别
+        applyPlsqlObjectRules(sql, src, tgt, result);
+
+        // 6) 附加：未解析成功但文本含专有特征的（已在 fallback 处理）
     }
 
     /** 把 SQL 文本转成小写 token 列表（去引号、统一空白），供规则命中 */
@@ -373,11 +381,59 @@ public class SqlCompatibilityScanner {
         List<String> tokens = normalizeTokens(sql);
         applyClauseRules(tokens, sql, src, tgt, result);
         applyFunctionRules(tokens, sql, src, tgt, result);
+        // Wave17：PL/SQL 对象兜底识别（解析失败时也能识别存储过程/函数/触发器/包/类型）
+        applyPlsqlObjectRules(sql, src, tgt, result);
         // 提示：该条无法解析，需要人工复核
         result.addIssue(new SqlCompatibilityIssue(
                 SqlCompatibilityIssue.LEVEL_WARN, "syntax", "sql-unparseable", "",
                 sql, "该 SQL 无法被 SQL 解析器识别，可能包含目标方言不兼容语法或高级特性",
                 "请将该 SQL 提取出来人工复核（可能是 PL/SQL 块、DDL 片段或方言专有语法）"));
+    }
+
+    // ============ Wave17：PL/SQL / 存储过程对象识别 ============
+
+    private void applyPlsqlObjectRules(String sql, SqlDialect src, SqlDialect tgt, SqlScanResult result) {
+        java.util.regex.Matcher m = P_PLSQL_OBJECT.matcher(sql);
+        while (m.find()) {
+            String kind = m.group(1).toUpperCase(Locale.ROOT).replaceAll("\\s+", "_");
+            String name = m.group(2);
+            String code = plsqlCodeFor(kind);
+            String message = "检测到 " + m.group(1) + " 对象「" + name + "」：PL/SQL/存储过程层结构，目标方言不自动转换，需人工重写";
+            String suggestion = "提取该 " + m.group(1) + " 体，人工重写为目标方言等价实现（或保留源端兼容模式）";
+            emitPlsql(result, code, name, sql, message, suggestion);
+        }
+    }
+
+    private static String plsqlCodeFor(String kind) {
+        switch (kind) {
+            case "PROCEDURE":
+                return "SQL-P01";
+            case "FUNCTION":
+                return "SQL-P02";
+            case "TRIGGER":
+                return "SQL-P03";
+            case "PACKAGE":
+                return "SQL-P04";
+            case "PACKAGE_BODY":
+                return "SQL-P05";
+            case "TYPE":
+            case "TYPE_BODY":
+                return "SQL-P06";
+            default:
+                return "SQL-P00";
+        }
+    }
+
+    private void emitPlsql(SqlScanResult result, String code, String element, String sql,
+                           String message, String suggestion) {
+        for (SqlCompatibilityIssue existing : result.getIssues()) {
+            if (existing.getCode().equals(code) && existing.getElement().equals(element)
+                    && existing.getSql().equals(sql)) {
+                return;
+            }
+        }
+        result.addIssue(new SqlCompatibilityIssue(
+                SqlCompatibilityIssue.LEVEL_ERROR, "plsql", code, element, sql, message, suggestion));
     }
 
     // ============ 工具 ============

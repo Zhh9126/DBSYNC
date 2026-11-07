@@ -293,6 +293,21 @@ public final class SqlCompatibilityRules {
 
     // ============ 类型族 ============
 
+    /** PL/SQL / 存储过程对象族（CREATE PROCEDURE/FUNCTION/TRIGGER/PACKAGE/TYPE） */
+    private static final Map<String, Rule> PLSQL_OBJECT_RULES = map(
+            r("SQL-P01", "plsql", "create procedure", "error", "CREATE [OR REPLACE] PROCEDURE 是存储过程（PL/SQL），目标方言不自动转换",
+                    "提取过程体，人工重写为目标方言等价实现（或保留源端兼容模式）"),
+            r("SQL-P02", "plsql", "create function", "error", "CREATE [OR REPLACE] FUNCTION 是函数（PL/SQL），目标方言不自动转换",
+                    "人工重写为目标方言等价函数"),
+            r("SQL-P03", "plsql", "create trigger", "error", "CREATE [OR REPLACE] TRIGGER 是触发器（PL/SQL），目标方言不自动转换",
+                    "人工重写为目标方言等价触发器"),
+            r("SQL-P04", "plsql", "create package", "error", "CREATE [OR REPLACE] PACKAGE 是包（PL/SQL），目标方言不自动转换",
+                    "人工重写/拆分包内过程与函数"),
+            r("SQL-P05", "plsql", "create package body", "error", "CREATE [OR REPLACE] PACKAGE BODY 是包体（PL/SQL），目标方言不自动转换",
+                    "人工重写/拆分包体内过程与函数"),
+            r("SQL-P06", "plsql", "create type", "warn", "CREATE [OR REPLACE] TYPE/TYPE BODY 是 Oracle 对象类型，目标方言需等价建模",
+                    "改写为目标方言表/UDT（PG CREATE TYPE / MySQL 拆表）"));
+
     private static final Map<String, Rule> TYPE_RULES = map(
             r("SQL-T01", "type", "number", "warn", "NUMBER 在目标 MySQL 无等价类型",
                     "按精度映射：NUMBER → DECIMAL(p,s) / INT / BIGINT"),
@@ -381,6 +396,11 @@ public final class SqlCompatibilityRules {
     /** 类型族全表 */
     public static Rule[] allTypeRules() {
         return TYPE_RULES_ALL;
+    }
+
+    /** PL/SQL / 存储过程对象族全表 */
+    public static Rule[] allPlsqlObjectRules() {
+        return PLSQL_OBJECT_RULES.values().toArray(new Rule[0]);
     }
 
     // ============ 自定义规则合并（无自定义时返回预置数组同一引用，零拷贝零副作用） ============

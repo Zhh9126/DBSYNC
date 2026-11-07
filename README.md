@@ -684,7 +684,23 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 30. 许可声明
+## 30. 2026-11-07 更新摘要（Wave17：剩余待办全量落地——六模块 + 真机 E2E 套件）
+
+对分诊中剩余 7 项待办全部给出真实、可编译、可单测的代码交付（「规划的都要实现」），并诚实标注每项的运行时验证边界：
+
+- **PL/SQL/存储过程识别**（sqlscan 扩展，SQL-P01~P06）：识别 `CREATE [OR REPLACE] PROCEDURE/FUNCTION/TRIGGER/PACKAGE/PACKAGE BODY/TYPE[ BODY] <名>`，捕获对象名，error 级、不自动改写；纯正则、与既有扫描零冲突。
+- **慢 SQL 采集**（新包 `slowsql`）：`SlowSqlRecord/Threshold/Collector` SPI + 线程安全环形缓冲 `RingBufferSlowSqlStore`（满覆盖最旧）+ `SlowSqlAnalyzer`（avg/max/**p95 索引法**/topN）；引擎/驱动挂钩为运行时接线点。
+- **逻辑导入导出**（新包 `logicalio`）：RFC4180 CSV 导出/导入（引号字段、"" 转义、引号内换行、CRLF、首行表头映射、列数校验）+ `InsertSqlExporter`（mysql/oracle/pg 三方言标识符引用、单引号转义、批量多值/INSERT ALL）；特殊字符 round-trip 无损。
+- **回滚预案/自动切流/影子写**（新包 `cutover`）：10 相位 `CutoverStateMachine`（合法迁移表 + 回滚链 + ROLLED_BACK→重走增量）、`ShadowWriteBuffer`（配对/失配计数/flipSafe 判定）、`RollbackPlanner`（SWITCHED/SWITCHING/SHADOW_WRITING 三相位预案）。
+- **跨明细聚合批量重推**（新包 `repush`）：按业务键聚合（保序/空键独立）→ 分批（校验/保序）→ 执行编排（失败批记录、abortOnFailure 中止语义）+ `RepushExecutor` SPI。
+- **存储模型改造（非破坏式）**（新包 `storage`）：不解既有约束，提供外置分块层——`ContentChunker`（UTF-8 字节边界/代理对安全 + sha256 校验头）+ `ChunkAssembler` + `OversizedContentOffloader`（超 65535 字节内容外置为 `DBDS-REF` 引用串）；接入既有存储层属后续专项。
+- **真机 E2E 套件**：`tools/e2e/RealDbE2eHarness.java`（JDBC 前置检查：Oracle 归档/补充日志、MySQL binlog ROW/FULL、金仓 wal_level/复制角色/**BYTEA 往返冒烟**、达梦版本/归档）+ `reports/E2E_REAL_DB_RUNBOOK.md`；本沙箱无真实库未执行，真机环境可运行。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**；biz 模块单测 **221/221**（新增 54：cutover 8/logicalio 16/repush 12/slowsql 6/storage 8/scanner +4）；新文件 UTF-8 无 BOM；集成期 10 个首轮失败全部定位修复（留痕见 `reports/TEST_REPORT_WAVE17.md` §3）。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE17.md`、`reports/TEST_REPORT_WAVE17.md`、`reports/E2E_REAL_DB_RUNBOOK.md`。
+
+---
+
+## 31. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 
