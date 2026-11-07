@@ -317,4 +317,119 @@ public class DdlChangeAssistTest {
         assertFalse(draft.isChanged());
         assertEquals(sql, draft.getTargetDdlDraft());
     }
+
+    // ===== Wave16：分区表 PARTITION 子句识别（不再 UNKNOWN） =====
+
+    @Test
+    public void addPartitionRecognized() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD PARTITION p1 VALUES LESS THAN (1000)", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+        assertEquals(SqlCompatibilityIssue.LEVEL_INFO, u.getLevel());
+        assertFalse("ADD PARTITION 不应退化为 UNKNOWN", "UNKNOWN".equals(u.getOperation()));
+    }
+
+    @Test
+    public void dropPartitionRecognized() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DROP PARTITION p1", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+    }
+
+    @Test
+    public void truncatePartitionRecognized() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t TRUNCATE PARTITION p1", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("TRUNCATE_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+    }
+
+    @Test
+    public void attachPartitionRecognized() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ATTACH PARTITION p1 FOR VALUES IN (1, 2)", "PostgreSQL", "PostgreSQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ATTACH_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+    }
+
+    @Test
+    public void detachPartitionRecognized() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DETACH PARTITION p1", "PostgreSQL", "PostgreSQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DETACH_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+    }
+
+    @Test
+    public void addPartitionIfNotExistsCapturesNameOnly() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD PARTITION IF NOT EXISTS p1 VALUES LESS THAN (2000)", "PostgreSQL", "PostgreSQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+        assertFalse("不应把 IF 误捕获为分区名", "IF".equals(u.getObjectName()));
+    }
+
+    @Test
+    public void dropPartitionIfExistsCapturesNameOnly() {
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DROP PARTITION IF EXISTS p1", "PostgreSQL", "PostgreSQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_PARTITION", u.getOperation());
+        assertEquals("p1", u.getObjectName());
+        assertFalse("不应把 IF 误捕获为分区名", "IF".equals(u.getObjectName()));
+    }
+
+    @Test
+    public void addPartitionNotMisclassifiedAsColumnAdd() {
+        // 优先级校验：ADD PARTITION 不能误判为通用 ADD 列（列名 PARTITION）
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD PARTITION p1 VALUES LESS THAN (MAXVALUE)", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("ADD_PARTITION", u.getOperation());
+        assertFalse("不应误判为列 ADD", "ADD".equals(u.getOperation()));
+        assertEquals("", u.getColumnName());
+    }
+
+    @Test
+    public void dropPartitionNotMisclassifiedAsColumnDrop() {
+        // 优先级校验：DROP PARTITION 不能误判为通用 DROP 列（列名 PARTITION）
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t DROP PARTITION p1", "Oracle", "MySQL");
+        DdlChangeUnit u = draft.getUnits().get(0);
+        assertEquals("DROP_PARTITION", u.getOperation());
+        assertFalse("不应误判为列 DROP", "DROP".equals(u.getOperation()));
+        assertEquals("", u.getColumnName());
+    }
+
+    @Test
+    public void partitionUnitReturnsOriginalSqlUnchanged() {
+        // 分区子句无类型映射，应返回原 SQL（不自动改写）
+        String sql = "ALTER TABLE t DROP PARTITION p1";
+        DdlChangeDraft draft = service.assist(sql, "Oracle", "MySQL");
+        assertFalse(draft.isChanged());
+        assertEquals(sql, draft.getTargetDdlDraft());
+    }
+
+    @Test
+    public void partitionAndColumnAddNoCrossContamination() {
+        // 多语句：ADD COLUMN（列操作）与 ADD PARTITION（分区操作）互不误判
+        DdlChangeDraft draft = service.assist(
+                "ALTER TABLE t ADD COLUMN c VARCHAR2(10); ALTER TABLE t ADD PARTITION p1 VALUES LESS THAN (100)",
+                "Oracle", "MySQL");
+        assertEquals(2, draft.getUnits().size());
+        DdlChangeUnit colUnit = draft.getUnits().get(0);
+        DdlChangeUnit partUnit = draft.getUnits().get(1);
+        assertEquals("ADD", colUnit.getOperation());
+        assertEquals("c", colUnit.getColumnName());
+        assertEquals("ADD_PARTITION", partUnit.getOperation());
+        assertEquals("p1", partUnit.getObjectName());
+    }
 }

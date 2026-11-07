@@ -671,7 +671,20 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 29. 许可声明
+## 29. 2026-11-07 更新摘要（Wave16：DDL 变更辅助扩展——分区表 PARTITION 子句识别）
+
+延续 Wave13 B 线 DDL 变更辅助与 Wave15 复合 ALTER 子句识别，把分区表高频维护子句从 `UNKNOWN` 降级中识别出来——此前 `ADD / DROP / TRUNCATE / ATTACH / DETACH PARTITION` 一律被抹平成「无法解析」，影响扫描识别率与人工二次判断。
+
+- **识别扩展**：`DdlChangeSplitter` 新增 5 个分区正则（`P_ADD_PARTITION` / `P_DROP_PARTITION` / `P_TRUNCATE_PARTITION` / `P_ATTACH_PARTITION` / `P_DETACH_PARTITION`），识别为明确单元（`ADD_PARTITION` / `DROP_PARTITION` / `TRUNCATE_PARTITION` / `ATTACH_PARTITION` / `DETACH_PARTITION`），不再 `UNKNOWN`；`ADD` / `DROP` 两类兼容可选 `IF NOT EXISTS` / `IF EXISTS` 修饰。
+- **优先级防护**：5 个分区正则严格排在通用 `P_ADD` / `P_DROP` 列之前，杜绝 `ADD PARTITION p1` 误判为「列 ADD（列名 PARTITION）」、`DROP PARTITION p1` 误判为「列 DROP（列名 PARTITION）」。
+- **复用字段**：分区名写入已有 `objectName` 字段（Wave15 已加，缺省空串、序列化向后兼容）；前端 `sql-scan/index.html` 变更单元表已有「对象」列渲染，分区名自动可见，**前端无需改动**。
+- **保守定位**：分区单元 `level=info`、`sourceType/targetType` 留空，`DdlChangeAssistService.rebuild` 原样保留整条语句、`changed=false` 返回原 SQL（不自动改写 / 不自动执行）；分区定义内部体（`VALUES LESS THAN (...)` 等）不解析；不引 jsqlparser、不连库、不触达运行时 DDL 链路。`DdlChangeAssistService` / `DdlChangeDraft` / `DdlChangeUnit` 零改动。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**；biz 模块 `DdlChangeAssistTest` 增至 **36 用例**（新增 11 覆盖 5 类分区、IF EXISTS/NOT EXISTS、优先级防误判、返回原 SQL、多语句互不误判），全绿；2 改动文件 UTF-8 无 BOM；源码无 JDBC / 运行时 DDL 链路（静态检查不退化）。
+- 需求、设计与验证细节见 `reports/WAVE16_INCREMENTAL_PRD.md`、`reports/WAVE16_INCREMENTAL_DESIGN.md`、`reports/OPTIMIZATION_REPORT_WAVE16.md`、`reports/TEST_REPORT_WAVE16.md`。
+
+---
+
+## 30. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

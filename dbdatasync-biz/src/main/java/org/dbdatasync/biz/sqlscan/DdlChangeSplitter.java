@@ -14,7 +14,9 @@ import java.util.regex.Pattern;
  * <p>与 {@link DdlDraftGenerator} 纯字符串风格一致：把 ALTER TABLE 语句拆解为
  * ADD / MODIFY / CHANGE / DROP / RENAME 单列操作单元，以及对 ADD CONSTRAINT /
  * ADD INDEX / DROP CONSTRAINT / SET DEFAULT 等复合子句（Wave15 扩展）识别为
- * 明确单元（含 {@code objectName}）；对 ADD/MODIFY/CHANGE 做类型映射
+ * 明确单元（含 {@code objectName}），以及对分区表 ADD / DROP / TRUNCATE /
+ * ATTACH / DETACH PARTITION 子句（Wave16 扩展）识别为明确单元（复用
+ * {@code objectName} 记录分区名）；对 ADD/MODIFY/CHANGE 做类型映射
  * （只读复用 {@link DdlTypeMapping}）。解析失败或超出现有模式的子句降级为
  * {@code UNKNOWN} 单元，<strong>绝不抛出</strong>。</p>
  *
@@ -58,6 +60,22 @@ public final class DdlChangeSplitter {
     /** Wave15 复合子句：DROP CONSTRAINT|PRIMARY KEY|INDEX|FOREIGN KEY|KEY [name] */
     private static final Pattern P_DROP_OBJECT =
             Pattern.compile("DROP\\s+(CONSTRAINT|PRIMARY\\s+KEY|INDEX|FOREIGN\\s+KEY|KEY)\\s*([\\w$]*)", FLAGS);
+
+    /** Wave16 分区表：ADD PARTITION [IF NOT EXISTS] <name> */
+    private static final Pattern P_ADD_PARTITION =
+            Pattern.compile("ADD\\s+PARTITION\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?([\\w$]+)", FLAGS);
+    /** Wave16 分区表：DROP PARTITION [IF EXISTS] <name> */
+    private static final Pattern P_DROP_PARTITION =
+            Pattern.compile("DROP\\s+PARTITION\\s+(?:IF\\s+EXISTS\\s+)?([\\w$]+)", FLAGS);
+    /** Wave16 分区表：TRUNCATE PARTITION <name> */
+    private static final Pattern P_TRUNCATE_PARTITION =
+            Pattern.compile("TRUNCATE\\s+PARTITION\\s+([\\w$]+)", FLAGS);
+    /** Wave16 分区表：ATTACH PARTITION <name>（PG / 金仓风格） */
+    private static final Pattern P_ATTACH_PARTITION =
+            Pattern.compile("ATTACH\\s+PARTITION\\s+([\\w$]+)", FLAGS);
+    /** Wave16 分区表：DETACH PARTITION <name>（PG / 金仓风格） */
+    private static final Pattern P_DETACH_PARTITION =
+            Pattern.compile("DETACH\\s+PARTITION\\s+([\\w$]+)", FLAGS);
 
     /** 类型映射表（只读复用，单例即可） */
     private static final DdlTypeMapping TYPE_MAPPING = new DdlTypeMapping();
@@ -155,6 +173,22 @@ public final class DdlChangeSplitter {
                 return buildDropObjectUnit("DROP_INDEX", name, "删除索引/外键，请确认目标端无下游依赖");
             }
             return buildDropObjectUnit("DROP_CONSTRAINT", name, "删除约束，请确认目标端无下游依赖");
+        }
+        // ---- Wave16 分区表子句识别（必须排在通用 ADD/DROP 列之前，避免误判为列操作） ----
+        if ((m = P_ADD_PARTITION.matcher(clause)).find()) {
+            return buildPartitionUnit("ADD_PARTITION", m.group(1));
+        }
+        if ((m = P_DROP_PARTITION.matcher(clause)).find()) {
+            return buildPartitionUnit("DROP_PARTITION", m.group(1));
+        }
+        if ((m = P_TRUNCATE_PARTITION.matcher(clause)).find()) {
+            return buildPartitionUnit("TRUNCATE_PARTITION", m.group(1));
+        }
+        if ((m = P_ATTACH_PARTITION.matcher(clause)).find()) {
+            return buildPartitionUnit("ATTACH_PARTITION", m.group(1));
+        }
+        if ((m = P_DETACH_PARTITION.matcher(clause)).find()) {
+            return buildPartitionUnit("DETACH_PARTITION", m.group(1));
         }
         if ((m = P_ADD.matcher(clause)).find()) {
             return buildColumnUnit("ADD", null, m.group(2), m.group(3));
@@ -254,6 +288,22 @@ public final class DdlChangeSplitter {
         u.setTargetType("");
         u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);
         u.setRiskNote(note);
+        return u;
+    }
+
+    // ---- Wave16 分区表单元构造（复用 objectName 记录分区名，不自动执行） ----
+
+    private static DdlChangeUnit buildPartitionUnit(String op, String partitionName) {
+        DdlChangeUnit u = new DdlChangeUnit();
+        u.setOperation(op);
+        u.setObjectName(partitionName == null ? "" : partitionName);
+        u.setColumnName("");
+        u.setOldName("");
+        u.setSourceType("");
+        u.setTargetType("");
+        u.setLevel(SqlCompatibilityIssue.LEVEL_INFO);
+        u.setRiskNote("分区表操作（" + op + " 分区 " + (partitionName == null ? "" : partitionName)
+                + "），请人工确认目标端语义（不自动执行）");
         return u;
     }
 
