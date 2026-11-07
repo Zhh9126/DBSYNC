@@ -5,6 +5,7 @@ package org.dbdatasync.sdk.spi;
 
 import org.dbdatasync.common.model.Paging;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -61,5 +62,13 @@ public interface ValidateSyncDetailService {
      */
     default Map<String, Object> reviseDiffItem(String taskId, String detailId, int itemIndex) {
         throw new UnsupportedOperationException("当前实现不支持差异条目单条重推");
+    }
+
+    /**
+     * 差异条目批量重推；默认实现抛 UnsupportedOperationException，避免破坏外部实现。
+     * 返回 Map：{ successCount, failureCount, total, failures:[{index,reason}], detail }。
+     */
+    default Map<String, Object> reviseDiffItems(String taskId, String detailId, List<Integer> itemIndexes) {
+        throw new UnsupportedOperationException("当前实现不支持差异条目批量重推");
     }
 }

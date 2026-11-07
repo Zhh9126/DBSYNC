@@ -45,6 +45,9 @@ public class DefaultValidateSyncDetailService implements ValidateSyncDetailServi
     /** 全量扫描明细行时的页大小（须覆盖表组×类型行数上限） */
     private static final int SCAN_PAGE_SIZE = 100000;
 
+    /** 单次批量重推上限（与 ValidateSyncExecutor.MAX_REPAIR_ITEMS 保持一致，repairContent 内部亦按此封顶） */
+    private static final int BATCH_REPAIR_LIMIT = 100;
+
     @Resource
     private TaskProfile taskProfile;
 
@@ -147,6 +150,97 @@ public class DefaultValidateSyncDetailService implements ValidateSyncDetailServi
         storageService.editBatch(StorageEnum.TASK_DETAIL, taskId, Collections.singletonList(detail));
         Map<String, Object> fresh = taskDetailProfile.getDetail(TaskDetailQuery.of(taskId).setDetailId(detailId));
         return fresh != null ? fresh : detail;
+    }
+
+    @Override
+    public Map<String, Object> reviseDiffItems(String taskId, String detailId, List<Integer> itemIndexes) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.hasText(detailId, "明细ID不能为空");
+        if (itemIndexes == null || itemIndexes.isEmpty()) {
+            throw new IllegalArgumentException("请至少选择一条差异条目");
+        }
+        if (itemIndexes.size() > BATCH_REPAIR_LIMIT) {
+            throw new IllegalArgumentException("单次批量重推最多 " + BATCH_REPAIR_LIMIT + " 条");
+        }
+        Map<String, Object> detail = taskDetailProfile.getDetail(TaskDetailQuery.of(taskId).setDetailId(detailId));
+        Assert.notNull(detail, "明细不存在");
+        Map<String, Object> data = parseData(detail);
+        Object content = data.get(ConfigConstant.TASK_CONTENT);
+
+        List<Map<String, Object>> validItems = new ArrayList<>();
+        List<Integer> validIndexes = new ArrayList<>();
+        List<Map<String, Object>> failures = new ArrayList<>();
+        for (Integer raw : itemIndexes) {
+            int idx = raw == null ? -1 : raw;
+            Map<String, Object> item;
+            try {
+                item = DiffItemRepushUtil.selectItem(content, idx);
+            } catch (IllegalArgumentException e) {
+                failures.add(failureEntry(idx, e.getMessage()));
+                continue;
+            }
+            if (!DiffItemRepushUtil.isRepushable(item)) {
+                failures.add(failureEntry(idx, "该差异条目不可重推（已订正或不可修）"));
+                continue;
+            }
+            validItems.add(item);
+            validIndexes.add(idx);
+        }
+
+        int repaired = 0;
+        if (!validItems.isEmpty()) {
+            try {
+                repaired = validateSyncExecutor.repairContent(taskId, validItems);
+            } catch (Exception e) {
+                logger.warn("订正校验任务 [{}] 批量重推执行失败: {}", taskId, e.getMessage());
+            }
+            // repairContent 已在每条 item.msg 就地标记 (已订正)/(订正失败)，逐条判定结果
+            for (int i = 0; i < validItems.size(); i++) {
+                Object m = validItems.get(i).get("msg");
+                String msg = m == null ? "" : String.valueOf(m);
+                if (!msg.contains("(已订正)")) {
+                    String reason = msg.contains("(订正失败")
+                            ? "订正失败：" + stripRepairFailReason(msg) : "数据不完整，无法订正";
+                    failures.add(failureEntry(validIndexes.get(i), reason));
+                }
+            }
+        }
+
+        long diffTotal = getLong(data, ConfigConstant.TASK_DIFF_TOTAL);
+        long fixedTotal = DiffItemRepushUtil.nextFixedTotal(diffTotal,
+                getLong(data, ConfigConstant.TASK_FIXED_TOTAL), repaired);
+        data.put(ConfigConstant.TASK_FIXED_TOTAL, fixedTotal);
+        data.put(ConfigConstant.TASK_CONTENT, content);
+        detail.put(ConfigConstant.BINLOG_DATA, JsonUtil.objToJson(data));
+        detail.put(ConfigConstant.DETAIL_IS_SUCCESS, DiffItemRepushUtil.isDone(diffTotal, fixedTotal) ? 1 : 0);
+        detail.put(ConfigConstant.CONFIG_MODEL_UPDATE_TIME, System.currentTimeMillis());
+        storageService.editBatch(StorageEnum.TASK_DETAIL, taskId, Collections.singletonList(detail));
+
+        Map<String, Object> fresh = taskDetailProfile.getDetail(TaskDetailQuery.of(taskId).setDetailId(detailId));
+        Map<String, Object> result = new HashMap<>();
+        result.put("successCount", repaired);
+        result.put("failureCount", failures.size());
+        result.put("total", itemIndexes.size());
+        result.put("failures", failures);
+        result.put("detail", fresh != null ? fresh : detail);
+        return result;
+    }
+
+    private static Map<String, Object> failureEntry(int index, String reason) {
+        Map<String, Object> f = new HashMap<>(2);
+        f.put("index", index);
+        f.put("reason", reason);
+        return f;
+    }
+
+    private static String stripRepairFailReason(String msg) {
+        int start = msg.indexOf("(订正失败:");
+        if (start < 0) {
+            return "影响行数为0";
+        }
+        int end = msg.indexOf(')', start);
+        String inner = end > start ? msg.substring(start + "(订正失败:".length(), end) : msg.substring(start);
+        return inner.isEmpty() ? "影响行数为0" : inner;
     }
 
     @Override

@@ -645,7 +645,20 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 27. 许可声明
+## 27. 2026-11-07 更新摘要（Wave14：差异条目批量勾选重推）
+
+继续推进方向一 P0 收口延伸里「仍待立项」的一项——差异条目批量勾选重推（Wave12 只做了逐条重推，差异多时操作繁琐）：
+
+- **批量入口**：差异详情弹窗表格新增选择列（仅 `rowData` 可重推行有勾选框）+ 表头「全选」+「批量重推(N)」按钮（N=已选数量，0 选时禁用，随勾选实时刷新）。
+- **后端 `reviseDiffItems`**：选择/校验勾选下标（越界/已订正/非行数据如实计入 `failures`）→ **一次性**复用既有 `repairContent`（INSERT/UPDATE/DELETE 语义不变）→ 遍历每条 item 被就地标记的 msg 判定成功/失败 → `fixedTotal` 经 `nextFixedTotal` 仅在真实成功时累加（不虚报、封顶 `diffTotal`）。返回 `successCount`/`failureCount`/`total`/`failures[]`/`detail`，其中 `successCount+failureCount==total` 恒成立。
+- **安全定位**：删除类差异（目标多余）批量重推前走危险二次确认（`confirmType=danger`，提示删除不可恢复）；单次上限 100（与 `repairContent` 内部封顶一致）；跨明细聚合、存储模型改造均不做。
+- **零影响与保守定位**：完全复用 Wave12 契约——不改存储模型/DAO、`MAX_CONTENT_ITEMS=200` 与 65535 字节约束不变、不新增依赖、不改 `pom.xml`；既有的逐条「重推」按钮与「手动订正(最多100条)」整行入口完全保留。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**；四模块单测 **264/264**（sdk 18 / parser 74 / biz 143 / web 29，新增 9、既有 255 基线不退化）；前端 `node --check` 通过；8 文件 UTF-8 无 BOM。
+- 需求、设计与验证细节见 `reports/WAVE14_INCREMENTAL_PRD.md`、`reports/WAVE14_INCREMENTAL_DESIGN.md`、`reports/OPTIMIZATION_REPORT_WAVE14.md`、`reports/TEST_REPORT_WAVE14.md`。
+
+---
+
+## 28. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

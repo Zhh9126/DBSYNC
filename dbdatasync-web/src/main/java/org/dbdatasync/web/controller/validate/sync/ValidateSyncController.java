@@ -31,6 +31,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -376,6 +377,45 @@ public class ValidateSyncController extends BaseController {
             logger.error(e.getLocalizedMessage(), e);
             return RestResult.restFail(e.getMessage());
         }
+    }
+
+    /**
+     * 差异条目批量重推（单个明细内多条目勾选）。
+     */
+    @PostMapping("/reviseDiffItems")
+    @ResponseBody
+    public RestResult reviseDiffItems(@RequestParam("taskId") String taskId,
+                                     @RequestParam("id") String detailId,
+                                     @RequestParam("itemIndexes") String itemIndexes) {
+        try {
+            return RestResult.restSuccess(validateSyncService.reviseDiffItems(taskId, detailId, parseIndexes(itemIndexes)));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 将逗号分隔的差异序号解析为下标列表；空白跳过，非数字抛可读异常。
+     */
+    private List<Integer> parseIndexes(String raw) {
+        List<Integer> indexes = new ArrayList<>();
+        if (raw == null || raw.trim().isEmpty()) {
+            return indexes;
+        }
+        String[] tokens = raw.split(",");
+        for (String token : tokens) {
+            String t = token.trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            try {
+                indexes.add(Integer.parseInt(t));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("差异序号格式非法：" + t);
+            }
+        }
+        return indexes;
     }
 
     /**

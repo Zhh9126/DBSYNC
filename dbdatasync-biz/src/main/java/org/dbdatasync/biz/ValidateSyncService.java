@@ -145,6 +145,8 @@ public interface ValidateSyncService {
      */
     Object reviseDiffItem(String taskId, String detailId, int itemIndex);
 
+    Map<String, Object> reviseDiffItems(String taskId, String detailId, List<Integer> itemIndexes);
+
     String addTableGroup(Map<String, String> params);
 
     String editTableGroup(Map<String, String> params);

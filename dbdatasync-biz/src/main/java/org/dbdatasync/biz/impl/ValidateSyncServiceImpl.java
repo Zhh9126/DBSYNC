@@ -651,6 +651,13 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
     }
 
     @Override
+    public Map<String, Object> reviseDiffItems(String taskId, String detailId, List<Integer> itemIndexes) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.hasText(detailId, "明细ID不能为空");
+        return validateSyncDetailService.reviseDiffItems(taskId, detailId, itemIndexes);
+    }
+
+    @Override
     public String refreshTables(String id) {
         refreshTablesAndGet(id);
         return id;

@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -70,6 +71,51 @@ public final class DiffItemRepushUtil {
         List<Map<String, Object>> list = new ArrayList<>(1);
         list.add(item);
         return list;
+    }
+
+    /**
+     * 批量选择可重推条目（纯静态、零 DB，可直接单测）。
+     *
+     * <p>从 content 取出各下标对应 item 引用（共享 content 内引用，保住 repairContent 就地标记），
+     * 校验可重推性：合法可重推项加入 {@code validItems}；非法下标 / 已订正 / 非行数据等不可重推项
+     * 写入 {@code failures}（含 index 与 reason），不影响其余条目。</p>
+     *
+     * @param content     明细 content（四形态之一）
+     * @param indexes     请求的差异条目下标（0-based，与对账报告「差异序号」一致）
+     * @param validItems  输出：可重推 item 引用（共享引用）
+     * @param failures    输出：不可重推 / 非法项 {index, reason}
+     */
+    public static void selectRepushableItems(Object content, List<Integer> indexes,
+                                            List<Map<String, Object>> validItems,
+                                            List<Map<String, Object>> failures) {
+        if (indexes == null || validItems == null || failures == null) {
+            return;
+        }
+        for (Integer raw : indexes) {
+            int idx = raw == null ? -1 : raw;
+            Map<String, Object> item;
+            try {
+                item = selectItem(content, idx);
+            } catch (IllegalArgumentException e) {
+                failures.add(failure(idx, e.getMessage()));
+                continue;
+            }
+            if (!isRepushable(item)) {
+                failures.add(failure(idx, "该差异条目不可重推（已订正或不可修）"));
+                continue;
+            }
+            validItems.add(item);
+        }
+    }
+
+    /**
+     * 构造一条失败记录 {index, reason}。
+     */
+    private static Map<String, Object> failure(int index, String reason) {
+        Map<String, Object> f = new HashMap<>(2);
+        f.put("index", index);
+        f.put("reason", reason);
+        return f;
     }
 
     /**

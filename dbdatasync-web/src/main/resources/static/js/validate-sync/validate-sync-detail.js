@@ -326,12 +326,22 @@
                 + '</div>';
         }
 
-        function buildDiffDetailBodyHtml(data, tableNameOuter) {
+        function buildDiffDetailBodyHtml(data, tableNameOuter, type) {
+            var isRowData = type === 'rowData';
             var html = '<div class="white-space-none">';
-            html += '<div class="mb-2"><button type="button" class="btn btn-outline" onclick="exportDetailReport()">'
-                + '<i class="fa fa-download"></i> 导出本条明细</button></div>';
-            var headHtml = '<tr>'
-                + '<th class="width18p">源表名称</th>'
+            html += '<div class="mb-2 flex items-center gap-2">'
+                + '<button type="button" class="btn btn-outline" onclick="exportDetailReport()">'
+                + '<i class="fa fa-download"></i> 导出本条明细</button>';
+            if (isRowData) {
+                html += '<button type="button" id="diffBatchRepushBtn" class="btn btn-primary" disabled '
+                    + 'onclick="doBatchRepush()"><i class="fa fa-refresh"></i> 批量重推(0)</button>';
+            }
+            html += '</div>';
+            var headHtml = '<tr>';
+            if (isRowData) {
+                headHtml += '<th class="width5p text-center"><input type="checkbox" id="diffRepushSelectAll" title="全选/取消全选"></th>';
+            }
+            headHtml += '<th class="width18p">源表名称</th>'
                 + '<th class="width10p">类型</th>'
                 + '<th class="width12p">主键/标识</th>'
                 + '<th class="width40p">异常</th></tr>';
@@ -340,25 +350,119 @@
                 var msgHtml = buildDiffMsgCell(d);
                 var typeText = formatDiffTypeText(d.type);
                 var repushBtnHtml = '';
-                if (d.type === 'rowData' && !/已订正|订正失败/.test(d.msg || '')) {
+                var selectCell = '';
+                var repushable = d.type === 'rowData' && !/已订正|订正失败/.test(d.msg || '');
+                if (isRowData) {
+                    if (repushable) {
+                        selectCell = '<td class="text-center"><input type="checkbox" class="diff-repush-check" '
+                            + 'data-item-index="' + Number(idx) + '"></td>';
+                    } else {
+                        selectCell = '<td class="text-center text-gray-300">-</td>';
+                    }
+                }
+                if (repushable) {
                     repushBtnHtml = '<button type="button" class="table-action-btn view diff-repush-btn"'
                         + ' title="重推该条差异" data-item-index="' + Number(idx) + '">'
                         + '<i class="fa fa-refresh"></i> 重推</button>';
                 }
                 bodyHtml += '<tr>'
+                    + selectCell
                     + '<td>' + escapeHtml(tableNameOuter) + '</td>'
                     + '<td>' + escapeHtml(typeText) + '</td>'
                     + '<td>' + escapeHtml(d.key || '-') + '</td>'
                     + '<td class="p-3">' + msgHtml + repushBtnHtml + '</td>'
                     + '</tr>';
             });
+            var colCount = isRowData ? 5 : 4;
             if (data.length === 0) {
-                bodyHtml = '<tr><td colspan="4" class="text-center text-gray-400">无差异数据</td></tr>';
+                bodyHtml = '<tr><td colspan="' + colCount + '" class="text-center text-gray-400">无差异数据</td></tr>';
             }
             html += '<table class="table table-wrap-cells"><thead>' + headHtml + '</thead><tbody>' + bodyHtml + '</tbody></table>';
             html += '</div>';
             return html;
         }
+
+        function updateBatchRepushBtn() {
+            var $btn = $('#diffBatchRepushBtn');
+            if (!$btn.length) {
+                return;
+            }
+            var n = $('.diff-repush-check:checked').length;
+            $btn.prop('disabled', n === 0);
+            $btn.html('<i class="fa fa-refresh"></i> 批量重推(' + n + ')');
+        }
+
+        window.doBatchRepush = function () {
+            if (!currentDetailId || diffRepushSubmitting) {
+                return;
+            }
+            var indexes = [];
+            $('.diff-repush-check:checked').each(function () {
+                indexes.push(Number($(this).data('item-index')));
+            });
+            if (indexes.length === 0) {
+                bootGrowl('请先勾选差异条目', 'warning');
+                return;
+            }
+            var hasDelete = indexes.some(function (ix) {
+                var item = currentDetailContent && currentDetailContent[ix];
+                return item && String(item.msg || '') === '目标多余';
+            });
+            var title = hasDelete ? '确定批量反向订正？' : '确定批量重推所选差异？';
+            var body = hasDelete
+                ? '所选包含「目标多余」条目，将以源库为权威基准删除目标库冗余记录，删除操作不可恢复，请确认后继续。'
+                : '将重推所选 ' + indexes.length + ' 条差异条目（含失败将逐条反馈）。';
+            var confirmType = hasDelete ? 'danger' : 'primary';
+            showConfirm({
+                title: title,
+                body: body,
+                icon: 'warning',
+                size: 'large',
+                position: 'center',
+                confirmType: confirmType,
+                onConfirm: function () {
+                    diffRepushSubmitting = true;
+                    var confirmBtn = getDiffDetailConfirmBtn();
+                    if (confirmBtn) {
+                        confirmBtn.disabled = true;
+                    }
+                    doPoster('/validate-sync/reviseDiffItems', {
+                        taskId: currentTaskId,
+                        id: currentDetailId,
+                        itemIndexes: indexes.join(',')
+                    }, function (res) {
+                        diffRepushSubmitting = false;
+                        if (confirmBtn) {
+                            confirmBtn.disabled = false;
+                        }
+                        if (!res.success) {
+                            bootGrowl(res.message || '批量重推失败', 'danger');
+                            return;
+                        }
+                        var sc = res.data ? (Number(res.data.successCount) || 0) : 0;
+                        var fc = res.data ? (Number(res.data.failureCount) || 0) : 0;
+                        bootGrowl('批量重推完成：成功 ' + sc + ' 条 / 失败 ' + fc + ' 条',
+                            fc > 0 ? 'warning' : 'success');
+                        if (res.data && res.data.detail) {
+                            renderDiffDetailModal(res.data.detail);
+                        }
+                        resultPagination.doSearch(buildSearchParams());
+                    });
+                }
+            });
+        };
+
+        $(document).on('change', '#diffRepushSelectAll', function () {
+            var checked = this.checked;
+            $('.diff-repush-check').each(function () {
+                this.checked = checked;
+            });
+            updateBatchRepushBtn();
+        });
+
+        $(document).on('change', '.diff-repush-check', function () {
+            updateBatchRepushBtn();
+        });
 
         function hasTargetExtraDiff(diffList) {
             return diffList.some(function (d) {
@@ -443,7 +547,7 @@
                 icon: 'info',
                 size: 'max',
                 position: 'center',
-                body: buildDiffDetailBodyHtml(data, tableNameOuter),
+                body: buildDiffDetailBodyHtml(data, tableNameOuter, type),
                 confirmText: pending ? '手动订正(最多100条)' : '关闭',
                 showCancel: pending,
                 cancelText: '关闭',
