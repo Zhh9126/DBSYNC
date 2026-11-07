@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 超大内容外置（解除 65535 字节截断的非破坏式路径，Wave17 运行时接线） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">超大内容外置</h3>
+    </div>
+    <div class="card-body">
+        <div class="tip-box mb-3">
+            <i class="fa fa-info-circle"></i>
+            内容 UTF-8 字节数不超过阈值时原样内联；超限按分块协议外置，返回
+            <code>DBDS-REF:&lt;refId&gt;</code> 引用串（可反解还原原文）。
+            <br><span class="text-tertiary">不改表结构；当前块存储为进程内存实现，重启后外置内容丢失。</span>
+        </div>
+
+        <!-- 存储 -->
+        <div class="mb-3">
+            <label class="form-label">内容（content）</label>
+            <textarea id="contentText" class="form-input" rows="8"
+                      placeholder="粘贴任意文本内容（支持中文多字节字符）"
+                      style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-4 mb-3">
+            <div>
+                <label class="form-label">内联阈值（字节，可选，默认 65535）</label>
+                <input id="maxInline" class="form-input" type="number" placeholder="65535">
+            </div>
+            <div>
+                <label class="form-label">操作</label>
+                <div class="flex gap-2">
+                    <button class="btn btn-primary" onclick="doStore()"><i class="fa fa-save"></i> 存储</button>
+                    <button class="btn btn-secondary" onclick="doResolve()"><i class="fa fa-search"></i> 反解</button>
+                    <button class="btn btn-danger" onclick="doDelete()"><i class="fa fa-trash"></i> 删除块</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 存储值（引用串/原文） -->
+        <div class="mb-3">
+            <label class="form-label">存储值（引用串或原文，反解/删除用）</label>
+            <input id="storedText" class="form-input" placeholder="DBDS-REF:..."
+                   style="font-family: Consolas, Menlo, monospace; font-size: 13px;">
+        </div>
+
+        <!-- 结果区 -->
+        <div id="offloadResult" style="display:none;">
+            <div class="mb-2" id="offloadSummary"></div>
+            <pre id="offloadOutput" class="text-xs p-2 border rounded bg-surface"
+                 style="white-space:pre-wrap;word-break:break-all;font-family:Consolas,Menlo,monospace;max-height:360px;overflow:auto;"></pre>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    function showResult(summary, text) {
+        document.getElementById('offloadResult').style.display = 'block';
+        document.getElementById('offloadSummary').innerHTML = summary;
+        document.getElementById('offloadOutput').textContent = text;
+    }
+
+    function doStore() {
+        const content = document.getElementById('contentText').value;
+        if (content === '') {
+            bootGrowl('content 不能为空', 'warning');
+            return;
+        }
+        const maxInline = document.getElementById('maxInline').value.trim();
+        const params = { content: content };
+        if (maxInline) { params.maxInlineBytes = maxInline; }
+        doPoster('/content-offload/store', params, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '存储失败', 'danger');
+                return;
+            }
+            const d = response.data || {};
+            const stored = d.stored || '';
+            document.getElementById('storedText').value = stored;
+            const badge = d.offloaded
+                ? '<span class="badge badge-warning">已分块外置</span>'
+                : '<span class="badge badge-success">内联直通（未超限）</span>';
+            showResult(badge + ' <span class="text-xs text-tertiary">UTF-8 字节数：'
+                + (d.utf8Bytes || 0) + '</span>', stored);
+            bootGrowl(d.offloaded ? '内容已分块外置并返回引用串' : '内容未超限，内联返回', 'success');
+        });
+    }
+
+    function doResolve() {
+        const stored = document.getElementById('storedText').value.trim();
+        if (!stored) {
+            bootGrowl('请填写存储值（引用串或原文）', 'warning');
+            return;
+        }
+        doPoster('/content-offload/resolve', { stored: stored }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '反解失败', 'danger');
+                return;
+            }
+            showResult('<span class="badge badge-success">反解成功</span>', String(response.data == null ? '' : response.data));
+        });
+    }
+
+    function doDelete() {
+        const stored = document.getElementById('storedText').value.trim();
+        if (!stored) {
+            bootGrowl('请填写存储值（引用串或原文）', 'warning');
+            return;
+        }
+        doPoster('/content-offload/delete', { stored: stored }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '删除失败', 'danger');
+                return;
+            }
+            showResult('<span class="badge badge-info">外置块已删除</span>', '');
+            bootGrowl('外置内容已删除', 'info');
+        });
+    }
+</script>

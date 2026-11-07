@@ -9,6 +9,8 @@ import org.dbdatasync.web.controller.BaseController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -39,6 +41,12 @@ public class LogicalIoController extends BaseController {
     private final CsvLogicalExporter csvExporter = new CsvLogicalExporter();
     private final CsvLogicalImporter csvImporter = new CsvLogicalImporter();
     private final InsertSqlExporter insertExporter = new InsertSqlExporter();
+
+    /** 功能页面 */
+    @GetMapping("")
+    public String index(ModelMap model) {
+        return "logical-io/index";
+    }
 
     /** 行数据 → CSV 文本（首行表头，RFC4180 转义） */
     @PostMapping("/exportCsv")

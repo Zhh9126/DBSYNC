@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 逻辑导入导出（行数据 ↔ CSV / INSERT SQL，Wave17 运行时接线） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">逻辑导入导出</h3>
+    </div>
+    <div class="card-body">
+        <div class="tip-box mb-3">
+            <i class="fa fa-info-circle"></i>
+            「行数据 ↔ 文本格式」纯转换工具：CSV（RFC4180）导出/导入与三方言 INSERT 语句生成。
+            <br><span class="text-tertiary">不连库；库端读写由连接器 reader/writer 完成。行数据 JSON 形如 {"columns":["id"],"values":["1"]}。</span>
+        </div>
+
+        <!-- 行数据输入 -->
+        <div class="mb-3">
+            <label class="form-label">行数据（JSON 数组，columns 与 values 等长）</label>
+            <textarea id="rowsText" class="form-input" rows="8"
+                      placeholder='[{"columns":["id","name"],"values":["1","Alice"]},{"columns":["id","name"],"values":["2","Bob, Jr."]}]'
+                      style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+        </div>
+
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doExportCsv()"><i class="fa fa-file-text-o"></i> 导出 CSV</button>
+            <button class="btn btn-primary" onclick="doExportInsert()"><i class="fa fa-database"></i> 导出 INSERT</button>
+            <button class="btn btn-secondary" onclick="doImportCsv()"><i class="fa fa-upload"></i> CSV 导入为行数据</button>
+        </div>
+
+        <!-- INSERT 参数 -->
+        <div class="grid grid-cols-3 gap-4 mb-3">
+            <div>
+                <label class="form-label">目标表名（INSERT 用）</label>
+                <input id="insTable" class="form-input" placeholder="t_user">
+            </div>
+            <div>
+                <label class="form-label">目标方言</label>
+                <select id="insDialect" class="form-input">
+                    <option value="mysql">mysql</option>
+                    <option value="oracle">oracle</option>
+                    <option value="pg">pg</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label">批量大小（每条语句行数）</label>
+                <input id="insBatch" class="form-input" type="number" min="1" placeholder="1">
+            </div>
+        </div>
+
+        <!-- 结果区 -->
+        <div id="ioResult" style="display:none;">
+            <div class="mb-2" id="ioSummary"></div>
+            <pre id="ioOutput" class="text-xs p-2 border rounded bg-surface"
+                 style="white-space:pre-wrap;word-break:break-all;font-family:Consolas,Menlo,monospace;max-height:420px;overflow:auto;"></pre>
+        </div>
+        <div id="ioEmpty" style="display:none;" class="text-center py-4 text-tertiary">暂无结果</div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    function parseRowsInput() {
+        const raw = document.getElementById('rowsText').value.trim();
+        if (!raw) {
+            bootGrowl('请先粘贴行数据 JSON', 'warning');
+            return null;
+        }
+        try {
+            const rows = JSON.parse(raw);
+            if (!Array.isArray(rows) || !rows.length) {
+                bootGrowl('行数据必须是<b>非空数组</b>', 'warning');
+                return null;
+            }
+            for (let i = 0; i < rows.length; i++) {
+                if (!rows[i] || !Array.isArray(rows[i].columns) || !Array.isArray(rows[i].values)) {
+                    bootGrowl('第 ' + (i + 1) + ' 行缺少 columns 或 values 数组', 'warning');
+                    return null;
+                }
+            }
+            return rows;
+        } catch (e) {
+            bootGrowl('行数据 JSON 解析失败：' + escapeHtml(String(e.message || e)), 'danger');
+            return null;
+        }
+    }
+
+    function showOutput(summary, text) {
+        document.getElementById('ioResult').style.display = 'block';
+        document.getElementById('ioEmpty').style.display = 'none';
+        document.getElementById('ioSummary').innerHTML = summary;
+        document.getElementById('ioOutput').textContent = text;
+    }
+
+    // @RequestBody Map 端点：需显式 JSON 请求体（doPoster 为表单编码，不适用）
+    function doJsonPost(url, body, action) {
+        $.ajax({
+            url: $basePath + url,
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(body),
+            success: function (data) { doRequest(action, data); },
+            error: function () { doErrorResponse(); }
+        });
+    }
+
+    function doExportCsv() {
+        const rows = parseRowsInput();
+        if (!rows) { return; }
+        doJsonPost('/logical-io/exportCsv', { rows: rows }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || 'CSV 导出失败', 'danger');
+                return;
+            }
+            showOutput('<span class="badge badge-success">导出成功</span> '
+                + '<span class="text-xs text-tertiary">UTF-8 字节数：' + (response.data.bytes || 0) + '</span>',
+                response.data.csv || '');
+        });
+    }
+
+    function doExportInsert() {
+        const rows = parseRowsInput();
+        if (!rows) { return; }
+        const table = document.getElementById('insTable').value.trim();
+        if (!table) {
+            bootGrowl('请填写目标表名', 'warning');
+            return;
+        }
+        const batch = document.getElementById('insBatch').value.trim();
+        doJsonPost('/logical-io/exportInsert', {
+            rows: rows,
+            table: table,
+            dialect: document.getElementById('insDialect').value,
+            batchSize: batch ? Number(batch) : 1
+        }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || 'INSERT 导出失败', 'danger');
+                return;
+            }
+            showOutput('<span class="badge badge-success">导出成功</span> '
+                + '<span class="text-xs text-tertiary">语句数：' + (response.data.statements || 0) + '</span>',
+                response.data.sql || '');
+        });
+    }
+
+    function doImportCsv() {
+        const csv = document.getElementById('ioOutput').textContent;
+        if (!csv.trim()) {
+            bootGrowl('请先导出 CSV，或在下方输出框粘贴 CSV 文本', 'warning');
+            return;
+        }
+        doJsonPost('/logical-io/importCsv', { csv: csv }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || 'CSV 导入失败', 'danger');
+                return;
+            }
+            const rows = response.data || [];
+            showOutput('<span class="badge badge-success">解析成功</span> '
+                + '<span class="text-xs text-tertiary">共 ' + rows.length + ' 行</span>',
+                JSON.stringify(rows, null, 2));
+        });
+    }
+</script>

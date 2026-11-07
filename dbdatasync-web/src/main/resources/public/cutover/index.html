@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 切流编排控制台（回滚预案 / 自动切流 / 影子写，Wave17 运行时接线） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">切流编排</h3>
+    </div>
+    <div class="card-body">
+        <div class="tip-box mb-3">
+            <i class="fa fa-info-circle"></i>
+            按 taskId 管理切流会话：<strong>建会话 → 推进相位 → 影子写比对 → 切流安全判定 → 回滚预案</strong>。
+            <br><span class="text-tertiary">各相位的真实执行动作（停增量/反向回灌/切流量）需按预案人工或编排执行，本页不做自动执行。</span>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">任务 ID（taskId）</label>
+            <div class="flex gap-2">
+                <input id="taskId" class="form-input" placeholder="例如：task-20261107-001" style="max-width:320px;">
+                <button class="btn btn-primary" onclick="doCreate()"><i class="fa fa-play"></i> 创建/复位会话</button>
+                <button class="btn btn-secondary" onclick="doState()"><i class="fa fa-eye"></i> 查询状态</button>
+                <button class="btn btn-danger" onclick="doRemove()"><i class="fa fa-trash"></i> 移除会话</button>
+            </div>
+        </div>
+
+        <!-- 当前状态 -->
+        <div id="stateBox" style="display:none;" class="mb-4 p-3 border rounded bg-surface">
+            <div id="stateSummary" class="mb-2"></div>
+            <div class="text-xs text-tertiary" id="stateStats"></div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 mb-4">
+            <div class="p-3 border rounded">
+                <h4 class="mb-2 font-medium text-sm"><i class="fa fa-forward text-primary"></i> 推进相位</h4>
+                <div class="mb-2">
+                    <label class="form-label">目标相位</label>
+                    <select id="toPhase" class="form-input">
+                        <option value="FULL_SYNC_DONE">FULL_SYNC_DONE（全量同步完成）</option>
+                        <option value="INCREMENT_SYNCING">INCREMENT_SYNCING（增量同步中）</option>
+                        <option value="SHADOW_WRITING">SHADOW_WRITING（影子写比对中）</option>
+                        <option value="VERIFYING">VERIFYING（一致性校验中）</option>
+                        <option value="SWITCHING">SWITCHING（流量切换中）</option>
+                        <option value="SWITCHED">SWITCHED（已切换至目标端）</option>
+                        <option value="ROLLING_BACK">ROLLING_BACK（回滚执行中）</option>
+                        <option value="ROLLED_BACK">ROLLED_BACK（已回滚至源端）</option>
+                        <option value="FAILED">FAILED（割接失败）</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" onclick="doTransition()"><i class="fa fa-angle-double-right"></i> 推进</button>
+                <span class="text-xs text-tertiary ml-2">非法迁移将失败且状态不变</span>
+            </div>
+            <div class="p-3 border rounded">
+                <h4 class="mb-2 font-medium text-sm"><i class="fa fa-exchange text-primary"></i> 影子写配对</h4>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <div>
+                        <label class="form-label">表名</label>
+                        <input id="shadowTable" class="form-input" placeholder="t_user">
+                    </div>
+                    <div>
+                        <label class="form-label">主键值</label>
+                        <input id="shadowPk" class="form-input" placeholder="1001">
+                    </div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">源端 JSON</label>
+                    <input id="shadowSource" class="form-input" placeholder='{"id":1001,"name":"Alice"}'>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">影子端 JSON</label>
+                    <input id="shadowShadow" class="form-input" placeholder='{"id":1001,"name":"Alice"}'>
+                </div>
+                <button class="btn btn-primary" onclick="doShadowRecord()"><i class="fa fa-plus"></i> 记录配对</button>
+                <button class="btn btn-secondary" onclick="doFlipSafe()"><i class="fa fa-shield"></i> 切流安全判定</button>
+            </div>
+        </div>
+
+        <!-- 回滚预案 -->
+        <div class="mb-3">
+            <button class="btn btn-warning" onclick="doRollbackPlan()"><i class="fa fa-undo"></i> 生成回滚预案</button>
+        </div>
+        <div id="planBox" style="display:none;">
+            <div class="mb-2" id="planSummary"></div>
+            <pre id="planText" class="text-xs p-2 border rounded bg-surface"
+                 style="white-space:pre-wrap;word-break:break-all;font-family:Consolas,Menlo,monospace;max-height:320px;overflow:auto;"></pre>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    function requireTaskId() {
+        const id = document.getElementById('taskId').value.trim();
+        if (!id) {
+            bootGrowl('请先填写 taskId', 'warning');
+            return null;
+        }
+        return id;
+    }
+
+    function renderState(d) {
+        const box = document.getElementById('stateBox');
+        box.style.display = 'block';
+        document.getElementById('stateSummary').innerHTML = ''
+            + '<span class="badge badge-primary">taskId: ' + escapeHtml(d.taskId || '') + '</span> '
+            + '<span class="badge badge-success">当前相位: ' + escapeHtml(d.phase || '-') + '</span> '
+            + '<span class="text-xs text-secondary ml-2">' + escapeHtml(d.desc || '') + '</span>';
+        const history = d.history || [];
+        let histText = history.length ? history.map(function (p) { return escapeHtml(p); }).join(' → ') : '（无迁移历史）';
+        document.getElementById('stateStats').innerHTML = ''
+            + '影子写：配对 ' + (d.pairedCount || 0) + ' · 不一致 ' + (d.mismatchCount || 0)
+            + '<br>迁移路径：' + histText;
+    }
+
+    function doPostTask(url, params, action) {
+        const id = requireTaskId();
+        if (!id) { return; }
+        params.taskId = id;
+        doPoster(url, params, action);
+    }
+
+    function doCreate() {
+        doPostTask('/cutover/create', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '创建失败', 'danger');
+                return;
+            }
+            renderState(response.data);
+            bootGrowl('会话已就绪（幂等）', 'success');
+        });
+    }
+
+    function doState() {
+        doPostTask('/cutover/state', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '查询失败', 'danger');
+                return;
+            }
+            renderState(response.data);
+        });
+    }
+
+    function doTransition() {
+        doPostTask('/cutover/transition', { to: document.getElementById('toPhase').value }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '推进失败（状态不变）', 'danger');
+                return;
+            }
+            renderState(response.data);
+            bootGrowl('相位已推进', 'success');
+        });
+    }
+
+    function doShadowRecord() {
+        const table = document.getElementById('shadowTable').value.trim();
+        const pk = document.getElementById('shadowPk').value.trim();
+        if (!table || !pk) {
+            bootGrowl('table 与 pk 不能为空', 'warning');
+            return;
+        }
+        doPostTask('/cutover/shadow/record', {
+            table: table,
+            pk: pk,
+            sourceJson: document.getElementById('shadowSource').value.trim(),
+            shadowJson: document.getElementById('shadowShadow').value.trim()
+        }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '记录失败', 'danger');
+                return;
+            }
+            bootGrowl('影子写配对已记录', 'success');
+            doState();
+        });
+    }
+
+    function doFlipSafe() {
+        doPostTask('/cutover/shadow/flipSafe', { minSamples: '1' }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '判定失败', 'danger');
+                return;
+            }
+            const d = response.data || {};
+            const badge = d.flipSafe
+                ? '<span class="badge badge-success">可安全切流</span>'
+                : '<span class="badge badge-warning">样本不足或存在不一致，暂不切流</span>';
+            bootGrowl('配对 ' + (d.pairedCount || 0) + ' · 不一致 ' + (d.mismatchCount || 0)
+                + (d.flipSafe ? ' → 可切流' : ' → 不可切流'), d.flipSafe ? 'success' : 'warning');
+            document.getElementById('stateStats').innerHTML = badge
+                + '<span class="text-xs text-tertiary ml-2">配对 ' + (d.pairedCount || 0)
+                + ' · 不一致 ' + (d.mismatchCount || 0) + '</span>';
+        });
+    }
+
+    function doRollbackPlan() {
+        doPostTask('/cutover/rollbackPlan', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '预案生成失败', 'danger');
+                return;
+            }
+            const d = response.data || {};
+            const box = document.getElementById('planBox');
+            box.style.display = 'block';
+            document.getElementById('planSummary').innerHTML = d.canRollback
+                ? '<span class="badge badge-success">当前相位可回滚</span>'
+                : '<span class="badge badge-danger">当前相位不可回滚</span>';
+            document.getElementById('planText').textContent = d.text || '（无预案文本）';
+        });
+    }
+
+    function doRemove() {
+        doPostTask('/cutover/remove', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '移除失败', 'danger');
+                return;
+            }
+            document.getElementById('stateBox').style.display = 'none';
+            document.getElementById('planBox').style.display = 'none';
+            bootGrowl(response.data ? '会话已移除' : '会话不存在（无需移除）', 'info');
+        });
+    }
+</script>

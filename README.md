@@ -715,7 +715,20 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 32. 许可声明
+## 32. 2026-11-07 更新摘要（Wave19：剩余规划收口——持久化存储 / JDBC 插桩 / DBLink 读取 / 前端 UI）
+
+用户指令「其他的规划也进行开发」对应的最后一批真实剩余项，全部落地：
+
+- **FileChunkStore**（`biz/storage/`）：文件级持久化 `ChunkStore`（`<rootDir>/<refId>/<index>.chunk`，UTF-8），refId 路径穿越净化（`.`/`..`/尾部点号全防护），跨实例（进程重启）可恢复；与 `OversizedContentOffloader` 组合全链路可替换内存实现。
+- **SlowSqlJdbcWrapper**（`biz/slowsql/`）：JDBC Statement/PreparedStatement 动态代理计时插桩，超阈值采集 `SlowSqlRecord`；`proxyConnection()` 提供零改造 Connection 形态接入；执行异常原样抛出不采集。
+- **DbLinkQueryService**（`biz/dblink/`，方向五 DBLink 读取通道）：`ConnectionProvider` 注入；`all_db_links` 探测 + `@dblink` 只读查询（SELECT/WITH 白名单 + 前导注释剥离，maxRows 限行 + 截断标记 + 链接名识别）；不连真库，fake 单测。
+- **前端 UI**：`public/slow-sql|logical-io|cutover|content-offload/index.html` 四页（跟随 sql-scan 模式），4 控制器零侵入新增 `@GetMapping("")` 路由，侧边栏「迁移评估」组补 4 项菜单。
+- **验证**：全模块 `clean install` **34/34 SUCCESS**；biz 单测 **279/279**（新增 43：FileChunkStoreTest 15 / SlowSqlJdbcWrapperTest 14 / DbLinkQueryServiceTest 14）；新文件 13/13 UTF-8 无 BOM。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE19.md`、`reports/TEST_REPORT_WAVE19.md`。剩余待立项（引擎主链路插桩、ChunkStore 配置化接入、DBLink REST+UI、真机 E2E 执行）见该报告 §5。
+
+---
+
+## 33. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

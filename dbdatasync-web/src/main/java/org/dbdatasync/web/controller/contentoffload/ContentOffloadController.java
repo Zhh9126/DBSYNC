@@ -6,6 +6,8 @@ import org.dbdatasync.web.controller.BaseController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
@@ -35,6 +37,12 @@ public class ContentOffloadController extends BaseController {
 
     @Resource
     private OversizedContentService oversizedContentService;
+
+    /** 功能页面 */
+    @GetMapping("")
+    public String index(ModelMap model) {
+        return "content-offload/index";
+    }
 
     /** 存储：内联直通或分块外置（content 必填，maxInlineBytes 可选） */
     @PostMapping("/store")

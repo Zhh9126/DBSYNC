@@ -7,6 +7,8 @@ import org.dbdatasync.web.controller.BaseController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
@@ -36,6 +38,12 @@ public class CutoverController extends BaseController {
 
     @Resource
     private CutoverManagerService cutoverManagerService;
+
+    /** 功能页面 */
+    @GetMapping("")
+    public String index(ModelMap model) {
+        return "cutover/index";
+    }
 
     /** 创建切流会话（幂等） */
     @PostMapping("/create")
