@@ -32,3 +32,7 @@ test_dst.sqlite
 *.duckdb
 *.out.txt
 *.err.txt
+# Wave27：本地演练与临时构建产物（E2E classpath、调试探针等）禁入仓库
+tmp/
+target/e2e_cp.txt
+target/e2e_classes/

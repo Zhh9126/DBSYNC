@@ -34,6 +34,10 @@ if [ "${SKIP_TESTS:-0}" = "1" ]; then
 fi
 mvn package -f pom.xml $TEST_ARGS -Dskip.spotless=true
 
+# Wave27：真库全链路 E2E（H2 vendor，无外部依赖）。SKIP_E2E=1 可跳过；
+# 外部库连接串用 E2E_PROPS 指向 properties 文件后按同一流水线执行。
+./tools/e2e/run_real_pipeline_e2e.sh
+
 CURRENT_DIR=$(pwd);
 mv "$CURRENT_DIR/dbdatasync-web/target/DBDataSync-"*.zip "$CURRENT_DIR" 2>/dev/null
 echo "Done. ZIP at: $CURRENT_DIR/DBDataSync-*.zip"

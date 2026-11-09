@@ -800,9 +800,18 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 - **验证**：相关模块单测全绿 + 全 reactor `mvn test` BUILD SUCCESS；操作手册升级 v2.1.6 / 基线 Wave26，`check_manual_sync.py` 47 字段 / 22 菜单全过。
 - **仍保留**（需外部条件）：达梦 Trigger CDC 真实执行、外部 MySQL/PG/Oracle 连接串下的 E2E、共识型 HA、编译器级 PL/SQL 语义改写。
 
+## 40. 2026-11-10 更新摘要（Wave27：死信手动重放闭环 + 真库 E2E 常态回归）
+
+详见 `reports/OPTIMIZATION_REPORT_WAVE27.md` 与规划 §25。要点：
+
+- **死信手动重放闭环**：biz `DeadLetterReplayOrchestrator.replaySingle`（校验失败标签防误放、人工意图优先不受自动退避约束、与自动编排互不干扰、失败不删记录）→ web `POST /link-health/deadLetters/replay`（operator/admin 可执行，viewer 被 RBAC 拒绝）→【链路健康】页死信行内「重放」按钮 + 确认框 + 结果刷新；单测 7 项全过。
+- **真库 E2E 接入构建**：新增 `tools/e2e/run_real_pipeline_e2e.sh`（默认 H2 vendor 无外部依赖实跑；`E2E_PROPS` 指向外部 MySQL/PG/Oracle 连接串后按同一条流水线执行；`SKIP_E2E=1` 可跳过）；`build.sh` 打包后自动执行；CI 新增 `real-pipeline-e2e` job 每次 push/PR 实跑。本机实跑 14 项全 PASS（含切流 3 步真实执行 `simulated=false`）。
+- **工程卫生**：`.gitignore` 补 `tmp/` 与 E2E 中间产物，本地演练文件禁入仓库。
+- **验证**：全 reactor 单测通过；操作手册升级 v2.1.7 / 基线 Wave27，`check_manual_sync.py` 47 字段 / 22 菜单全过。
+
 ---
 
-## 40. 许可声明
+## 41. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

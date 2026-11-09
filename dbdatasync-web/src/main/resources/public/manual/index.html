@@ -5,7 +5,7 @@
     DBDataSync 操作手册（系统管理 -> 操作手册）
     纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
 
-    文档基线：Wave26（2026-11-09）。
+    文档基线：Wave27（2026-11-10）。
     维护约定：本手册随功能实时同步。新增/修改系统配置项、菜单、REST 端点或默认行为时，
     必须在同一次变更中更新本手册对应章节、第 13 章配置速查表与第 18 章变更记录，
     并执行 python tools/check_manual_sync.py；CI 的 docs-sync 任务会阻断未同步的变更。
@@ -52,7 +52,7 @@
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
         <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
-        <div class="meta">适用版本 <b>v2.1.6 及以上</b> ｜ 文档基线 <b>Wave26</b> ｜ 更新日期 <b>2026-11-09</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
+        <div class="meta">适用版本 <b>v2.1.7 及以上</b> ｜ 文档基线 <b>Wave27</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -356,7 +356,7 @@
                     <tr><td>KPI 卡</td><td>链路健康分（/100）、运行中链路数、最长链路停滞（秒）、<b>最大端到端复制延迟（秒）</b>、死信待处理条数（并显示自动重试挽回行数）</td></tr>
                     <tr><td>运行策略卡</td><td>停滞预警/严重阈值、失败率阈值、健康告警开关、Prometheus 导出开关、真实延迟链路数、集群节点状态、最近更新时间</td></tr>
                     <tr><td>链路清单</td><td>逐任务展示健康等级、lagSeconds、lagSource、事件数、失败/死信、重试挽回、最后事件时间；可按等级筛选</td></tr>
-                    <tr><td>失败明细 / 死信</td><td>列出带标签的失败记录，标记 <code>deadLetter</code> / <code>kind</code> / <code>syncFail</code>，便于定位哪些可自动恢复、哪些必须人工处理</td></tr>
+                    <tr><td>失败明细 / 死信</td><td>列出带标签的失败记录，标记 <code>deadLetter</code> / <code>kind</code> / <code>syncFail</code>，便于定位哪些可自动恢复、哪些必须人工处理。Wave27 起死信 / 待处理记录行内有<b>「重放」按钮</b>（operator 及以上角色）：确认后按原事件重新写入目标库，成功即清除失败标记，失败则保留明细并提示原因</td></tr>
                     <tr><td>集群状态</td><td>未开启 HA 时显示 STANDALONE；开启后显示 leader / 节点 / 租约状态（来自 <code>/link-health/cluster</code>）</td></tr>
                 </table>
                 <p>健康等级为 <code>IDLE / HEALTHY / WARN / CRITICAL / STALE</code>，按运行态、停滞或 lag、失败率、死信数量取<b>最严重等级与最低分</b>。纯空闲且无失败/死信的链路不会误报告警。</p>
@@ -380,6 +380,7 @@
                     <tr><td><code>GET /link-health</code></td><td>链路健康页面</td></tr>
                     <tr><td><code>POST /link-health/report</code></td><td>健康总览 + 逐链路明细</td></tr>
                     <tr><td><code>POST /link-health/deadLetters</code></td><td>失败明细 / 死信列表（可按任务过滤）</td></tr>
+                    <tr><td><code>POST /link-health/deadLetters/replay</code></td><td>Wave27 单条死信手动重放（参数 <code>metaId</code> + <code>messageId</code>；viewer 角色被 RBAC 拒绝）</td></tr>
                     <tr><td><code>POST /link-health/cluster</code></td><td>集群角色与租约状态（Wave23）</td></tr>
                     <tr><td><code>GET /link-health/prometheus</code></td><td>Prometheus 文本指标</td></tr>
                     <tr><td><code>POST /batch-profile/report</code></td><td>批写性能剖析（p50/p95/max 耗时与行数，Wave24）</td></tr>
@@ -409,7 +410,8 @@
                 <ul>
                     <li>人工重推与自动重放都通过「重放结果确认」（<code>ReplayConfirmation</code>）门闩，<b>只有写入明确成功才删除失败明细并自减失败计数</b>，否则保留记录并报错；</li>
                     <li>自动重放由 <code>enableDeadLetterAutoReplay</code> 控制（默认关闭），每 60 秒扫描一次带失败标签的记录，指数退避 + 次数上限 + 批量上限，参数见 <code>deadLetterReplayMaxAttempts</code> / <code>deadLetterReplayBaseMillis</code>；</li>
-                    <li>未拿到成功确认的记录会一直保留，可继续人工处置。</li>
+                    <li>未拿到成功确认的记录会一直保留，可继续人工处置；</li>
+                    <li><b>Wave27 手动重放闭环</b>：【链路健康】页死信 / 待处理记录行内「重放」按钮调用 <code>POST /link-health/deadLetters/replay</code>（biz 层 <code>DeadLetterReplayOrchestrator.replaySingle</code>）。人工明确意图优先，不受自动重放的指数退避与次数上限约束；但同样要求记录确实带失败标签，防止误放普通明细；重放前后都会清理该记录的自动重放退避状态，两种通道互不干扰；失败明细同样走「重放结果确认」门闩，写入不成功不删记录。</li>
                 </ul>
 
                 <h3 id="manual-h12-3">12.3 事务型 checkpoint 与幂等键</h3>
@@ -655,6 +657,7 @@
                     <tr><td>Wave24</td><td>2026-11-09</td><td>真实 lag 覆盖 PG/Kingbase/Oracle/Mongo/Kafka/RocketMQ/SQL Server、逐行失败分类（RowFailure）、慢 SQL 任务级上下文与批写性能剖析、目标库事务内位点（强一致收敛）、表级 DDL 自动同步 + schema history + DDL-DML 顺序守卫、自动切流执行器、SQLite Trigger CDC、RBAC 三角色矩阵与严格模式 CSRF、数据对比明细 200 条截断解除、PL/SQL 轻量 AST 自动改写、engine 模块退役、E2E 脚本入流水线；新增 5 项系统配置；手册升级至 v2.1.5</td></tr>
                     <tr><td>Wave25</td><td>2026-11-09</td><td>前端接线：新增【监控告警 → 结构变更】页面（DDL 登记/确认/解除阻塞 + 汇总 KPI）；链路健康页新增「批写性能剖析」卡片与重置；慢 SQL 页新增任务级聚合面板与按任务过滤（<code>/slow-sql/records</code> 支持 taskId）；手册同步新增端点说明</td></tr>
                     <tr><td>Wave26</td><td>2026-11-09</td><td>切流真实动作处理器接线（<code>TaskControlActionHandler</code>：停增量/恢复增量映射驱动真实启停，VERIFY_TARGET 目标端 SQL 真实执行）；Trigger CDC 方言抽象（SDK <code>TriggerCdcDialect</code> + <code>AbstractTriggerLogListener</code>）并扩展 H2（内联源码触发器，重开库验证）与达梦（SQL 生成校验，未连真实 DM）；新增真实库全链路 E2E <code>tools/e2e/RealDbPipelineE2e.java</code>（建表→CDC→还原→目标应用→一致性→切流 SQL，H2/SQLite 双 vendor 实跑通过）</td></tr>
+                    <tr><td>Wave27</td><td>2026-11-10</td><td>死信手动重放闭环：【链路健康】页死信 / 待处理记录行内新增「重放」按钮，端点 <code>POST /link-health/deadLetters/replay</code>（operator 及以上），人工重放不受自动重放退避限制且互不干扰；真库全链路 E2E 接入构建：新增 <code>tools/e2e/run_real_pipeline_e2e.sh</code>（H2 vendor 无外部依赖实跑，外部连接串经 <code>E2E_PROPS</code> 按同流水线执行），CI 新增 <code>real-pipeline-e2e</code> job，<code>build.sh</code> 集成（<code>SKIP_E2E=1</code> 可跳过）</td></tr>
                 </table>
                 <h3>维护约定（强制）</h3>
                 <ol>
@@ -663,7 +666,7 @@
                     <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
                     <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
                 </ol>
-                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.6+，文档基线 Wave26，2026-11-09 更新）—</p>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.7+，文档基线 Wave27，2026-11-10 更新）—</p>
             </section>
 
         </div>

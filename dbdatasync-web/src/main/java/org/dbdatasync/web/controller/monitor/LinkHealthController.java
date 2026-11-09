@@ -6,6 +6,7 @@ package org.dbdatasync.web.controller.monitor;
 import org.dbdatasync.biz.ReplicationHealthService;
 import org.dbdatasync.biz.SystemConfigService;
 import org.dbdatasync.biz.health.PrometheusExporter;
+import org.dbdatasync.biz.replay.DeadLetterReplayOrchestrator;
 import org.dbdatasync.biz.vo.RestResult;
 import org.dbdatasync.parser.model.SystemConfig;
 import org.dbdatasync.sdk.spi.DeploymentService;
@@ -74,6 +75,27 @@ public class LinkHealthController extends BaseController {
             return RestResult.restSuccess(replicationHealthService.queryDeadLetters(params));
         } catch (Exception e) {
             logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    @Resource
+    private DeadLetterReplayOrchestrator deadLetterReplayOrchestrator;
+
+    /**
+     * Wave27：单条死信手动重放。写操作端点：不进 viewer 只读白名单，
+     * RBAC 严格模式下 operator / admin 可执行，viewer 被拒绝。
+     */
+    @PostMapping("/deadLetters/replay")
+    @ResponseBody
+    public RestResult replayDeadLetter(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            String message = deadLetterReplayOrchestrator.replaySingle(
+                    params.get("metaId"), params.get("messageId"));
+            return RestResult.restSuccess(message);
+        } catch (Exception e) {
+            logger.warn("死信手动重放请求失败: {}", e.getMessage());
             return RestResult.restFail(e.getMessage());
         }
     }

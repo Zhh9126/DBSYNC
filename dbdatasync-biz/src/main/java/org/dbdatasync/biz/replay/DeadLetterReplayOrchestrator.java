@@ -3,6 +3,7 @@
  */
 package org.dbdatasync.biz.replay;
 
+import org.dbdatasync.biz.BizException;
 import org.dbdatasync.biz.DataSyncService;
 import org.dbdatasync.biz.ReplicationHealthService;
 import org.dbdatasync.biz.SystemConfigService;
@@ -119,6 +120,63 @@ public class DeadLetterReplayOrchestrator {
         if (processed > 0) {
             logger.info("死信自动重放完成: 本轮={}, 成功={}", processed, succeeded);
         }
+    }
+
+    /**
+     * Wave27：单条死信手动重放（链路健康页「重放」按钮调用）。
+     *
+     * <p>与自动重放的差异：人工明确意图优先，不受指数退避与次数上限约束；
+     * 但同样要求目标记录确实带失败标签（死信/待处理），防止把普通明细误放。
+     * 重放成功或失败后都会清理自动重放的退避状态，避免自动编排与人工操作互相干扰。</p>
+     *
+     * @param metaId    失败明细所属元数据 id
+     * @param messageId 失败明细 id
+     * @return 重放结果描述（成功/失败原因）
+     * @throws org.dbdatasync.BizException 记录不存在、非死信或重放执行失败
+     */
+    public String replaySingle(String metaId, String messageId) {
+        if (metaId == null || metaId.trim().isEmpty() || messageId == null || messageId.trim().isEmpty()) {
+            throw new BizException("metaId 与 messageId 不能为空");
+        }
+        // 先确认记录存在且确为死信/失败明细（扫最近 500 条内匹配）
+        Map<String, String> query = new HashMap<String, String>();
+        query.put("status", "0");
+        query.put("pageNum", "1");
+        query.put("pageSize", "500");
+        DeadLetterVO target = null;
+        try {
+            Paging<DeadLetterVO> page = replicationHealthService.queryDeadLetters(query);
+            if (page != null && page.getData() != null) {
+                for (DeadLetterVO item : (Collection<DeadLetterVO>) page.getData()) {
+                    if (item != null && metaId.equals(item.getMetaId()) && messageId.equals(item.getId())) {
+                        target = item;
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("死信手动重放查询失败: {}", e.getMessage());
+        }
+        if (target == null) {
+            throw new BizException("失败明细不存在或已不在失败列表中，请刷新后重试");
+        }
+        if (!target.isDeadLetter() && !target.isSyncFail()) {
+            throw new BizException("该记录不是死信/失败明细，不允许重放");
+        }
+        // 人工重放前清理退避，成功失败都清理（避免自动编排继续按旧退避压制）
+        String key = metaId + "|" + messageId;
+        forget(metaId, messageId);
+        Map<String, String> params = new HashMap<String, String>();
+        params.put("metaId", metaId);
+        params.put("messageId", messageId);
+        try {
+            dataSyncService.sync(params);
+        } catch (Exception e) {
+            logger.warn("死信手动重放失败: id={}, error={}", key, e.getMessage());
+            throw new BizException("重放执行失败: " + e.getMessage());
+        }
+        logger.info("死信手动重放成功: id={}", key);
+        return "重放成功：记录已重新同步";
     }
 
     /** 记录被人工成功重放后清理退避状态 */

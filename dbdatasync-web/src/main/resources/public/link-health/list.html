@@ -136,17 +136,17 @@
         <div class="panel-head">
             <div>
                 <h3 class="panel-title">失败明细与死信</h3>
-                <div class="panel-sub">带 <code>[DEAD_LETTER]</code> 标记的为永久故障或重试耗尽，需人工介入；<code>[SYNC_FAIL]</code> 为同步写入失败记录。</div>
+                <div class="panel-sub">带 <code>[DEAD_LETTER]</code> 标记的为永久故障或重试耗尽，需人工介入；<code>[SYNC_FAIL]</code> 为同步写入失败记录。修复故障后可对单条记录执行「重放」重新同步（operator 及以上角色）。</div>
             </div>
             <button type="button" class="btn btn-outline" id="lhDeadRefreshBtn"><i class="fa fa-refresh"></i> 刷新明细</button>
         </div>
         <div class="panel-body lh-table-wrap">
             <table class="table lh-table">
                 <thead>
-                <tr><th>时间</th><th>所属任务</th><th>目标表</th><th>事件</th><th>分类</th><th>状态</th><th>错误摘要</th></tr>
+                <tr><th>时间</th><th>所属任务</th><th>目标表</th><th>事件</th><th>分类</th><th>状态</th><th>错误摘要</th><th>操作</th></tr>
                 </thead>
                 <tbody id="lhDeadRows">
-                <tr><td colspan="7" class="empty-state">正在加载失败明细…</td></tr>
+                <tr><td colspan="8" class="empty-state">正在加载失败明细…</td></tr>
                 </tbody>
             </table>
         </div>
@@ -334,13 +334,17 @@
             }
             var rows = (response.data.data || []);
             if (!rows.length) {
-                $body.html('<tr><td colspan="7" class="empty-state">暂无失败明细，链路运行正常</td></tr>');
+                $body.html('<tr><td colspan="8" class="empty-state">暂无失败明细，链路运行正常</td></tr>');
                 return;
             }
             $body.html(rows.map(function (v) {
                 var chip = v.deadLetter
                     ? '<span class="lh-chip lh-critical">死信</span>'
                     : (v.syncFail ? '<span class="lh-chip lh-warn">待处理</span>' : '<span class="lh-chip lh-idle">其它</span>');
+                var canReplay = v.deadLetter || v.syncFail;
+                var opCell = canReplay
+                    ? '<button type="button" class="btn btn-outline btn-sm lh-replay-btn" data-meta="' + esc(v.metaId) + '" data-msg="' + esc(v.id) + '"><i class="fa fa-rotate-right"></i> 重放</button>'
+                    : '<span class="lh-idle">--</span>';
                 return '<tr>'
                     + '<td>' + fmtTime(v.createTime) + '</td>'
                     + '<td>' + esc(v.mappingName || '--') + '</td>'
@@ -349,10 +353,29 @@
                     + '<td>' + esc(v.kind || '--') + '</td>'
                     + '<td>' + chip + '</td>'
                     + '<td><div class="lh-err" title="' + esc(v.error) + '">' + esc(v.error) + '</div></td>'
+                    + '<td>' + opCell + '</td>'
                     + '</tr>';
             }).join(''));
         });
     }
+
+    // Wave27：死信手动重放（operator 及以上角色；viewer 会被服务端 RBAC 拒绝）
+    $(document).off('click', '.lh-replay-btn').on('click', '.lh-replay-btn', function () {
+        var metaId = $(this).data('meta');
+        var messageId = $(this).data('msg');
+        if (!window.confirm('确认重放该条记录？系统将按原事件重新写入目标库，写入成功后自动清除失败标记。')) {
+            return;
+        }
+        var $btn = $(this).prop('disabled', true).text('重放中…');
+        doPoster('/link-health/deadLetters/replay', {metaId: metaId, messageId: messageId}, function (response) {
+            if (response && response.success === true) {
+                window.alert(response.message || response.data || '重放成功：记录已重新同步');
+            } else {
+                window.alert('重放失败: ' + ((response && response.message) || '未知错误'));
+            }
+            loadDeadLetters();
+        });
+    });
 
     function refreshAll() {
         loadReport();
