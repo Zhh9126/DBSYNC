@@ -108,6 +108,26 @@ public class SlowSqlService {
     }
 
     /**
+     * Wave25：按任务过滤的快照；taskId 为空 / {@code <unknown>} 时返回无任务上下文记录。
+     */
+    public List<SlowSqlRecord> records(String taskId) {
+        List<SlowSqlRecord> snapshot = store.snapshot();
+        if (taskId == null || taskId.trim().isEmpty()) {
+            return snapshot;
+        }
+        String key = taskId.trim();
+        List<SlowSqlRecord> filtered = new ArrayList<>();
+        for (SlowSqlRecord record : snapshot) {
+            String own = record.getTaskId() == null || record.getTaskId().isEmpty()
+                    ? "<unknown>" : record.getTaskId();
+            if (own.equals(key)) {
+                filtered.add(record);
+            }
+        }
+        return filtered;
+    }
+
+    /**
      * 统计报告。
      *
      * @param thresholdMillis 慢 SQL 阈值；&le;0 时用当前配置阈值

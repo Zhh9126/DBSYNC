@@ -80,11 +80,12 @@ public class SlowSqlController extends BaseController {
         }
     }
 
-    /** 当前快照（按存入顺序的只读副本） */
+    /** 当前快照（按存入顺序的只读副本）；taskId 可选，Wave25 支持按任务过滤 */
     @PostMapping("/records")
     @ResponseBody
-    public RestResult records() {
-        return RestResult.restSuccess(slowSqlService.records());
+    public RestResult records(HttpServletRequest request) {
+        Map<String, String> params = getParams(request);
+        return RestResult.restSuccess(slowSqlService.records(params.get("taskId")));
     }
 
     /** Wave24：按同步任务聚合慢 SQL（任务级上下文报告） */

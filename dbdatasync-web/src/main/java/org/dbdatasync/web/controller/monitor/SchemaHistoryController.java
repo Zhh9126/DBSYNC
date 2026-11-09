@@ -5,6 +5,7 @@ import org.dbdatasync.parser.ddl.DdlSyncOrchestrator;
 import org.dbdatasync.parser.ddl.SchemaHistory;
 import org.dbdatasync.web.controller.BaseController;
 import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
@@ -25,6 +26,12 @@ import java.util.Map;
 @Controller
 @RequestMapping("/schema-history")
 public class SchemaHistoryController extends BaseController {
+
+    /** 功能页面（Wave25：监控告警 → 结构变更） */
+    @RequestMapping("")
+    public String index(ModelMap model) {
+        return "schema-history/list.html";
+    }
 
     /** 全部历史（按序号） */
     @PostMapping("/list")

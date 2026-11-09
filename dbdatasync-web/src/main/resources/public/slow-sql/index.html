@@ -73,6 +73,9 @@
         <div class="mb-3">
             <button class="btn btn-primary" onclick="doReport()"><i class="fa fa-line-chart"></i> 生成报告</button>
             <button class="btn btn-secondary" onclick="doRecords()"><i class="fa fa-list"></i> 查看快照</button>
+            <span class="text-xs text-tertiary ml-2">按任务过滤：</span>
+            <input id="rptTaskId" class="form-input" style="width:180px;display:inline-block;" type="text"
+                   placeholder="任务 ID / <unknown>">
         </div>
         <div id="rptResult" style="display:none;" class="mb-2"></div>
         <div style="max-height:360px;overflow:auto;">
@@ -81,6 +84,7 @@
                 <tr>
                     <th>SQL</th>
                     <th style="width:110px;">来源</th>
+                    <th style="width:110px;">任务</th>
                     <th style="width:100px;">耗时(ms)</th>
                     <th style="width:90px;">行数</th>
                     <th style="width:170px;">采集时间</th>
@@ -88,6 +92,27 @@
                 </tr>
                 </thead>
                 <tbody id="rptTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- Wave25：任务级聚合 -->
+        <h4 class="mb-2 font-medium text-sm mt-4"><i class="fa fa-tasks text-primary"></i> 任务级聚合（Wave24/25）</h4>
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doTaskReport()"><i class="fa fa-refresh"></i> 刷新聚合</button>
+            <span class="text-xs text-tertiary ml-2">按同步任务聚合 count / avg / max / p95；无任务上下文的记录归入 &lt;unknown&gt;</span>
+        </div>
+        <div style="max-height:300px;overflow:auto;">
+            <table class="table" id="taskTable" style="display:none;">
+                <thead>
+                <tr>
+                    <th>任务 ID</th>
+                    <th style="width:90px;">条数</th>
+                    <th style="width:110px;">avg(ms)</th>
+                    <th style="width:110px;">max(ms)</th>
+                    <th style="width:110px;">p95(ms)</th>
+                </tr>
+                </thead>
+                <tbody id="taskTableBody"></tbody>
             </table>
         </div>
     </div>
@@ -156,12 +181,44 @@
     }
 
     function doRecords() {
-        doPoster('/slow-sql/records', {}, function (response) {
+        const taskId = document.getElementById('rptTaskId').value.trim();
+        doPoster('/slow-sql/records', taskId ? {taskId: taskId} : {}, function (response) {
             if (!response.success) {
                 bootGrowl(response.message || '快照获取失败', 'danger');
                 return;
             }
             renderRows(response.data || []);
+        });
+    }
+
+    function doTaskReport() {
+        doPoster('/slow-sql/taskReport', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '聚合失败', 'danger');
+                return;
+            }
+            const data = response.data || {};
+            const keys = Object.keys(data);
+            const table = document.getElementById('taskTable');
+            const body = document.getElementById('taskTableBody');
+            body.innerHTML = '';
+            if (!keys.length) {
+                table.style.display = 'none';
+                bootGrowl('暂无采集记录', 'info');
+                return;
+            }
+            table.style.display = 'table';
+            keys.forEach(function (k) {
+                const v = data[k] || {};
+                const tr = document.createElement('tr');
+                tr.innerHTML = ''
+                    + '<td class="text-xs">' + escapeHtml(k) + '</td>'
+                    + '<td class="text-xs">' + (v.count || 0) + '</td>'
+                    + '<td class="text-xs">' + (v.avgMillis || 0) + '</td>'
+                    + '<td class="text-xs">' + (v.maxMillis || 0) + '</td>'
+                    + '<td class="text-xs">' + (v.p95Millis || 0) + '</td>';
+                body.appendChild(tr);
+            });
         });
     }
 
@@ -192,6 +249,7 @@
             tr.innerHTML = ''
                 + '<td class="text-xs" style="word-break:break-all;">' + escapeHtml(r.sql || '') + '</td>'
                 + '<td class="text-xs text-tertiary">' + escapeHtml(r.source || '') + '</td>'
+                + '<td class="text-xs text-tertiary">' + escapeHtml(r.taskId || '-') + '</td>'
                 + '<td class="text-xs">' + (r.executeMillis || 0) + '</td>'
                 + '<td class="text-xs">' + (r.rows || 0) + '</td>'
                 + '<td class="text-xs text-tertiary">' + (r.capturedAt ? new Date(r.capturedAt).toLocaleString() : '-') + '</td>'

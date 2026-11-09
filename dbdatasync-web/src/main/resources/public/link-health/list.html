@@ -77,6 +77,29 @@
         </div>
     </section>
 
+    <!-- Wave25：批写性能剖析 -->
+    <section class="panel-card" style="margin-top:18px">
+        <div class="panel-head">
+            <div>
+                <h3 class="panel-title">批写性能剖析 <span class="badge badge-info">Wave24/25</span></h3>
+                <div class="panel-sub">批写主链路滑动窗口统计（容量 4096 批），用于大事务批写耗时定位；分位数覆盖 p50 / p95。</div>
+            </div>
+            <button type="button" class="btn btn-outline" id="lhProfileResetBtn"><i class="fa fa-eraser"></i> 清空统计</button>
+        </div>
+        <div class="panel-body">
+            <div class="lh-policy-grid" id="lhProfileGrid">
+                <div class="lh-policy-item"><span>批次总数</span><strong id="lhPfBatches">--</strong></div>
+                <div class="lh-policy-item"><span>累计行数</span><strong id="lhPfRows">--</strong></div>
+                <div class="lh-policy-item"><span>平均耗时</span><strong id="lhPfAvg">--</strong></div>
+                <div class="lh-policy-item"><span>p50 耗时</span><strong id="lhPfP50">--</strong></div>
+                <div class="lh-policy-item"><span>p95 耗时</span><strong id="lhPfP95">--</strong></div>
+                <div class="lh-policy-item"><span>最大耗时</span><strong id="lhPfMax">--</strong></div>
+                <div class="lh-policy-item"><span>样本数 / 容量</span><strong id="lhPfSample">--</strong></div>
+                <div class="lh-policy-item"><span>最近更新</span><strong id="lhPfUpdated">--</strong></div>
+            </div>
+        </div>
+    </section>
+
     <!-- 链路清单 -->
     <section class="panel-card" style="margin-top:18px">
         <div class="panel-head">
@@ -287,6 +310,21 @@
         });
     }
 
+    function loadBatchProfile() {
+        doPoster('/batch-profile/report', {}, function (response) {
+            var p = response && response.success === true ? response.data : null;
+            if (!p) { return; }
+            $('#lhPfBatches').text(fmtNum(p.totalBatches));
+            $('#lhPfRows').text(fmtNum(p.totalRows));
+            $('#lhPfAvg').text((p.avgMillis == null ? '--' : p.avgMillis) + ' ms');
+            $('#lhPfP50').text((p.p50Millis == null ? '--' : p.p50Millis) + ' ms');
+            $('#lhPfP95').text((p.p95Millis == null ? '--' : p.p95Millis) + ' ms');
+            $('#lhPfMax').text((p.maxMillis == null ? '--' : p.maxMillis) + ' ms');
+            $('#lhPfSample').text(fmtNum(p.sampleSize) + ' / ' + fmtNum(p.capacity));
+            $('#lhPfUpdated').text(fmtTime(Date.now()));
+        });
+    }
+
     function loadDeadLetters() {
         doPoster('/link-health/deadLetters', {pageNum: 1, pageSize: 50}, function (response) {
             var $body = $('#lhDeadRows');
@@ -320,6 +358,7 @@
         loadReport();
         loadDeadLetters();
         loadClusterState();
+        loadBatchProfile();
     }
 
     function setupAutoRefresh() {
@@ -345,6 +384,16 @@
             }
             if (window.bootGrowl) { bootGrowl('抓取路径已复制', 'success'); }
         } catch (e) { /* 忽略复制失败 */ }
+    });
+
+    $('#lhProfileResetBtn').off('click').on('click', function () {
+        doPoster('/batch-profile/reset', {}, function (response) {
+            if (window.bootGrowl) {
+                bootGrowl(response && response.success === true ? '批写统计已清空' : (response && response.message) || '清空失败',
+                        response && response.success === true ? 'success' : 'danger');
+            }
+            loadBatchProfile();
+        });
     });
 
     refreshAll();

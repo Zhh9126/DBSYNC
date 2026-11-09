@@ -5,7 +5,7 @@
     DBDataSync 操作手册（系统管理 -> 操作手册）
     纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
 
-    文档基线：Wave24（2026-11-09）。
+    文档基线：Wave25（2026-11-09）。
     维护约定：本手册随功能实时同步。新增/修改系统配置项、菜单、REST 端点或默认行为时，
     必须在同一次变更中更新本手册对应章节、第 13 章配置速查表与第 18 章变更记录，
     并执行 python tools/check_manual_sync.py；CI 的 docs-sync 任务会阻断未同步的变更。
@@ -52,7 +52,7 @@
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
         <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
-        <div class="meta">适用版本 <b>v2.1.5 及以上</b> ｜ 文档基线 <b>Wave24</b> ｜ 更新日期 <b>2026-11-09</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
+        <div class="meta">适用版本 <b>v2.1.5 及以上</b> ｜ 文档基线 <b>Wave25</b> ｜ 更新日期 <b>2026-11-09</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -142,7 +142,7 @@
                     <tr><td>数据血缘</td><td>表级同步关系展示</td></tr>
                     <tr><td>数据对比</td><td>对比任务</td><td>一致性对比、差异明细、修复 SQL、批量订正</td></tr>
                     <tr><td>迁移评估</td><td>SQL 兼容扫描 / 慢 SQL 采集 / 逻辑导入导出 / 切流编排 / 超大内容外置 / DBLink 查询</td><td>迁移前后的辅助工具（见第 9 章）</td></tr>
-                    <tr><td>监控告警</td><td>性能监控 / 链路健康 / 告警通知</td><td>速率与资源指标、实时链路健康与死信、通知渠道</td></tr>
+                    <tr><td>监控告警</td><td>性能监控 / 链路健康 / 结构变更 / 告警通知</td><td>速率与资源指标、实时链路健康与死信、批写性能剖析、表级 DDL 登记与人工确认、通知渠道</td></tr>
                     <tr><td>系统管理</td><td>插件管理 / 配置管理 / 用户管理 / 系统配置 / 操作手册</td><td>扩展插件、全局配置、账号与系统参数、本手册</td></tr>
                 </table>
                 <div class="warn"><b>注意：</b>页面上所有列表服务端分页默认可能较小，可通过列表中的分页条切换每页行数；搜索框支持按名称模糊过滤。</div>
@@ -384,6 +384,11 @@
                     <tr><td><code>GET /link-health/prometheus</code></td><td>Prometheus 文本指标</td></tr>
                     <tr><td><code>POST /batch-profile/report</code></td><td>批写性能剖析（p50/p95/max 耗时与行数，Wave24）</td></tr>
                     <tr><td><code>POST /batch-profile/reset</code></td><td>清空批写剖析计数（Wave24，严格模式需 admin + CSRF）</td></tr>
+                    <tr><td><code>POST /schema-history/list|summary</code></td><td>结构变更清单与汇总（Wave24/25，页面【监控告警 → 结构变更】）</td></tr>
+                    <tr><td><code>POST /schema-history/confirm</code></td><td>人工确认并应用表级 DDL（可带跨方言 targetSql 与 operator；严格模式需 CSRF）</td></tr>
+                    <tr><td><code>POST /schema-history/unblock</code></td><td>应急解除某表的 DML 阻塞（不执行 DDL）</td></tr>
+                    <tr><td><code>POST /slow-sql/taskReport</code></td><td>慢 SQL 按任务聚合（count/avg/max/p95，Wave24）</td></tr>
+                    <tr><td><code>POST /slow-sql/records</code></td><td>慢 SQL 快照（Wave25 起支持 taskId 过滤）</td></tr>
                 </table>
             </section>
 
@@ -442,7 +447,7 @@
                     <li><b>无主键表</b>：由 <code>enableNoPkFallback</code> 控制（默认开启）。行身份按 <code>PRIMARY_KEY → UNIQUE_KEY → FULL_ROW_HASH → NONE</code> 退化；只有主键 / 唯一索引能拼目标端 WHERE 条件，全行哈希仅用于审计与去重，不伪装成目标端列；</li>
                     <li><b>表级 DDL</b>：识别 <code>CREATE/DROP/TRUNCATE/RENAME TABLE</code>、索引与约束变更，先分类再标记「需人工确认」；<code>DROP / TRUNCATE / RENAME</code> 必须人工确认，系统不会自动生成目标端可执行 SQL；</li>
                     <li><b>Wave24 表级 DDL 自动同步（<code>enableDdlAutoSync</code>，默认关闭）</b>：开启后非高风险表级 DDL 自动翻译并写目标端，历史落 <code>schemaHistoryDir</code>（JSONL，含状态与目标端 SQL）；高风险类型（DROP/TRUNCATE/RENAME 等）仍必须人工确认；</li>
-                    <li><b>DDL-DML 顺序守卫（<code>enableDdlDmlOrderGuard</code>，默认开启）</b>：某表的 DDL 处于「待确认」状态时，同表 DML 自动挂起，确认应用后按原顺序重放，避免按旧 schema 写入；确认 / 解除挂起走 <code>/schema-history/confirm</code>、<code>/schema-history/unblock</code>；</li>
+                    <li><b>DDL-DML 顺序守卫（<code>enableDdlDmlOrderGuard</code>，默认开启）</b>：某表的 DDL 处于「待确认」状态时，同表 DML 自动挂起，确认应用后按原顺序重放，避免按旧 schema 写入；确认 / 解除挂起可在【监控告警 → 结构变更】页面操作，或走 <code>/schema-history/confirm</code>、<code>/schema-history/unblock</code>；</li>
                     <li>列级 ALTER（加字段、改类型、删列、改名）仍按 <code>ddlSyncPolicy</code> 策略执行；表级识别不会误伤加字段等存量自动能力。</li>
                 </ul>
 
@@ -634,7 +639,7 @@
                 <table>
                     <tr><th>项</th><th>值</th></tr>
                     <tr><td>适用版本</td><td>v2.1.5 及以上</td></tr>
-                    <tr><td>功能基线</td><td><b>Wave24</b>（2026-11-09）</td></tr>
+                    <tr><td>功能基线</td><td><b>Wave25</b>（2026-11-09）</td></tr>
                     <tr><td>手册更新日期</td><td>2026-11-09</td></tr>
                     <tr><td>手册位置</td><td><code>public/manual/index.html</code>，菜单【系统管理 → 操作手册】，路径 <code>/manual</code></td></tr>
                     <tr><td>同步校验</td><td><code>python tools/check_manual_sync.py</code>（CI 的 docs-sync 任务自动执行）</td></tr>
@@ -648,6 +653,7 @@
                     <tr><td>Wave22</td><td>2026-11-08</td><td>写入瞬时故障自动重试与失败分类标签、死信语义、链路健康页与 Prometheus 导出、健康告警与冷却；新增 10 项系统配置；侧栏新增「链路健康」</td></tr>
                     <tr><td>Wave23</td><td>2026-11-09</td><td>真实端到端复制延迟（MySQL binlog eventTime）、事务型 checkpoint + 幂等键、集群 HA 文件租约接入真实任务启停、死信安全重放、无主键退化、表级 DDL 识别与人工确认、严格安全模式与口令环境变量、Wave17/20 持久化收口、CI 与低内存构建；新增 10 项系统配置；登录页改为左核心能力 / 右登录的科技感分屏；全站深浅主题</td></tr>
                     <tr><td>Wave24</td><td>2026-11-09</td><td>真实 lag 覆盖 PG/Kingbase/Oracle/Mongo/Kafka/RocketMQ/SQL Server、逐行失败分类（RowFailure）、慢 SQL 任务级上下文与批写性能剖析、目标库事务内位点（强一致收敛）、表级 DDL 自动同步 + schema history + DDL-DML 顺序守卫、自动切流执行器、SQLite Trigger CDC、RBAC 三角色矩阵与严格模式 CSRF、数据对比明细 200 条截断解除、PL/SQL 轻量 AST 自动改写、engine 模块退役、E2E 脚本入流水线；新增 5 项系统配置；手册升级至 v2.1.5</td></tr>
+                    <tr><td>Wave25</td><td>2026-11-09</td><td>前端接线：新增【监控告警 → 结构变更】页面（DDL 登记/确认/解除阻塞 + 汇总 KPI）；链路健康页新增「批写性能剖析」卡片与重置；慢 SQL 页新增任务级聚合面板与按任务过滤（<code>/slow-sql/records</code> 支持 taskId）；手册同步新增端点说明</td></tr>
                 </table>
                 <h3>维护约定（强制）</h3>
                 <ol>
@@ -656,7 +662,7 @@
                     <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
                     <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
                 </ol>
-                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.5+，文档基线 Wave24，2026-11-09 更新）—</p>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.5+，文档基线 Wave25，2026-11-09 更新）—</p>
             </section>
 
         </div>
