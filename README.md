@@ -822,7 +822,20 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 43. 许可声明
+## 43. 2026-11-10 更新摘要（Wave29：离线交付包重打与解压即用）
+
+详见 `reports/OPTIMIZATION_REPORT_WAVE29.md` 与规划 §27。要点：
+
+- **重新全量打包**：`./build.sh` 重新构建（文档同步校验 + clean + 全量单测 + assembly + 真库 E2E），把 Wave26/27/28 的代码、Wave29 的启动脚本与内置手册一并打进 `DBDataSync-2.1.4-bin.zip`；旧包停留在 11-09 18:00 的问题已消除。
+- **离线可运行的启动脚本**：默认小堆 `-Xms128m -Xmx768m`（`DBS_HEAP_MIN`/`DBS_HEAP_MAX` 可覆盖）替代固定 3g / 3.8g；去掉强制 G1 16m region、CMS 与 verbose GC；`startup.sh` 先 `cd` 安装目录保证 H2 `./data` 落位；Windows `LOG_PATH` 统一为 `LOG_HOME`；`startup.sh` 增加 JRE 平台守卫。
+- **离线交付物**：`tools/package_offline.py` 组装 `DBDataSync-2.1.4-offline-win64.zip`（内嵌 Windows JRE 8 + SHA256）与 `--no-jre` 的 `offline-portable.zip`；随包 `README-OFFLINE.md` 说明目录、Java 8 硬要求、启动参数、升级与端口陷阱。组装时校验内置手册基线 Wave29、切流执行器与四库 Trigger CDC 方言是否真进 jar、依赖数量、JRE `rt.jar`、zip CRC，打到旧包直接失败。
+- **文档实时同步**：手册 v2.1.9 / 基线 Wave29，第 17 章重写两类包与平台边界、17.3 内存参数、17.4 组装卡口，13.1 增部署启动参数表，第 18 章基线表修正（此前停在 Wave26）。
+- **运行目录同步**：`tmp/dist/lib` 同步 208 个新 jar；发现残留 `DBDataSync-2.1.4.jar`（Wave28 手册）按字母序会遮蔽新 web jar 的静态资源，已覆盖为 Wave29 内容；运行态 `conf/` 保持不动。全新目录用包内 JRE 实启验证 `/login`、`/manual`（含 Wave29）、`/link-health` 均 200。
+- **诚实边界**：内嵌 JRE 为 Windows 64 位；Linux 离线环境需自带 Java 8 或放对应平台 `jre8/`；JDK 9+ 不支持 `-Djava.ext.dirs`；本轮不改变 §22 未完成总账。
+
+---
+
+## 44. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

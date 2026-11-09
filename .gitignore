@@ -36,3 +36,7 @@ test_dst.sqlite
 tmp/
 target/e2e_cp.txt
 target/e2e_classes/
+# Wave29：Python 缓存与离线包校验文件（zip 本身由 *.zip 规则忽略）
+__pycache__/
+*.pyc
+*.sha256

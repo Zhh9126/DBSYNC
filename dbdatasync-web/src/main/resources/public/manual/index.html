@@ -5,7 +5,7 @@
     DBDataSync 操作手册（系统管理 -> 操作手册）
     纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
 
-    文档基线：Wave28（2026-11-10）。
+    文档基线：Wave29（2026-11-10）。
     维护约定：本手册随功能实时同步。新增/修改系统配置项、菜单、REST 端点或默认行为时，
     必须在同一次变更中更新本手册对应章节、第 13 章配置速查表与第 18 章变更记录，
     并执行 python tools/check_manual_sync.py；CI 的 docs-sync 任务会阻断未同步的变更。
@@ -52,7 +52,7 @@
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
         <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
-        <div class="meta">适用版本 <b>v2.1.8 及以上</b> ｜ 文档基线 <b>Wave28</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
+        <div class="meta">适用版本 <b>v2.1.9 及以上</b> ｜ 文档基线 <b>Wave29</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -535,6 +535,16 @@
                     <tr><td><code>enableCutoverAutoExecute</code></td><td>关</td><td>切流相位推进后调用真实执行器；无动作处理器时结果标记 simulated（见 12.6）</td></tr>
                 </table>
 
+                <h4>部署启动参数（Wave29，环境变量，不在系统配置页）</h4>
+                <table>
+                    <tr><th>环境变量</th><th>默认值</th><th>作用</th></tr>
+                    <tr><td><code>DBS_HEAP_MIN</code> / <code>DBS_HEAP_MAX</code></td><td>128m / 768m</td><td>发行脚本 JVM 初始 / 最大堆，替代旧版固定 3g / 3.8g 大堆</td></tr>
+                    <tr><td><code>DBS_DIRECT_MEM</code></td><td>256m</td><td>堆外内存上限</td></tr>
+                    <tr><td><code>DBS_JAVA_OPTS</code></td><td>空</td><td>追加 JVM 参数；GC 不再强制 G1 16m region / verbose GC</td></tr>
+                    <tr><td><code>JRE_HOME</code></td><td>自动发现 <code>jre8/</code></td><td>离线包内嵌 JRE 8，或显式指定系统 Java 8</td></tr>
+                </table>
+                <p>以上由 <code>bin/startup.sh</code> / <code>bin/startup.bat</code> 读取，详见 17.3；与页面【系统配置】互不影响。</p>
+
                 <h3 id="manual-h13-2">13.2 严格安全模式</h3>
                 <p>开启 <code>enableStrictSecurity</code> 后，<code>/actuator/**</code>、<code>/system/**</code>、<code>/user/**</code> 仅 admin 角色可访问；开关通过安全表达式 Bean 在<b>每次请求时求值</b>，配置保存即时生效、无需重启。默认关闭以兼容存量部署。</p>
                 <p>同时，配置文件中的敏感口令已改为环境变量占位符：</p>
@@ -621,18 +631,46 @@
 
             <section id="manual-h17">
                 <h2><i class="fa fa-download"></i> 17. 离线部署、构建与升级</h2>
+                <h3>17.1 两种发行包</h3>
+                <table>
+                    <tr><th>产物</th><th>内容</th><th>适用环境</th></tr>
+                    <tr><td><code>DBDataSync-{version}-bin.zip</code></td><td>标准包：<code>bin/</code>、<code>conf/</code>、<code>lib/</code>（全部依赖与 JDBC 驱动）、<code>README-OFFLINE.md</code>；<b>不含 Java 运行时</b></td><td>目标机已装 JDK/JRE 8（Windows / Linux / macOS 通用）</td></tr>
+                    <tr><td><code>DBDataSync-{version}-offline-win64.zip</code></td><td>标准包 + 内嵌 <code>jre8/</code>（Windows 64 位 JRE 8）+ <code>.sha256</code> 校验文件</td><td>无外网、未装 Java 的 Windows 内网机器，解压即用</td></tr>
+                    <tr><td><code>DBDataSync-{version}-offline-portable.zip</code></td><td>标准包 + 基线校验，不含 JRE</td><td>Linux 等其它平台；自行把对应平台的 JRE 8 解压为同目录 <code>jre8/</code></td></tr>
+                </table>
+                <div class="warn"><b>平台边界：</b><code>offline-win64</code> 包内的 <code>jre8/bin/java.exe</code> 是 Windows 可执行文件，<b>不能在 Linux 上运行</b>。<code>startup.sh</code> 会检测 <code>jre8/bin/java</code> 是否存在，缺失时跳过内嵌 JRE 并回退系统 Java；Linux 部署请用 portable 包 + Linux 版 JRE 8。<code>-Djava.ext.dirs</code> 要求 Java 8，JDK 9+ 不支持。</div>
+
+                <h3>17.2 启动与访问</h3>
                 <ol>
-                    <li>安装包自带 JRE 与全部依赖（含前端字体/图标/脚本），<b>完全离线</b>，无需访问外网或 CDN；环境要求 JDK 1.8+、内存建议 2GB+；</li>
-                    <li>启动：双击 <code>start_app.cmd</code>（Windows）或对应 shell 脚本；确认日志出现 <code>Tomcat started on port(s): 18686</code>；</li>
-                    <li>访问 <code>http://127.0.0.1:18686</code> → 跳转登录页；默认 <code>admin/admin</code>，首次登录后立即修改密码；</li>
-                    <li>数据存储默认内置 H2（<code>data/DBDataSync</code>），生产建议在 application.properties 切换为 MySQL 存储，并通过环境变量注入口令（见 13.2）；</li>
-                    <li><b>源码构建</b>：仓库根目录执行 <code>./build.sh</code>，默认跑单测并生成 <code>DBDataSync-{version}-bin.zip</code>；<code>SKIP_TESTS=1</code> 才会跳过测试；</li>
-                    <li><b>持续集成</b>：<code>push</code> / <code>pull_request</code> / <code>workflow_dispatch</code> 触发 CI，两个任务分别跑 <code>mvn clean verify</code> 与离线 CDC 一致性 / 断点续传 / 故障注入套件，并上传 surefire 报告；另有文档同步校验任务；</li>
-                    <li><b>升级</b>：备份 data 目录与 application.properties → 替换部署包 → 启动 → 【配置管理】核对配置 → 【系统配置】按需开启新能力 → 到【链路健康】确认链路正常；</li>
-                    <li><b>离线环境安全基线</b>：禁用重置密码开关（<code>dbdatasync.web.security.reset-pwd=false</code>）、开启 <code>enableStrictSecurity</code>、端口仅内网开放、修改默认口令。</li>
+                    <li>解压完整目录（不要只挑 jar）；Windows 执行 <code>bin\startup.bat</code>，Linux 执行 <code>./bin/startup.sh</code>；日志出现 <code>Tomcat started on port(s): 18686</code> 即启动成功；</li>
+                    <li>访问 <code>http://127.0.0.1:18686</code> → 跳转登录页；默认 <code>admin/admin</code>，首次登录后立即在【系统管理 → 用户管理】修改密码；</li>
+                    <li>内置操作手册在【系统管理 → 操作手册】或 <code>/manual</code>，纯离线静态页，无 CDN / 外网字体 / 外链脚本；</li>
+                    <li>元数据库默认内置 H2（<code>./data/DBDataSync</code>，<code>startup.sh</code> 会先切到安装目录，保证路径落位正确）；生产可在 <code>conf/application.properties</code> 切换 MySQL，并用环境变量注入口令（见 13.2）；</li>
+                    <li>日志在 <code>logs/</code>（info / warn / error），停止用 <code>bin\stop.sh</code>（Linux）或 <code>Ctrl+C</code>（Windows 前台窗口）。</li>
+                </ol>
+                <div class="warn"><b>端口被环境变量改写：</b>若机器注入了 <code>SERVER__PORT</code>，Spring Boot relaxed binding 会把它当作 <code>server.port</code>。启动前 <code>unset SERVER__PORT</code>（Linux）或在系统环境变量中删除（Windows），也可用 <code>-Dserver.port=18686</code> 通过 <code>DBS_JAVA_OPTS</code> 锁定。</div>
+
+                <h3>17.3 内存与启动参数（Wave29）</h3>
+                <p>发行脚本不再固定 3g / 3.8g 堆，默认小堆起步，可用环境变量按数据量放大；不再靠「多分配内存」硬扛：</p>
+                <table>
+                    <tr><th>环境变量</th><th>默认值</th><th>作用</th></tr>
+                    <tr><td><code>DBS_HEAP_MIN</code> / <code>DBS_HEAP_MAX</code></td><td>128m / 768m</td><td>JVM 初始 / 最大堆；2GB 内存机器即可启动，大表任务按需调大</td></tr>
+                    <tr><td><code>DBS_DIRECT_MEM</code></td><td>256m</td><td>堆外内存上限</td></tr>
+                    <tr><td><code>DBS_JAVA_OPTS</code></td><td>空</td><td>追加 JVM 参数（如 <code>-XX:+UseG1GC -verbose:gc</code>）；小堆下不再强制 G1 16m region 与 verbose GC</td></tr>
+                    <tr><td><code>JRE_HOME</code></td><td>自动发现 <code>jre8/</code></td><td>显式指定 JRE 8 目录</td></tr>
+                </table>
+
+                <h3>17.4 构建与离线包组装</h3>
+                <ol>
+                    <li><b>源码构建</b>：仓库根目录 <code>./build.sh</code>（文档同步校验 → clean → 全量单测 → assembly 打包 → 真库全链路 E2E），产出 <code>DBDataSync-{version}-bin.zip</code>；<code>SKIP_TESTS=1</code> / <code>SKIP_E2E=1</code> / <code>SKIP_DOCS_CHECK=1</code> 才跳过对应环节；</li>
+                    <li><b>离线包</b>：<code>python tools/package_offline.py</code>（默认内嵌本机 JRE 8 → <code>offline-win64</code>），<code>--no-jre</code> 产通用包，<code>--jre /path/to/jre --platform linux-x64</code> 指定其它平台运行时；</li>
+                    <li><b>交付卡口</b>：组装时校验内置手册基线（<code>Wave29</code>）、Wave26/28 关键类是否进入 jar、依赖 jar 数量、内嵌 JRE 的 <code>rt.jar</code> 与 <code>bin/java</code>、zip CRC，并生成 SHA256；打到旧包会直接失败；</li>
+                    <li><b>持续集成</b>：push / PR / workflow_dispatch 触发单测、离线可靠性套件、文档同步校验、E2E 脚本清点、真库全链路 E2E（H2 vendor）；</li>
+                    <li><b>升级</b>：停服 → 备份 <code>data/</code> 与 <code>conf/application.properties</code> → 整体替换新包（<code>lib/</code> 必须与新包一致，不要混用旧 jar）→ 启动 → 【配置管理】核对 → 【链路健康】确认链路正常；</li>
+                    <li><b>离线安全基线</b>：<code>dbdatasync.web.security.reset-pwd=false</code>、可开启 <code>enableStrictSecurity</code>、端口仅内网开放、修改默认口令。</li>
                 </ol>
                 <div class="warn"><b>发行包升级注意：</b>源码或页面改动不会自动更新已发布 jar 内的静态资源，必须重新打包替换；仅重启旧进程看不到新功能。</div>
-                <div class="tip"><b>技术支持：</b>离线交付场景收集 <code>logs/app.log</code>、预检测结果截图、链路健康报告截图并联系运维支持人员。</div>
+                <div class="tip"><b>技术支持：</b>离线交付场景收集 <code>logs/info.log</code>、<code>logs/error.log</code>、预检测结果截图、链路健康报告截图并联系运维支持人员。</div>
             </section>
 
             <section id="manual-h18">
@@ -640,9 +678,9 @@
                 <h3>当前文档基线</h3>
                 <table>
                     <tr><th>项</th><th>值</th></tr>
-                    <tr><td>适用版本</td><td>v2.1.6 及以上</td></tr>
-                    <tr><td>功能基线</td><td><b>Wave26</b>（2026-11-09）</td></tr>
-                    <tr><td>手册更新日期</td><td>2026-11-09</td></tr>
+                    <tr><td>适用版本</td><td>v2.1.9 及以上</td></tr>
+                    <tr><td>功能基线</td><td><b>Wave29</b>（2026-11-10）</td></tr>
+                    <tr><td>手册更新日期</td><td>2026-11-10</td></tr>
                     <tr><td>手册位置</td><td><code>public/manual/index.html</code>，菜单【系统管理 → 操作手册】，路径 <code>/manual</code></td></tr>
                     <tr><td>同步校验</td><td><code>python tools/check_manual_sync.py</code>（CI 的 docs-sync 任务自动执行）</td></tr>
                 </table>
@@ -659,6 +697,7 @@
                     <tr><td>Wave26</td><td>2026-11-09</td><td>切流真实动作处理器接线（<code>TaskControlActionHandler</code>：停增量/恢复增量映射驱动真实启停，VERIFY_TARGET 目标端 SQL 真实执行）；Trigger CDC 方言抽象（SDK <code>TriggerCdcDialect</code> + <code>AbstractTriggerLogListener</code>）并扩展 H2（内联源码触发器，重开库验证）与达梦（SQL 生成校验，未连真实 DM）；新增真实库全链路 E2E <code>tools/e2e/RealDbPipelineE2e.java</code>（建表→CDC→还原→目标应用→一致性→切流 SQL，H2/SQLite 双 vendor 实跑通过）</td></tr>
                     <tr><td>Wave27</td><td>2026-11-10</td><td>死信手动重放闭环：【链路健康】页死信 / 待处理记录行内新增「重放」按钮，端点 <code>POST /link-health/deadLetters/replay</code>（operator 及以上），人工重放不受自动重放退避限制且互不干扰；真库全链路 E2E 接入构建：新增 <code>tools/e2e/run_real_pipeline_e2e.sh</code>（H2 vendor 无外部依赖实跑，外部连接串经 <code>E2E_PROPS</code> 按同流水线执行），CI 新增 <code>real-pipeline-e2e</code> job，<code>build.sh</code> 集成（<code>SKIP_E2E=1</code> 可跳过）</td></tr>
                     <tr><td>Wave28</td><td>2026-11-10</td><td>Trigger CDC 扩展到 MySQL / PostgreSQL / Oracle / SQL Server（分别定位为免 binlog / 免逻辑复制 / 免归档 / 免 CDC 组件的兜底捕获路径），方言接口新增分页 SQL 适配（LIMIT / FETCH FIRST / TOP）；监听类型新增 <code>trigger</code>（与原生日志 <code>log</code> 互斥切换）；H2 / 达梦 / SQLite 连接器补齐 trigger 监听接线（Wave26 遗留的生产不可达缺口）；7 库 SQL 生成单测 26 项全过，H2/SQLite 真库回归通过</td></tr>
+                    <tr><td>Wave29</td><td>2026-11-10</td><td>离线交付包重打并补齐可运行性：启动脚本默认小堆（<code>DBS_HEAP_MIN/DBS_HEAP_MAX</code> 128m/768m 可覆盖）替代固定 3g / 3.8g、去掉强制 G1 16m region 与 verbose GC、<code>startup.sh</code> 先切到安装目录保证 H2 <code>./data</code> 落位、统一 <code>LOG_HOME</code> 与 Java 8 平台守卫；新增 <code>README-OFFLINE.md</code> 与 <code>tools/package_offline.py</code>（内嵌 JRE 8、SHA256、手册基线与关键类入包校验）；交付 <code>offline-win64</code> / <code>offline-portable</code> 两类离线包，并在全新目录用包内 JRE 实启验证登录页与内置手册；第 13.1 / 17 章同步</td></tr>
                 </table>
                 <h3>维护约定（强制）</h3>
                 <ol>
@@ -667,7 +706,7 @@
                     <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
                     <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
                 </ol>
-                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.8+，文档基线 Wave28，2026-11-10 更新）—</p>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.9+，文档基线 Wave29，2026-11-10 更新）—</p>
             </section>
 
         </div>
