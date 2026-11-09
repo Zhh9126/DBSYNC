@@ -790,7 +790,19 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 39. 许可声明
+## 39. 2026-11-09 更新摘要（Wave26：切流真实动作处理器 + Trigger CDC 多方言 + 真库 E2E）
+
+§23.2 账目中三项可离线闭环项已清，详见 `reports/OPTIMIZATION_REPORT_WAVE26.md` 与规划 §24 清账表。要点：
+
+- **切流真实动作处理器**：新增 `TaskControlActionHandler` 并接入生产执行器——`STOP_INCREMENT`/`RESUME_INCREMENT` 调用驱动真实启停（幂等），`VERIFY_TARGET` 按 `connectorId + targetSql` 在目标库真实执行校验 SQL；流量切换类外部动作仍明确标 `simulated`，不冒充已切流。
+- **Trigger CDC 多方言**：通用引擎上移 SDK（`AbstractTriggerLogListener` + `TriggerCdcDialect`），SQLite 重构为方言实现（行为兼容）；扩展 **H2**（内联源码触发器 `AS $$…$$`，上下文烘焙进源码，重开库正确性实测验证；需 JDK 运行时）与 **达梦**（`:NEW`/`:OLD` SQL 体方言，SQL 生成单测通过，真实 DM 执行待外部实例）。
+- **真库 E2E**：新增 `tools/e2e/RealDbPipelineE2e.java` 全链路 harness（建表→CDC 捕获→还原→目标应用→一致性→切流真实动作+SQL），支持外部连接串（`e2e.properties`）；本机以 H2/SQLite 真实文件库实跑，双 vendor 各 14 项全 PASS。
+- **验证**：相关模块单测全绿 + 全 reactor `mvn test` BUILD SUCCESS；操作手册升级 v2.1.6 / 基线 Wave26，`check_manual_sync.py` 47 字段 / 22 菜单全过。
+- **仍保留**（需外部条件）：达梦 Trigger CDC 真实执行、外部 MySQL/PG/Oracle 连接串下的 E2E、共识型 HA、编译器级 PL/SQL 语义改写。
+
+---
+
+## 40. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

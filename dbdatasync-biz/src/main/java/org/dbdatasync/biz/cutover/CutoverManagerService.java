@@ -38,8 +38,26 @@ public class CutoverManagerService {
 
     private final Map<String, CutoverSession> sessions = new ConcurrentHashMap<String, CutoverSession>();
 
+    /** Wave26：生产接线——Spring 容器内的默认执行器与真实动作处理器（离线 new 时保持为 null） */
+    @javax.annotation.Resource
+    private DefaultCutoverExecutor defaultCutoverExecutor;
+
+    @javax.annotation.Resource
+    private TaskControlActionHandler taskControlActionHandler;
+
     /** Wave24：真实执行器（默认内置，便于离线单测；部署方可注入外部实现） */
     private volatile CutoverExecutor executor = new DefaultCutoverExecutor();
+
+    /** Wave26：Spring 环境启动后把容器 Bean 接线为真实执行器，并注册真实动作处理器 */
+    @javax.annotation.PostConstruct
+    void wireRuntimeBeans() {
+        if (defaultCutoverExecutor != null) {
+            this.executor = defaultCutoverExecutor;
+        }
+        if (taskControlActionHandler != null) {
+            executor.register(taskControlActionHandler);
+        }
+    }
 
     public void setExecutor(CutoverExecutor executor) {
         this.executor = executor == null ? new DefaultCutoverExecutor() : executor;
