@@ -206,8 +206,7 @@ public abstract class AbstractTriggerLogListener extends AbstractListener<Databa
         List<Map<String, Object>> rows = new ArrayList<>();
         long maxSeq = cursor;
         try (Connection c = connection();
-             PreparedStatement ps = c.prepareStatement("SELECT seq,tbl,op,pk,payload,ts FROM "
-                     + LOG_TABLE + " WHERE seq > ? ORDER BY seq LIMIT " + BATCH_SIZE)) {
+             PreparedStatement ps = c.prepareStatement(dialect().pollPageSql(LOG_TABLE, BATCH_SIZE))) {
             ps.setLong(1, cursor);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {

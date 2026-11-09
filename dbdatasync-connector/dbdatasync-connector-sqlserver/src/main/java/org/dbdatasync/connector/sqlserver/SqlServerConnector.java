@@ -8,6 +8,7 @@ import org.dbdatasync.common.util.DateFormatUtil;
 import org.dbdatasync.common.util.SqlIdentifierValidator;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.sqlserver.cdc.Lsn;
+import org.dbdatasync.connector.sqlserver.cdc.trigger.SqlServerTriggerLogListener;
 import org.dbdatasync.connector.sqlserver.cdc.SqlServerListener;
 import org.dbdatasync.connector.sqlserver.schema.SqlServerSchemaResolver;
 import org.dbdatasync.connector.sqlserver.validator.SqlServerConfigValidator;
@@ -75,6 +76,11 @@ public final class SqlServerConnector extends AbstractDatabaseConnector {
 
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new SqlServerListener();
+        }
+
+        // Wave28: Trigger CDC fallback capture (no CDC components / SQL Server Agent required)
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new SqlServerTriggerLogListener();
         }
         return null;
     }

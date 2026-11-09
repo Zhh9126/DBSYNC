@@ -16,7 +16,11 @@ public enum ListenerTypeEnum {
     /**
      * 日志
      */
-    LOG("log");
+    LOG("log"),
+    /**
+     * Wave28：Trigger CDC（触发器兜底捕获，供原生日志不可用的库/场景切换）
+     */
+    TRIGGER("trigger");
 
     private final String type;
 
@@ -30,6 +34,10 @@ public enum ListenerTypeEnum {
 
     public static boolean isLog(String type) {
         return StringUtil.equals(LOG.getType(), type);
+    }
+
+    public static boolean isTrigger(String type) {
+        return StringUtil.equals(TRIGGER.getType(), type);
     }
 
     public String getType() {

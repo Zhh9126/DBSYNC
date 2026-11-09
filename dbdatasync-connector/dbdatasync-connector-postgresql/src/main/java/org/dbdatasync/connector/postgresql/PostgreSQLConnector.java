@@ -6,6 +6,7 @@ package org.dbdatasync.connector.postgresql;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.postgresql.cdc.PostgreSQLListener;
+import org.dbdatasync.connector.postgresql.cdc.trigger.PostgreSQLTriggerLogListener;
 import org.dbdatasync.connector.postgresql.schema.PostgreSQLSchemaResolver;
 import org.dbdatasync.connector.postgresql.validator.PostgreSQLConfigValidator;
 import org.dbdatasync.sdk.config.DatabaseConfig;
@@ -66,6 +67,11 @@ public class PostgreSQLConnector extends AbstractDatabaseConnector {
 
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new PostgreSQLListener();
+        }
+
+        // Wave28: Trigger CDC fallback capture (no native logical replication/binlog required)
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new PostgreSQLTriggerLogListener();
         }
         return null;
     }

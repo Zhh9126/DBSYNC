@@ -811,7 +811,18 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 41. 许可声明
+## 42. 2026-11-10 更新摘要（Wave28：Trigger CDC 扩展到 MySQL / PostgreSQL / Oracle / SQL Server）
+
+详见 `reports/OPTIMIZATION_REPORT_WAVE28.md` 与规划 §26。要点：
+
+- **四个主流库 Trigger CDC 兜底捕获方言**：MySQL（免 binlog 兜底，反斜杠+单引号双转义）、PostgreSQL（PL/pgSQL 函数体，免逻辑复制兜底）、Oracle（:NEW/:OLD + PL/SQL 幂等建表，免归档兜底，需 12c+）、SQL Server（语句级触发器 inserted/deleted，免 CDC 组件兜底，需 2016+）。任务监听方式新增 `trigger` 类型，与原生日志 `log` 通道互斥切换。
+- **通用引擎补强**：`pollPageSql` 方言分页（LIMIT / FETCH FIRST / TOP），修复 LIMIT 在 Oracle/SQL Server 不可执行的缺口。
+- **Wave26 遗留缺口修复**：H2 / 达梦 Connector 补接线 TriggerLogListener（此前 Listener 类存在但生产不可达）。
+- **验证**：7 套 Trigger CDC 测试 26 项全过（含 H2/SQLite 真库回归）；MySQL/PG/Oracle/SQL Server/达梦为 SQL 生成形状单测，真实执行需外部实例（诚实保留）。操作手册升级 v2.1.8 / 基线 Wave28。
+
+---
+
+## 43. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

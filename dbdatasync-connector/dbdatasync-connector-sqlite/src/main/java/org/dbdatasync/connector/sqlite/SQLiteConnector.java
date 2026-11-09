@@ -80,6 +80,10 @@ public final class SQLiteConnector extends AbstractDatabaseConnector {
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new org.dbdatasync.connector.sqlite.cdc.TriggerLogListener();
         }
+        // Wave28：显式 trigger 监听类型与 log 同一实现（SQLite 无原生日志）
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new org.dbdatasync.connector.sqlite.cdc.TriggerLogListener();
+        }
         return null;
     }
 

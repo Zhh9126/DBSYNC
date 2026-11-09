@@ -5,7 +5,7 @@
     DBDataSync 操作手册（系统管理 -> 操作手册）
     纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
 
-    文档基线：Wave27（2026-11-10）。
+    文档基线：Wave28（2026-11-10）。
     维护约定：本手册随功能实时同步。新增/修改系统配置项、菜单、REST 端点或默认行为时，
     必须在同一次变更中更新本手册对应章节、第 13 章配置速查表与第 18 章变更记录，
     并执行 python tools/check_manual_sync.py；CI 的 docs-sync 任务会阻断未同步的变更。
@@ -52,7 +52,7 @@
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
         <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
-        <div class="meta">适用版本 <b>v2.1.7 及以上</b> ｜ 文档基线 <b>Wave27</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
+        <div class="meta">适用版本 <b>v2.1.8 及以上</b> ｜ 文档基线 <b>Wave28</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -458,7 +458,7 @@
                     <li><b>真实 lag 全连接器覆盖</b>：除 MySQL binlog 时间戳外，PG / Kingbase 从逻辑复制协议的 commit 时间取源端事件时间（<code>source</code>），Oracle 从 LogMiner redo 的 SCN 对应时间取值，MongoDB 用 change stream 的 cluster time，Kafka / RocketMQ 用消息生产时间，SQL Server 用 CDC <code>lsn_time_mapping</code> 的事务提交时间；Redis / 文件等无源端时钟的来源仍标注 <code>estimated</code>，不冒充真实延迟；</li>
                     <li><b>慢 SQL 任务级上下文</b>：慢 SQL 记录带 <code>taskId</code>（写入线程自动继承），<code>GET /slowsql/list</code> 可按任务过滤；</li>
                     <li><b>批写性能剖析</b>：<code>/batch-profile/report</code> 输出批写次数 / 行数 / p50 / p95 / max 耗时（滑动窗口），用于大事务批写性能定位；</li>
-                    <li><b>Trigger CDC（多方言，Wave26 扩展）</b>：通用引擎上移至 SDK（<code>AbstractTriggerLogListener</code>：影子表位点捕获、seq 单调轮询还原、消费清理），方言接口 <code>TriggerCdcDialect</code> 覆盖 SQLite（SQL 体触发器，AUTOINCREMENT + quote）、H2（内联 Java 源码触发器，上下文烘焙进 DDL，需 JDK 运行时经 javax.tools 编译；已实测重开库后仍正确）、达梦（SQL 体触发器 :NEW/:OLD 方言，SQL 生成有离线单测、<b>未连接真实 DM 执行</b>，首次启用请在测试库验证）。影子日志表统一为 <code>__DBSYNC_CDC_LOG</code>，事件带源端时间（source）；</li>
+                    <li><b>Trigger CDC（多数据库，Wave28 全量扩展）</b>：通用引擎在 SDK（<code>AbstractTriggerLogListener</code>：影子表位点捕获、seq 单调轮询还原、消费清理，分页 SQL 已按方言适配 LIMIT/FETCH FIRST/TOP），方言接口 <code>TriggerCdcDialect</code> 覆盖 7 个数据库：SQLite（SQL 体）、H2（内联 Java 源码触发器，重开库正确性已实测）、达梦（:NEW/:OLD）、<b>MySQL</b>（NEW/OLD，反斜杠+单引号双转义，免 binlog 兜底——云托管账号无 REPLICATION 权限等场景）、<b>PostgreSQL</b>（PL/pgSQL 函数体，免逻辑复制兜底；人大金仓 PG 兼容模式同构）、<b>Oracle</b>（:NEW/:OLD，免归档兜底，需 12c+，幂等建表用 PL/SQL 吞 ORA-00955）、<b>SQL Server</b>（语句级触发器 inserted/deleted 一次写整批，免 CDC 组件兜底，需 2016+）。任务监听方式选 <code>trigger</code> 即启用（原生日志通道 <code>log</code> 不受影响，两者互斥使用）；影子日志表统一为 <code>__DBSYNC_CDC_LOG</code>，事件带源端时间（source）。<b>诚实边界</b>：H2/SQLite 已真实库实跑验证；MySQL/PG/Oracle/SQL Server/达梦的 SQL 生成有离线单测校验形状，本机无实例未真实执行，首次启用请在测试库验证 installSchema/installTriggers；</li>
                     <li><b>自动切流执行器（<code>enableCutoverAutoExecute</code>，默认关闭）</b>：相位推进成功后调用真实执行动作（状态机 + 回滚预案 + 影子写不变）。Wave26 起内置真实动作处理器 <code>TaskControlActionHandler</code>：<code>STOP_INCREMENT</code> / <code>RESUME_INCREMENT</code> 调用驱动真实启停（幂等，已停止/已运行不报错），<code>VERIFY_TARGET</code> 按 <code>connectorId + targetSql</code> 经 DBLink 通道在目标库真实执行；其余动作（流量切换等）未接入处理器时仍明确标记 <code>simulated</code>，不冒充已切流；切流与回滚入口在【迁移评估 → 切流编排】。</li>
                 </ul>
                 <div class="tip"><b>代码说明：</b>历史原型 <code>dbdatasync-engine</code> 模块已从构建中<b>整体退役</b>（Wave24 起 pom 不再包含该模块，源码归档于仓库外），排查问题请以 manager 模块的 FullPuller / IncrementPuller / FullIncrementPuller 为准。</div>
@@ -658,6 +658,7 @@
                     <tr><td>Wave25</td><td>2026-11-09</td><td>前端接线：新增【监控告警 → 结构变更】页面（DDL 登记/确认/解除阻塞 + 汇总 KPI）；链路健康页新增「批写性能剖析」卡片与重置；慢 SQL 页新增任务级聚合面板与按任务过滤（<code>/slow-sql/records</code> 支持 taskId）；手册同步新增端点说明</td></tr>
                     <tr><td>Wave26</td><td>2026-11-09</td><td>切流真实动作处理器接线（<code>TaskControlActionHandler</code>：停增量/恢复增量映射驱动真实启停，VERIFY_TARGET 目标端 SQL 真实执行）；Trigger CDC 方言抽象（SDK <code>TriggerCdcDialect</code> + <code>AbstractTriggerLogListener</code>）并扩展 H2（内联源码触发器，重开库验证）与达梦（SQL 生成校验，未连真实 DM）；新增真实库全链路 E2E <code>tools/e2e/RealDbPipelineE2e.java</code>（建表→CDC→还原→目标应用→一致性→切流 SQL，H2/SQLite 双 vendor 实跑通过）</td></tr>
                     <tr><td>Wave27</td><td>2026-11-10</td><td>死信手动重放闭环：【链路健康】页死信 / 待处理记录行内新增「重放」按钮，端点 <code>POST /link-health/deadLetters/replay</code>（operator 及以上），人工重放不受自动重放退避限制且互不干扰；真库全链路 E2E 接入构建：新增 <code>tools/e2e/run_real_pipeline_e2e.sh</code>（H2 vendor 无外部依赖实跑，外部连接串经 <code>E2E_PROPS</code> 按同流水线执行），CI 新增 <code>real-pipeline-e2e</code> job，<code>build.sh</code> 集成（<code>SKIP_E2E=1</code> 可跳过）</td></tr>
+                    <tr><td>Wave28</td><td>2026-11-10</td><td>Trigger CDC 扩展到 MySQL / PostgreSQL / Oracle / SQL Server（分别定位为免 binlog / 免逻辑复制 / 免归档 / 免 CDC 组件的兜底捕获路径），方言接口新增分页 SQL 适配（LIMIT / FETCH FIRST / TOP）；监听类型新增 <code>trigger</code>（与原生日志 <code>log</code> 互斥切换）；H2 / 达梦 / SQLite 连接器补齐 trigger 监听接线（Wave26 遗留的生产不可达缺口）；7 库 SQL 生成单测 26 项全过，H2/SQLite 真库回归通过</td></tr>
                 </table>
                 <h3>维护约定（强制）</h3>
                 <ol>
@@ -666,7 +667,7 @@
                     <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
                     <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
                 </ol>
-                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.7+，文档基线 Wave27，2026-11-10 更新）—</p>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.8+，文档基线 Wave28，2026-11-10 更新）—</p>
             </section>
 
         </div>

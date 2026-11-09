@@ -51,6 +51,14 @@ public interface TriggerCdcDialect {
         return null;
     }
 
+    /**
+     * Wave28：按 seq 增量轮询一批日志的 SQL（占位符 {@code ?} 为上次位点）。
+     * 默认 LIMIT 语法（SQLite/H2/MySQL/PG）；Oracle 用 FETCH FIRST、SQL Server 用 TOP 覆写。
+     */
+    default String pollPageSql(String logTable, int batchSize) {
+        return "SELECT seq,tbl,op,pk,payload,ts FROM " + logTable + " WHERE seq > ? ORDER BY seq LIMIT " + batchSize;
+    }
+
     /** 三类 DML 操作常量 */
     String[] OPERATIONS = {"INSERT", "UPDATE", "DELETE"};
 

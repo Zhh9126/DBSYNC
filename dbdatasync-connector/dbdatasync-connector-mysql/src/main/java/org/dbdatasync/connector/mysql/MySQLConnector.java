@@ -7,6 +7,7 @@ import net.sf.jsqlparser.statement.alter.Alter;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.mysql.cdc.MySQLListener;
+import org.dbdatasync.connector.mysql.cdc.trigger.MySQLTriggerLogListener;
 import org.dbdatasync.connector.mysql.constant.MySQLConstant;
 import org.dbdatasync.connector.mysql.schema.MySQLSchemaResolver;
 import org.dbdatasync.connector.mysql.storage.MySQLStorageService;
@@ -77,6 +78,11 @@ public class MySQLConnector extends AbstractDatabaseConnector {
 
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new MySQLListener();
+        }
+
+        // Wave28：Trigger CDC 兜底捕获（免 binlog；云托管账号无 REPLICATION 权限等场景）
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new MySQLTriggerLogListener();
         }
         return null;
     }
