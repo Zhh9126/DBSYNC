@@ -39,6 +39,10 @@ public class CutoverController extends BaseController {
     @Resource
     private CutoverManagerService cutoverManagerService;
 
+    /** Wave24：读取系统开关 enableCutoverAutoExecute */
+    @Resource
+    private org.dbdatasync.parser.ProfileComponent profileComponent;
+
     /** 功能页面 */
     @GetMapping("")
     public String index(ModelMap model) {
@@ -74,7 +78,13 @@ public class CutoverController extends BaseController {
             }
             CutoverPhase phase = CutoverPhase.valueOf(to.trim().toUpperCase(java.util.Locale.ROOT));
             CutoverPhase current = cutoverManagerService.transition(taskId, phase);
-            return RestResult.restSuccess(phaseView(taskId, current));
+            Map<String, Object> view = phaseView(taskId, current);
+            // Wave24：自动切流（默认关闭）。状态机推进成功后调用真实执行器；
+            // 未接入动作处理器时执行结果会明确标记 simulated，不会冒充已切流。
+            if (autoExecuteEnabled(params)) {
+                view.put("execution", cutoverManagerService.execute(taskId, current, params));
+            }
+            return RestResult.restSuccess(view);
         } catch (IllegalArgumentException e) {
             return RestResult.restFail("相位非法：" + e.getMessage());
         } catch (IllegalStateException e) {
@@ -147,6 +157,27 @@ public class CutoverController extends BaseController {
         }
     }
 
+    /** 清空影子写缓冲（重新验证用） */
+    @PostMapping("/shadow/clear")
+    @ResponseBody
+    public RestResult clearShadow(HttpServletRequest request) {
+        try {
+            String taskId = requireTaskId(getParams(request));
+            cutoverManagerService.clearShadow(taskId);
+            int[] stats = cutoverManagerService.shadowStats(taskId);
+            java.util.Map<String, Object> data = new LinkedHashMap<String, Object>();
+            data.put("cleared", true);
+            data.put("pairedCount", stats[0]);
+            data.put("mismatchCount", stats[1]);
+            return RestResult.restSuccess(data);
+        } catch (IllegalStateException e) {
+            return RestResult.restFail(e.getMessage());
+        } catch (Exception e) {
+            logger.error("cutover shadow clear failed", e);
+            return RestResult.restFail("影子写缓冲清空失败：" + e.getMessage());
+        }
+    }
+
     /** 当前相位回滚预案（步骤 + 文本；不可回滚相位返回原因） */
     @PostMapping("/rollbackPlan")
     @ResponseBody
@@ -182,7 +213,62 @@ public class CutoverController extends BaseController {
         }
     }
 
+    /** Wave24：显式执行切流动作（不推进状态机）；可传 sql 在目标库真实执行校验脚本 */
+    @PostMapping("/execute")
+    @ResponseBody
+    public RestResult execute(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            String taskId = requireTaskId(params);
+            String to = params.get("to");
+            CutoverPhase phase = to == null || to.trim().isEmpty()
+                    ? cutoverManagerService.current(taskId)
+                    : CutoverPhase.valueOf(to.trim().toUpperCase(java.util.Locale.ROOT));
+            return RestResult.restSuccess(cutoverManagerService.execute(taskId, phase, params));
+        } catch (Exception e) {
+            logger.error("cutover execute failed", e);
+            return RestResult.restFail("切流执行失败：" + e.getMessage());
+        }
+    }
+
+    /** Wave24：按当前相位预案逐步真实回滚；不可逆步骤需 confirm=true，可传 rollbackSql */
+    @PostMapping("/rollback")
+    @ResponseBody
+    public RestResult rollback(HttpServletRequest request) {
+        try {
+            Map<String, String> params = getParams(request);
+            String taskId = requireTaskId(params);
+            if (!cutoverManagerService.canRollback(taskId)) {
+                return RestResult.restFail("当前相位不可回滚：" + cutoverManagerService.current(taskId));
+            }
+            return RestResult.restSuccess(cutoverManagerService.rollback(taskId, params));
+        } catch (Exception e) {
+            logger.error("cutover rollback failed", e);
+            return RestResult.restFail("回滚执行失败：" + e.getMessage());
+        }
+    }
+
+    /** Wave24：执行台账 */
+    @PostMapping("/executionLog")
+    @ResponseBody
+    public RestResult executionLog() {
+        return RestResult.restSuccess(cutoverManagerService.executionLog());
+    }
+
     // ---------- 辅助 ----------
+
+    /** 自动切流开关：请求显式 autoExecute=true，或系统配置 enableCutoverAutoExecute=true */
+    private boolean autoExecuteEnabled(Map<String, String> params) {
+        if (Boolean.parseBoolean(params.get("autoExecute"))) {
+            return true;
+        }
+        try {
+            return profileComponent != null && profileComponent.getSystemConfig() != null
+                    && profileComponent.getSystemConfig().isEnableCutoverAutoExecute();
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     private static String requireTaskId(Map<String, String> params) {
         String taskId = params.get("taskId");

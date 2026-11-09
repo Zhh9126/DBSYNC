@@ -400,7 +400,7 @@ public class SqlCompatibilityScanner {
             String code = plsqlCodeFor(kind);
             String message = "检测到 " + m.group(1) + " 对象「" + name + "」：PL/SQL/存储过程层结构，目标方言不自动转换，需人工重写";
             String suggestion = "提取该 " + m.group(1) + " 体，人工重写为目标方言等价实现（或保留源端兼容模式）";
-            emitPlsql(result, code, name, sql, message, suggestion);
+            emitPlsql(result, code, name, sql, message, suggestion, src, tgt);
         }
     }
 
@@ -425,15 +425,35 @@ public class SqlCompatibilityScanner {
     }
 
     private void emitPlsql(SqlScanResult result, String code, String element, String sql,
-                           String message, String suggestion) {
+                           String message, String suggestion, SqlDialect src, SqlDialect tgt) {
         for (SqlCompatibilityIssue existing : result.getIssues()) {
             if (existing.getCode().equals(code) && existing.getElement().equals(element)
                     && existing.getSql().equals(sql)) {
                 return;
             }
         }
-        result.addIssue(new SqlCompatibilityIssue(
-                SqlCompatibilityIssue.LEVEL_ERROR, "plsql", code, element, sql, message, suggestion));
+        // Wave24：AST 结构化改写（不再只有「识别 + 提示」）。保持 error 级：
+        // 自动改写只覆盖机械等价项，语义不等价项列入人工确认清单，不冒充完整自动转换。
+        PlSqlAstRewriter.RewriteResult rewrite = PlSqlAstRewriter.rewrite(sql,
+                src == null ? null : src.name(), tgt == null ? null : tgt.name());
+        SqlCompatibilityIssue issue = new SqlCompatibilityIssue(
+                SqlCompatibilityIssue.LEVEL_ERROR, "plsql", code, element, sql, message, suggestion);
+        if (rewrite.isChanged(sql)) {
+            issue.setRewrittenSql(rewrite.getRewrittenSql());
+        }
+        StringBuilder detail = new StringBuilder(suggestion)
+                .append(" [Wave24 AST: ").append(rewrite.getAst().describe())
+                .append("；自动改写 ").append(rewrite.getAppliedRules().size()).append(" 项");
+        if (!rewrite.getAppliedRules().isEmpty()) {
+            detail.append('(').append(String.join(", ", rewrite.getAppliedRules())).append(')');
+        }
+        detail.append("；需人工确认 ").append(rewrite.getManualItems().size()).append(" 项");
+        if (!rewrite.getManualItems().isEmpty()) {
+            detail.append('(').append(String.join(", ", rewrite.getManualItems())).append(')');
+        }
+        detail.append(']');
+        issue.setSuggestion(detail.toString());
+        result.addIssue(issue);
     }
 
     // ============ 工具 ============

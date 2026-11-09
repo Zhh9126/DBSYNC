@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DBDataSync · 实时链路健康页预览</title>
+<link type="text/css" rel="stylesheet" href="../plugins/css/font-awesome.min.css"/>
+<link type="text/css" rel="stylesheet" href="../css/dbdatasync-theme.css"/>
+<script src="../plugins/js/jquery/jquery-1.11.3.min.js"></script>
+<script>(function(){try{if(location.hash==='#dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
+<script>
+(function(){
+  var report = {"generatedAt": 1762608000000, "lagWarnSeconds": 60, "lagCriticalSeconds": 300, "failRateWarnPercent": 5, "alarmEnabled": true, "prometheusEnabled": true, "totalLinks": 6, "runningLinks": 5, "healthyLinks": 3, "warnLinks": 1, "criticalLinks": 0, "staleLinks": 1, "idleLinks": 1, "healthScore": 84, "eventsTotal": 128640, "retryRecoveredTotal": 237, "deadLetterTotal": 12, "maxStallSeconds": 421, "links": [{"metaId": "meta-1001", "mappingName": "订单中心 · 实时增量", "model": "全量+增量", "state": 1, "stateName": "运行中", "running": true, "phase": "increment", "position": "mysql-bin.000218:489231", "lastEventTime": 1762607579000, "stallSeconds": 421, "hasEvent": true, "eventsTotal": 58210, "retryRecovered": 96, "deadLetters": 3, "total": 58210, "success": 58194, "fail": 16, "failRate": 0.03, "level": "STALE", "levelLabel": "停滞", "score": 20, "reason": "链路停滞 421s，超过严重阈值 300s；死信 3 条待人工处理", "lagSource": "source", "lagSeconds": 421, "lastSourceEventTime": 1762607158000}, {"metaId": "meta-1002", "mappingName": "用户中心 · MySQL→达梦", "model": "增量", "state": 1, "stateName": "运行中", "running": true, "phase": "increment", "position": "mysql-bin.000092:11882", "lastEventTime": 1762607980000, "stallSeconds": 20, "hasEvent": true, "eventsTotal": 31260, "retryRecovered": 81, "deadLetters": 6, "total": 31260, "success": 31233, "fail": 27, "failRate": 0.09, "level": "WARN", "levelLabel": "预警", "score": 88, "reason": "死信 6 条待人工处理", "lagSource": "source", "lagSeconds": 12, "lastSourceEventTime": 1762607968000}, {"metaId": "meta-1003", "mappingName": "商品库 · 全量+增量", "model": "全量+增量", "state": 1, "stateName": "运行中", "running": true, "phase": "increment", "position": "mysql-bin.000301:77210", "lastEventTime": 1762607996000, "stallSeconds": 4, "hasEvent": true, "eventsTotal": 22480, "retryRecovered": 42, "deadLetters": 0, "total": 22480, "success": 22480, "fail": 0, "failRate": 0.0, "level": "HEALTHY", "levelLabel": "健康", "score": 100, "reason": "链路正常", "lagSource": "source", "lagSeconds": 4, "lastSourceEventTime": 1762607992000}, {"metaId": "meta-1004", "mappingName": "日志归档 · Kafka→ClickHouse", "model": "增量", "state": 1, "stateName": "运行中", "running": true, "phase": "increment", "position": "offset:9188231", "lastEventTime": 1762607991000, "stallSeconds": 9, "hasEvent": true, "eventsTotal": 15290, "retryRecovered": 18, "deadLetters": 0, "total": 15290, "success": 15290, "fail": 0, "failRate": 0.0, "level": "HEALTHY", "levelLabel": "健康", "score": 100, "reason": "链路正常", "lagSource": "source", "lagSeconds": 9, "lastSourceEventTime": 1762607982000}, {"metaId": "meta-1005", "mappingName": "财务对账 · Oracle→金仓", "model": "增量", "state": 1, "stateName": "运行中", "running": true, "phase": "increment", "position": "SCN:88239112", "lastEventTime": 1762607993000, "stallSeconds": 7, "hasEvent": true, "eventsTotal": 1400, "retryRecovered": 0, "deadLetters": 3, "total": 1400, "success": 1397, "fail": 3, "failRate": 0.21, "level": "HEALTHY", "levelLabel": "健康", "score": 94, "reason": "死信 3 条待人工处理", "lagSource": "estimated", "lagSeconds": 0, "lastSourceEventTime": 0}, {"metaId": "meta-1006", "mappingName": "历史库归档（已停止）", "model": "全量", "state": 0, "stateName": "未运行", "running": false, "phase": "full", "position": "--", "lastEventTime": 1762500000000, "stallSeconds": 0, "hasEvent": false, "eventsTotal": 0, "retryRecovered": 0, "deadLetters": 0, "total": 0, "success": 0, "fail": 0, "failRate": 0.0, "level": "IDLE", "levelLabel": "未运行", "score": 100, "reason": "任务未运行", "lagSource": "unknown", "lagSeconds": 0, "lastSourceEventTime": 0}], "maxLagSeconds": 421};
+  var dead = {"total": 3, "data": [{"id": "d1", "metaId": "meta-1001", "mappingName": "订单中心 · 实时增量", "targetTableName": "ods_order", "event": "INSERT", "error": "[DEAD_LETTER][kind=PERMANENT][retry=3] Duplicate entry '10086' for key 'PRIMARY'", "createTime": 1762607900000, "kind": "PERMANENT", "deadLetter": true, "syncFail": false}, {"id": "d2", "metaId": "meta-1002", "mappingName": "用户中心 · MySQL→达梦", "targetTableName": "dim_user", "event": "UPDATE", "error": "[DEAD_LETTER][kind=PERMANENT][retry=3] ORA-00904: invalid column name", "createTime": 1762607880000, "kind": "PERMANENT", "deadLetter": true, "syncFail": false}, {"id": "d3", "metaId": "meta-1001", "mappingName": "订单中心 · 实时增量", "targetTableName": "ods_order", "event": "UPSERT", "error": "[SYNC_FAIL][kind=TRANSIENT][retry=1] connection reset by peer", "createTime": 1762607950000, "kind": "TRANSIENT", "deadLetter": false, "syncFail": true}]};
+  window.doPoster = function(url, params, action) {
+    setTimeout(function(){
+      if (url.indexOf('/deadLetters') >= 0) { action({success:true, data:dead}); }
+      else if (url.indexOf('/cluster') >= 0) { action({success:true, data:{role:'LEADER', nodeId:'node-a-7f3c', mode:'standalone-file-lease'}}); }
+      else { action({success:true, data:report}); }
+    }, 0);
+  };
+  window.doGetter = window.doPoster;
+  window.bootGrowl = function(){};
+})();
+</script>
+<style>
+  body { padding: 26px 30px; overflow:auto; }
+  .preview-note { max-width:1560px; margin:0 auto 18px; display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text-tertiary); }
+  .preview-note strong { color:var(--primary-color); }
+</style>
+</head>
+<body class="bg-primary">
+<div class="preview-note"><i class="fa fa-info-circle"></i><strong>离线预览</strong><span>数据为演示样例，真实数据来自 /link-health/report 与 /link-health/deadLetters。</span></div>
+<div style="max-width:1560px;margin:0 auto;">
+<div class="ui-page">
+
+    <!-- 页面标题 -->
+    <div class="ui-page-head">
+        <div>
+            <h1 class="ui-page-title">实时链路健康</h1>
+            <p class="ui-page-desc">对标专业 CDC 平台的可观测性：端到端复制延迟、链路停滞、失败率、自动重试挽回、死信与 Prometheus 指标一处掌握。</p>
+        </div>
+        <div class="hero-actions">
+            <button type="button" class="btn btn-outline" id="lhRefreshBtn"><i class="fa fa-refresh"></i> 立即刷新</button>
+            <label class="lh-switch"><input type="checkbox" id="lhAutoRefresh" checked/> 自动刷新 15s</label>
+        </div>
+    </div>
+
+    <!-- 总览指标 -->
+    <section class="kpi-grid" id="lhKpiGrid">
+        <div class="kpi-card kpi-accent-blue">
+            <div class="kpi-top"><span class="kpi-label">链路健康分</span><span class="kpi-icon"><i class="fa fa-heartbeat"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="lhScore">--</span><span class="kpi-unit">/100</span></div>
+            <div class="kpi-foot" id="lhScoreFoot">运行链路平均分</div>
+        </div>
+        <div class="kpi-card kpi-accent-green">
+            <div class="kpi-top"><span class="kpi-label">运行中链路</span><span class="kpi-icon"><i class="fa fa-exchange"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="lhRunning">--</span><span class="kpi-unit">/ <span id="lhTotal">--</span></span></div>
+            <div class="kpi-foot" id="lhLevelFoot">健康 -- · 预警 -- · 停滞 --</div>
+        </div>
+        <div class="kpi-card kpi-accent-amber">
+            <div class="kpi-top"><span class="kpi-label">最长链路停滞</span><span class="kpi-icon"><i class="fa fa-clock-o"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="lhStall">--</span><span class="kpi-unit">秒</span></div>
+            <div class="kpi-foot" id="lhThresholdFoot">预警阈值 --s · 严重阈值 --s</div>
+        </div>
+        <div class="kpi-card kpi-accent-indigo">
+            <div class="kpi-top"><span class="kpi-label">最大端到端复制延迟</span><span class="kpi-icon"><i class="fa fa-hourglass-half"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="lhLag">--</span><span class="kpi-unit">秒</span></div>
+            <div class="kpi-foot" id="lhLagFoot">源端事件时间可用时统计</div>
+        </div>
+        <div class="kpi-card kpi-accent-red">
+            <div class="kpi-top"><span class="kpi-label">死信待处理</span><span class="kpi-icon"><i class="fa fa-exclamation-triangle"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="lhDead">--</span><span class="kpi-unit">条</span></div>
+            <div class="kpi-foot" id="lhRecoveredFoot">自动重试挽回 -- 行</div>
+        </div>
+    </section>
+
+    <!-- 告警与导出状态 -->
+    <section class="panel-card" style="margin-top:18px">
+        <div class="panel-head">
+            <div>
+                <h3 class="panel-title">运行策略</h3>
+                <div class="panel-sub" id="lhPolicySub">读取中…</div>
+            </div>
+            <span class="badge badge-info" id="lhPolicyBadge">LINK HEALTH</span>
+        </div>
+        <div class="panel-body">
+            <div class="lh-policy-grid">
+                <div class="lh-policy-item"><span>链路停滞预警</span><strong id="lhWarnVal">--</strong></div>
+                <div class="lh-policy-item"><span>链路停滞严重</span><strong id="lhCriticalVal">--</strong></div>
+                <div class="lh-policy-item"><span>失败率阈值</span><strong id="lhFailRateVal">--</strong></div>
+                <div class="lh-policy-item"><span>健康告警</span><strong id="lhAlarmVal">--</strong></div>
+                <div class="lh-policy-item"><span>Prometheus 导出</span><strong id="lhPromVal">--</strong></div>
+                <div class="lh-policy-item"><span>真实延迟链路</span><strong id="lhLagSourceVal">--</strong></div>
+                <div class="lh-policy-item"><span>集群节点</span><strong id="lhClusterVal">--</strong></div>
+                <div class="lh-policy-item"><span>最近更新</span><strong id="lhUpdatedVal">--</strong></div>
+            </div>
+            <div class="lh-prom-box">
+                <div>
+                    <strong><i class="fa fa-line-chart"></i> Prometheus 抓取端点</strong>
+                    <p>标准 0.0.4 文本格式，含链路状态、停滞秒数、健康分、成功/失败/死信与 JVM 指标。端点受登录会话保护，建议在网关侧配置 Token 与 IP 白名单后抓取。</p>
+                </div>
+                <code id="lhPromPath">/link-health/prometheus</code>
+                <button type="button" class="btn btn-outline" id="lhCopyPromBtn"><i class="fa fa-copy"></i> 复制路径</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- 链路清单 -->
+    <section class="panel-card" style="margin-top:18px">
+        <div class="panel-head">
+            <div>
+                <h3 class="panel-title">链路清单</h3>
+                <div class="panel-sub">按异常等级与停滞时长排序。「复制延迟」仅在连接器提供源端事件时间时为真实端到端延迟；否则显示估算/未知，不会冒充真实值。停滞为距最后一次事件的墙钟时长。</div>
+            </div>
+            <select class="form-control lh-filter" id="lhLevelFilter">
+                <option value="">全部等级</option>
+                <option value="STALE">停滞</option>
+                <option value="CRITICAL">严重</option>
+                <option value="WARN">预警</option>
+                <option value="HEALTHY">健康</option>
+                <option value="IDLE">未运行</option>
+            </select>
+        </div>
+        <div class="panel-body lh-table-wrap">
+            <table class="table lh-table">
+                <thead>
+                <tr>
+                    <th>同步任务</th><th>状态</th><th>等级</th><th>健康分</th><th>停滞</th><th>复制延迟</th>
+                    <th>事件</th><th>成功 / 失败</th><th>失败率</th><th>死信</th><th>重试挽回</th><th>位点</th>
+                </tr>
+                </thead>
+                <tbody id="lhLinkRows">
+                <tr><td colspan="12" class="empty-state">正在加载链路数据…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 失败明细 / 死信 -->
+    <section class="panel-card" style="margin-top:18px">
+        <div class="panel-head">
+            <div>
+                <h3 class="panel-title">失败明细与死信</h3>
+                <div class="panel-sub">带 <code>[DEAD_LETTER]</code> 标记的为永久故障或重试耗尽，需人工介入；<code>[SYNC_FAIL]</code> 为同步写入失败记录。</div>
+            </div>
+            <button type="button" class="btn btn-outline" id="lhDeadRefreshBtn"><i class="fa fa-refresh"></i> 刷新明细</button>
+        </div>
+        <div class="panel-body lh-table-wrap">
+            <table class="table lh-table">
+                <thead>
+                <tr><th>时间</th><th>所属任务</th><th>目标表</th><th>事件</th><th>分类</th><th>状态</th><th>错误摘要</th></tr>
+                </thead>
+                <tbody id="lhDeadRows">
+                <tr><td colspan="7" class="empty-state">正在加载失败明细…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</div>
+
+<style>
+    #lhKpiGrid { grid-template-columns:repeat(5, minmax(0, 1fr)); }
+    @media (max-width:1200px) { #lhKpiGrid { grid-template-columns:repeat(3, minmax(0, 1fr)); } }
+    @media (max-width:760px) { #lhKpiGrid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:480px) { #lhKpiGrid { grid-template-columns:1fr; } }
+    .lh-lag-src { display:inline-block; margin-left:5px; padding:1px 6px; border-radius:999px; font-size:10px; font-weight:600; }
+    .lh-lag-real { background:rgba(37,99,235,.14); color:var(--primary-color); }
+    .lh-lag-est { background:rgba(100,116,139,.16); color:var(--text-tertiary); }
+    .lh-switch { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary); cursor:pointer; }
+    .lh-switch input { accent-color:var(--primary-color); }
+    .lh-policy-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+    .lh-policy-item { padding:12px 14px; border:1px solid var(--border-primary); border-radius:10px; background:var(--bg-secondary); display:flex; flex-direction:column; gap:6px; }
+    .lh-policy-item span { font-size:12px; color:var(--text-tertiary); }
+    .lh-policy-item strong { font-size:16px; color:var(--text-primary); }
+    .lh-prom-box { margin-top:14px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:14px 16px; border:1px dashed var(--primary-border); border-radius:10px; background:var(--primary-lighter); }
+    .lh-prom-box > div { flex:1 1 420px; }
+    .lh-prom-box strong { font-size:13px; color:var(--text-primary); }
+    .lh-prom-box p { margin:5px 0 0; font-size:12px; line-height:1.6; color:var(--text-secondary); }
+    .lh-prom-box code { padding:6px 10px; border-radius:6px; background:var(--bg-primary); border:1px solid var(--border-primary); font-size:12px; color:var(--primary-color); }
+    .lh-filter { width:150px !important; }
+    .lh-table-wrap { overflow-x:auto; }
+    .lh-table { min-width:1180px; font-size:12.5px; }
+    .lh-table th { white-space:nowrap; }
+    .lh-chip { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600; line-height:1.7; }
+    .lh-healthy { background:rgba(16,185,129,.14); color:#059669; }
+    .lh-warn { background:rgba(245,158,11,.16); color:#b45309; }
+    .lh-critical { background:rgba(239,68,68,.16); color:#dc2626; }
+    .lh-stale { background:rgba(239,68,68,.16); color:#dc2626; }
+    .lh-idle { background:rgba(100,116,139,.16); color:#64748b; }
+    .lh-reason { font-size:11px; color:var(--text-tertiary); margin-top:3px; }
+    .lh-mono { font-family:Consolas,Monaco,monospace; font-size:11px; color:var(--text-secondary); }
+    .lh-err { max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-secondary); }
+    [data-theme="dark"] .lh-healthy { color:#6ee7b7; }
+    [data-theme="dark"] .lh-warn { color:#fcd34d; }
+    [data-theme="dark"] .lh-critical, [data-theme="dark"] .lh-stale { color:#fca5a5; }
+    [data-theme="dark"] .lh-idle { color:#cbd5e1; }
+</style>
+
+<script>
+(function () {
+    'use strict';
+
+    var timer = null;
+    var linksCache = [];
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
+    function fmtNum(n) {
+        return (n == null || isNaN(n)) ? '--' : Number(n).toLocaleString('zh-CN');
+    }
+
+    function fmtTime(ms) {
+        if (!ms) return '--';
+        try { return new Date(Number(ms)).toLocaleString('zh-CN', {hour12:false}); } catch (e) { return '--'; }
+    }
+
+    function levelChip(level, label) {
+        var cls = 'lh-' + String(level || 'idle').toLowerCase();
+        return '<span class="lh-chip ' + cls + '">' + esc(label || level || '--') + '</span>';
+    }
+
+    function lagSourceChip(source) {
+        if (source === 'source') {
+            return '<span class="lh-lag-src lh-lag-real">源端</span>';
+        }
+        if (source === 'estimated') {
+            return '<span class="lh-lag-src lh-lag-est">估算</span>';
+        }
+        return '<span class="lh-lag-src lh-lag-est">未知</span>';
+    }
+
+    function renderKpi(r) {
+        $('#lhScore').text(r.healthScore == null ? '--' : r.healthScore);
+        $('#lhRunning').text(r.runningLinks == null ? '--' : r.runningLinks);
+        $('#lhTotal').text(r.totalLinks == null ? '--' : r.totalLinks);
+        $('#lhLevelFoot').text('健康 ' + (r.healthyLinks || 0) + ' · 预警 ' + (r.warnLinks || 0)
+            + ' · 严重 ' + (r.criticalLinks || 0) + ' · 停滞 ' + (r.staleLinks || 0));
+        $('#lhStall').text(r.maxStallSeconds == null ? '--' : r.maxStallSeconds);
+        var realLagLinks = (r.links || []).filter(function (v) { return v && v.lagSource === 'source'; }).length;
+        $('#lhLag').text(r.maxLagSeconds == null ? '--' : r.maxLagSeconds);
+        $('#lhLagFoot').text(realLagLinks > 0
+            ? '真实端到端延迟 · ' + realLagLinks + ' 条链路有源端时间'
+            : '暂无源端事件时间，退化为链路停滞');
+        $('#lhLagSourceVal').text(realLagLinks + ' / ' + (r.links || []).length + ' 条');
+        $('#lhDead').text(r.deadLetterTotal == null ? '--' : r.deadLetterTotal);
+        $('#lhRecoveredFoot').text('自动重试挽回 ' + fmtNum(r.retryRecoveredTotal) + ' 行 · 累计事件 ' + fmtNum(r.eventsTotal));
+        $('#lhThresholdFoot').text('预警阈值 ' + (r.lagWarnSeconds || 0) + 's · 严重阈值 ' + (r.lagCriticalSeconds || 0) + 's');
+        $('#lhWarnVal').text((r.lagWarnSeconds || 0) + ' s');
+        $('#lhCriticalVal').text((r.lagCriticalSeconds || 0) + ' s');
+        $('#lhFailRateVal').text((r.failRateWarnPercent || 0) + ' %');
+        $('#lhAlarmVal').text(r.alarmEnabled ? '已开启' : '已关闭');
+        $('#lhPromVal').text(r.prometheusEnabled ? '已开启' : '已关闭');
+        $('#lhUpdatedVal').text(fmtTime(r.generatedAt));
+        $('#lhPolicyBadge').text(r.alarmEnabled ? 'ALARM ON' : 'ALARM OFF');
+        $('#lhPolicySub').text('阈值与开关来自「系统配置」，保存后即时生效；健康评估每 60 秒运行一次。');
+    }
+
+    function renderLinks(filter) {
+        var rows = linksCache.filter(function (v) { return !filter || v.level === filter; });
+        var $body = $('#lhLinkRows');
+        if (!rows.length) {
+            $body.html('<tr><td colspan="12" class="empty-state">当前筛选条件下没有链路</td></tr>');
+            return;
+        }
+        var html = rows.map(function (v) {
+            return '<tr>'
+                + '<td><strong>' + esc(v.mappingName || v.mappingId || '--') + '</strong>'
+                + '<div class="lh-reason">' + esc(v.model || '') + ' · ' + esc(v.phase || '') + '</div>'
+                + '<div class="lh-reason">' + esc(v.reason || '') + '</div></td>'
+                + '<td>' + esc(v.stateName || '--') + '</td>'
+                + '<td>' + levelChip(v.level, v.levelLabel) + '</td>'
+                + '<td>' + (v.score == null ? '--' : v.score) + '</td>'
+                + '<td>' + fmtNum(v.stallSeconds) + ' s</td>'
+                + '<td>' + (v.lagSource === 'source' ? fmtNum(v.lagSeconds) + ' s' : '—')
+                + lagSourceChip(v.lagSource)
+                + (v.lastSourceEventTime ? '<div class="lh-reason">源端时间 ' + fmtTime(v.lastSourceEventTime) + '</div>' : '')
+                + '</td>'
+                + '<td>' + fmtNum(v.eventsTotal) + '</td>'
+                + '<td>' + fmtNum(v.success) + ' / <span style="color:#dc2626">' + fmtNum(v.fail) + '</span></td>'
+                + '<td>' + (v.failRate == null ? '--' : Number(v.failRate).toFixed(2) + '%') + '</td>'
+                + '<td>' + fmtNum(v.deadLetters) + '</td>'
+                + '<td>' + fmtNum(v.retryRecovered) + '</td>'
+                + '<td class="lh-mono">' + esc(v.position || '--') + '</td>'
+                + '</tr>';
+        }).join('');
+        $body.html(html);
+    }
+
+    function loadReport() {
+        doPoster('/link-health/report', {}, function (response) {
+            if (!response || response.success !== true || !response.data) {
+                $('#lhLinkRows').html('<tr><td colspan="12" class="empty-state">链路数据加载失败</td></tr>');
+                return;
+            }
+            var r = response.data;
+            linksCache = r.links || [];
+            renderKpi(r);
+            renderLinks($('#lhLevelFilter').val());
+        });
+    }
+
+    function loadClusterState() {
+        doPoster('/link-health/cluster', {}, function (response) {
+            var c = response && response.success === true ? response.data : null;
+            if (!c) {
+                $('#lhClusterVal').text('未启用');
+                return;
+            }
+            $('#lhClusterVal').text(String(c.role || '--') + ' · ' + String(c.nodeId || '--'));
+        });
+    }
+
+    function loadDeadLetters() {
+        doPoster('/link-health/deadLetters', {pageNum: 1, pageSize: 50}, function (response) {
+            var $body = $('#lhDeadRows');
+            if (!response || response.success !== true || !response.data) {
+                $body.html('<tr><td colspan="7" class="empty-state">失败明细加载失败</td></tr>');
+                return;
+            }
+            var rows = (response.data.data || []);
+            if (!rows.length) {
+                $body.html('<tr><td colspan="7" class="empty-state">暂无失败明细，链路运行正常</td></tr>');
+                return;
+            }
+            $body.html(rows.map(function (v) {
+                var chip = v.deadLetter
+                    ? '<span class="lh-chip lh-critical">死信</span>'
+                    : (v.syncFail ? '<span class="lh-chip lh-warn">待处理</span>' : '<span class="lh-chip lh-idle">其它</span>');
+                return '<tr>'
+                    + '<td>' + fmtTime(v.createTime) + '</td>'
+                    + '<td>' + esc(v.mappingName || '--') + '</td>'
+                    + '<td>' + esc(v.targetTableName || '--') + '</td>'
+                    + '<td>' + esc(v.event || '--') + '</td>'
+                    + '<td>' + esc(v.kind || '--') + '</td>'
+                    + '<td>' + chip + '</td>'
+                    + '<td><div class="lh-err" title="' + esc(v.error) + '">' + esc(v.error) + '</div></td>'
+                    + '</tr>';
+            }).join(''));
+        });
+    }
+
+    function refreshAll() {
+        loadReport();
+        loadDeadLetters();
+        loadClusterState();
+    }
+
+    function setupAutoRefresh() {
+        if (timer) { clearInterval(timer); timer = null; }
+        if ($('#lhAutoRefresh').is(':checked')) {
+            timer = setInterval(loadReport, 15000);
+        }
+    }
+
+    $('#lhRefreshBtn').off('click').on('click', refreshAll);
+    $('#lhDeadRefreshBtn').off('click').on('click', loadDeadLetters);
+    $('#lhLevelFilter').off('change').on('change', function () { renderLinks($(this).val()); });
+    $('#lhAutoRefresh').off('change').on('change', setupAutoRefresh);
+    $('#lhCopyPromBtn').off('click').on('click', function () {
+        var text = $('#lhPromPath').text();
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text);
+            } else {
+                var $tmp = $('<textarea>').val(text).appendTo('body').select();
+                document.execCommand('copy');
+                $tmp.remove();
+            }
+            if (window.bootGrowl) { bootGrowl('抓取路径已复制', 'success'); }
+        } catch (e) { /* 忽略复制失败 */ }
+    });
+
+    refreshAll();
+    setupAutoRefresh();
+    window.addEventListener('pagehide', function () { if (timer) { clearInterval(timer); timer = null; } });
+})();
+</script>
+
+</div>
+</body>
+</html>

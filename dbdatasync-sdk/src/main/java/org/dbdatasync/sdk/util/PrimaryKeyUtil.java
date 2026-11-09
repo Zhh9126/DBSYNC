@@ -38,6 +38,16 @@ public abstract class PrimaryKeyUtil {
 
         // 如果存在表字段映射关系，没有配置主键则抛出异常提示
         if (!CollectionUtils.isEmpty(table.getColumn()) && CollectionUtils.isEmpty(primaryKeys)) {
+            // Wave23：无主键表优先退化到唯一索引列（可直接作为 WHERE 条件）
+            if (RowIdentityResolver.isFallbackEnabled()) {
+                RowIdentityResolver.RowIdentity identity = RowIdentityResolver.resolve(table);
+                if (identity.getStrategy() == RowIdentityResolver.Strategy.UNIQUE_KEY) {
+                    return identity.getKeyFields();
+                }
+                throw new SdkException(String.format(
+                        "表 %s 缺少主键与唯一索引；全行哈希策略可用于校验，但不能直接生成目标端 WHERE 条件，请为表补充主键或唯一索引.",
+                        table.getName()));
+            }
             throw new SdkException(String.format("表 %s 缺少主键.", table.getName()));
         }
         return primaryKeys;

@@ -87,6 +87,13 @@ public class SlowSqlController extends BaseController {
         return RestResult.restSuccess(slowSqlService.records());
     }
 
+    /** Wave24：按同步任务聚合慢 SQL（任务级上下文报告） */
+    @PostMapping("/taskReport")
+    @ResponseBody
+    public RestResult taskReport() {
+        return RestResult.restSuccess(slowSqlService.taskReport());
+    }
+
     /** 运行时调整采集口径（thresholdMillis/maxRecords/sampleRate，可只传部分） */
     @PostMapping("/config")
     @ResponseBody

@@ -592,6 +592,11 @@ public class DatabaseTemplate implements JdbcOperations {
         }
         // source 取底层连接驱动类名（低依赖来源标识，上层观察者可由此拼接任务上下文）
         String source = connection != null ? connection.getClass().getSimpleName() : "unknown";
+        // Wave24：把任务级上下文带进观察事件，慢 SQL 记录可以按任务聚合/过滤
+        String taskId = org.dbdatasync.sdk.context.TaskContextHolder.currentTaskId();
+        if (taskId != null) {
+            source = source + "|task=" + taskId;
+        }
         DatabaseExecuteObservers.notifyExecuted(sql, source, elapsedMillis, rows);
     }
 

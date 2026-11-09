@@ -249,6 +249,11 @@ public class DatabaseSyncTaskRunner {
             targetTableMetas.put(buildTargetTableKey(group), targetMeta);
         }
         group.setFieldMapping(buildFieldMapping(group, targetMeta));
+        // 目标表名对齐目标库实际标识符（Oracle-族元数据回读为大写存储名），避免 DML/命令用小写带引号标识符找不到表
+        if (targetMeta != null && StringUtil.isNotBlank(targetMeta.getName())
+                && group.getTargetTable() != null) {
+            group.getTargetTable().setName(targetMeta.getName());
+        }
         group.setCommand(parserComponent.getCommand(stub, group));
         if (CollectionUtils.isEmpty(group.getCommand())) {
             throw new IllegalStateException(String.format("表 [%s] >> [%s] 执行命令构建失败", safeName(group, true), safeName(group, false)));
@@ -414,7 +419,7 @@ public class DatabaseSyncTaskRunner {
                 }
                 Map<String, Table> sourceMetaMap = loadSourceTableMetaMap(task.getId(), mapping, candidateNames);
                 for (String name : candidateNames) {
-                    Table sourceTable = sourceMetaMap.get(name);
+                    Table sourceTable = sourceMetaMap.get(name.toLowerCase());
                     if (sourceTable == null) {
                         continue;
                     }
@@ -462,14 +467,14 @@ public class DatabaseSyncTaskRunner {
             if (metaInfo == null || StringUtil.isBlank(metaInfo.getTable())) {
                 continue;
             }
-            Table table = new Table();
-            table.setName(metaInfo.getTable());
-            table.setType(metaInfo.getTableType());
-            table.setColumn(metaInfo.getColumn());
-            tableMap.put(metaInfo.getTable(), table);
-        }
-        return tableMap;
-    }
+    Table table = new Table();
+    table.setName(metaInfo.getTable());
+    table.setType(metaInfo.getTableType());
+    table.setColumn(metaInfo.getColumn());
+    tableMap.put(metaInfo.getTable().toLowerCase(), table);
+}
+return tableMap;
+}
 
     private Mapping buildStubMapping(DatabaseSyncTask task, TableGroup group) {
         Mapping mapping = new Mapping();

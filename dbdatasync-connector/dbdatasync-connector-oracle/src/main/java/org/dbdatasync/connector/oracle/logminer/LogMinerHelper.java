@@ -288,18 +288,22 @@ public class LogMinerHelper {
     }
 
     public static void setSessionContainerIfCdbMode(Connection connection) throws SQLException {
-        try (Statement statement = connection.createStatement()) {
-            try (ResultSet rs = statement.executeQuery(LOG_MINER_SQL_IS_CDB)) {
-                rs.next();
-                // cdb模式 需要切换到根容器
-                if (rs.getString(1).equalsIgnoreCase("YES")) {
-                    try (PreparedStatement ps = connection.prepareStatement(LOG_MINER_SQL_ALTER_SESSION_CONTAINER)) {
-                        try {
-                            ps.execute();
-                        } catch (SQLException e) {
-                            throw new OracleException(String.format("sql=%s error=%s", LOG_MINER_SQL_ALTER_SESSION_CONTAINER, e.getMessage()));
-                        }
-                    }
+        // 查询 V$DATABASE.CDB 需要底层视图权限；普通 CDB 公共用户（C##*）无该权限时
+        // 查询会抛 ORA-00942。此时会话默认已位于 CDB$ROOT，无需切换容器，跳过即可。
+        boolean cdbMode;
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(LOG_MINER_SQL_IS_CDB)) {
+            cdbMode = rs.next() && "YES".equalsIgnoreCase(rs.getString(1));
+        } catch (SQLException e) {
+            logger.warn("查询 V$DATABASE.CDB 失败（普通公共用户无权限?），跳过容器切换: {}", e.getMessage());
+            return;
+        }
+        if (cdbMode) {
+            try (PreparedStatement ps = connection.prepareStatement(LOG_MINER_SQL_ALTER_SESSION_CONTAINER)) {
+                try {
+                    ps.execute();
+                } catch (SQLException e) {
+                    throw new OracleException(String.format("sql=%s error=%s", LOG_MINER_SQL_ALTER_SESSION_CONTAINER, e.getMessage()));
                 }
             }
         }

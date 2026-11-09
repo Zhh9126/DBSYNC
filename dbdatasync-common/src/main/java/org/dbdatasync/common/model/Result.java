@@ -39,8 +39,24 @@ public class Result<T> {
      * 事件
      */
     private String event;
+    /** Wave23：重放消息 ID，由写入完成点回传结果 */
+    private String replayId;
 
     private final Object LOCK = new Object();
+
+    /**
+     * 自动重试成功挽回的行数（可观测性指标）。
+     * <p>这类行不进入 failData、不落失败明细、不计入 Meta.fail，
+     * 但必须可观测，否则「重试是否真的在起作用」无法度量。
+     */
+    private final java.util.concurrent.atomic.AtomicInteger autoRetriedRows =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /**
+     * Wave24：逐行失败分类，key 为行内容快照（{@code String.valueOf(row)}）。
+     * 写入链路按行填充，落失败明细时按行覆盖批次标签，避免「整批永久优先」误伤可自愈行。
+     */
+    private final java.util.Map<String, RowFailure> rowFailures = new java.util.concurrent.ConcurrentHashMap<>();
 
     public Result() {
     }
@@ -109,5 +125,27 @@ public class Result<T> {
 
     public void setEvent(String event) {
         this.event = event;
+    }
+
+    public String getReplayId() {
+        return replayId;
+    }
+
+    public void setReplayId(String replayId) {
+        this.replayId = replayId;
+    }
+
+    public java.util.concurrent.atomic.AtomicInteger getAutoRetriedRows() {
+        return autoRetriedRows;
+    }
+
+    public java.util.Map<String, RowFailure> getRowFailures() {
+        return rowFailures;
+    }
+
+    public void recordRowFailure(String rowKey, RowFailure failure) {
+        if (rowKey != null && failure != null) {
+            rowFailures.put(rowKey, failure);
+        }
     }
 }

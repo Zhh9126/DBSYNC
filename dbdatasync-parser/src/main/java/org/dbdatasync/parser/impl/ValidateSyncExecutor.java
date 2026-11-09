@@ -70,8 +70,11 @@ public class ValidateSyncExecutor {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
-    /** 差异明细最大保留条数，防止明细分表 DATA 过大 */
-    private static final int MAX_CONTENT_ITEMS = 200;
+    /**
+     * Wave24：解除固定 200 条截断。差异明细改为全量写入；超过 DATA 列 65535 字节时
+     * 由 {@code TaskDetailUtil.serializeContent} 整体外置为 DBDS-REF 引用（完整保留），
+     * 无外置存储时按字节预算逐条降级，仍然保证 JSON 可解析、条数有明确提示。
+     */
 
     /** 单次手动订正最大条数（与前端"手动订正(最多100条)"文案对齐） */
     private static final int MAX_REPAIR_ITEMS = 100;
@@ -775,6 +778,23 @@ public class ValidateSyncExecutor {
         if (!orderCols.isEmpty()) {
             sql.append(" ORDER BY ").append(joinQuoted(db, orderCols));
         }
+        if (isOracleFamily(db)) {
+            // Oracle/DM-compat 12c+：OFFSET ? ROWS FETCH NEXT ? ROWS ONLY（LIMIT 语法 Oracle 不支持）
+            sql.append(" OFFSET ? ROWS FETCH NEXT ? ROWS ONLY");
+            return db.execute(t -> t.query(sql.toString(), rs -> {
+                List<Map<String, Object>> rows = new ArrayList<>();
+                ResultSetMetaData md = rs.getMetaData();
+                int n = md.getColumnCount();
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int i = 1; i <= n; i++) {
+                        row.put(md.getColumnLabel(i), normalize(rs.getObject(i)));
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }, start, end, offset, pageSize));
+        }
         sql.append(" LIMIT ? OFFSET ?");
         return db.execute(t -> t.query(sql.toString(), rs -> {
             List<Map<String, Object>> rows = new ArrayList<>();
@@ -1401,6 +1421,23 @@ public class ValidateSyncExecutor {
         if (!orderCols.isEmpty()) {
             sql.append(" ORDER BY ").append(joinQuoted(db, orderCols));
         }
+        if (isOracleFamily(db)) {
+            // Oracle/DM-compat 12c+：OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            sql.append(" OFFSET ? ROWS FETCH NEXT ? ROWS ONLY");
+            return db.execute(t -> t.query(sql.toString(), rs -> {
+                List<Map<String, Object>> rows = new ArrayList<>();
+                ResultSetMetaData md = rs.getMetaData();
+                int n = md.getColumnCount();
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int i = 1; i <= n; i++) {
+                        row.put(md.getColumnLabel(i), normalize(rs.getObject(i)));
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }, offset, pageSize));
+        }
         sql.append(" LIMIT ? OFFSET ?");
         return db.execute(t -> t.query(sql.toString(), rs -> {
             List<Map<String, Object>> rows = new ArrayList<>();
@@ -1697,11 +1734,53 @@ public class ValidateSyncExecutor {
             row.put(ConfigConstant.DETAIL_IS_SUCCESS, diffTotal <= fixedTotal ? 1 : 0);
             row.put(ConfigConstant.DATA_ERROR, error == null ? StringUtil.EMPTY : error);
             row.put(ConfigConstant.CONFIG_MODEL_UPDATE_TIME, System.currentTimeMillis());
-            row.put(ConfigConstant.BINLOG_DATA, JsonUtil.objToJson(data));
+            row.put(ConfigConstant.BINLOG_DATA, serializeDetailData(data, content));
             storageService.editBatch(StorageEnum.TASK_DETAIL, taskId, Collections.singletonList(row));
         } catch (Exception e) {
             logger.error("订正校验任务 [{}] 写入明细结果失败: tableGroupId={}, type={}", taskId, tg.getId(), type, e);
         }
+    }
+
+    /**
+     * Wave24：明细序列化。小数据原样；超 DATA 列上限时优先整体外置（完整保留），
+     * 未安装内容外置存储时按字节预算逐条降级（仍保证 JSON 可解析，不再静默截断成坏 JSON）。
+     */
+    private String serializeDetailData(Map<String, Object> data, List<Map<String, Object>> content) {
+        final java.nio.charset.Charset utf8 = java.nio.charset.StandardCharsets.UTF_8;
+        final int limit = org.dbdatasync.sdk.util.TaskDetailUtil.MAX_DATA_BYTES;
+        String json = JsonUtil.objToJson(data);
+        if (json.getBytes(utf8).length <= limit) {
+            return json;
+        }
+        byte[] blob = org.dbdatasync.sdk.util.TaskDetailUtil.serializeContent(data);
+        if (blob == null) {
+            return json;
+        }
+        String text = new String(blob, utf8);
+        if (org.dbdatasync.sdk.storage.TaskDetailContentStore.current() != null) {
+            // DBDS-REF 引用串：读取端 deserializeContent 会还原完整明细
+            return text;
+        }
+        java.util.List<Map<String, Object>> kept = new java.util.ArrayList<>();
+        for (Map<String, Object> item : content) {
+            kept.add(item);
+            data.put(ConfigConstant.TASK_CONTENT, kept);
+            if (JsonUtil.objToJson(data).getBytes(utf8).length > limit) {
+                kept.remove(kept.size() - 1);
+                break;
+            }
+        }
+        Map<String, Object> tip = new java.util.LinkedHashMap<>();
+        tip.put("type", "tip");
+        tip.put("msg", "共 " + content.size() + " 条差异，DATA 列 65535 字节上限内完整保留 "
+                + kept.size() + " 条；启用文件内容外置可查看全部");
+        kept.add(tip);
+        data.put(ConfigConstant.TASK_CONTENT, kept);
+        if (JsonUtil.objToJson(data).getBytes(utf8).length > limit && kept.size() > 1) {
+            kept.remove(kept.size() - 1);
+            kept.set(kept.size() - 1, tip);
+        }
+        return JsonUtil.objToJson(data);
     }
 
     private Map<String, Object> findDetailRow(String taskId, String tableGroupId, String type) {
@@ -1790,14 +1869,8 @@ public class ValidateSyncExecutor {
     }
 
     private void addItem(List<Map<String, Object>> content, Map<String, Object> item) {
-        if (content.size() < MAX_CONTENT_ITEMS) {
-            content.add(item);
-        } else if (content.size() == MAX_CONTENT_ITEMS) {
-            Map<String, Object> tip = new LinkedHashMap<>();
-            tip.put("type", "tip");
-            tip.put("msg", "差异数过多，仅展示前 " + MAX_CONTENT_ITEMS + " 条");
-            content.add(tip);
-        }
+        // Wave24：全量保留，大小问题交给 saveDetailRow 的内容外置/字节预算降级处理
+        content.add(item);
     }
 
     private void markRepaired(List<Map<String, Object>> content, String key, String msg) {
@@ -1889,9 +1962,17 @@ public class ValidateSyncExecutor {
         if (v == null) {
             return null;
         }
+        // Oracle 原生类型：ojdbc 返回 oracle.sql.TIMESTAMP / oracle.sql.DATE 等，
+        // 不是标准的 java.sql.Timestamp，需转回 JDBC 类型再统一为字符串才能跨库比对。
+        Object jdbcValue = toJdbcTimestamp(v);
+        if (jdbcValue != v) {
+            v = jdbcValue;
+        }
         // 统一日期时间表示：跨库（MySQL LocalDateTime / PG Timestamp 等）字符串一致才能正确比对
         if (v instanceof java.sql.Timestamp) {
-            return ((java.sql.Timestamp) v).toLocalDateTime().toString();
+            // 截断到秒：跨库时间精度不一致（Oracle TIMESTAMP(6)/MySQL datetime(6)/DM 扫描），
+            // 业务上通常只关心到秒级一致；纳秒级差异视为等价
+            return ((java.sql.Timestamp) v).toLocalDateTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
         }
         if (v instanceof java.sql.Date) {
             return ((java.sql.Date) v).toLocalDate().toString();
@@ -1902,10 +1983,48 @@ public class ValidateSyncExecutor {
         if (v instanceof java.time.LocalDateTime || v instanceof java.time.LocalDate
                 || v instanceof java.time.LocalTime || v instanceof java.time.ZonedDateTime
                 || v instanceof java.time.OffsetDateTime) {
+            if (v instanceof java.time.LocalDateTime) {
+                return ((java.time.LocalDateTime) v).truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+            }
             return String.valueOf(v);
         }
         if (v instanceof java.util.Date && !(v instanceof java.sql.Date)) {
-            return new java.sql.Timestamp(((java.util.Date) v).getTime()).toLocalDateTime().toString();
+            return new java.sql.Timestamp(((java.util.Date) v).getTime())
+                    .toLocalDateTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        }
+        return v;
+    }
+
+    /**
+     * Oracle 驱动返回的 oracle.sql.TIMESTAMP / oracle.sql.DATE 等原生类型转回标准 JDBC 时间类型。
+     * 不识别的类型原样返回。
+     */
+    private Object toJdbcTimestamp(Object v) {
+        String cn = v.getClass().getName();
+        try {
+            if ("oracle.sql.TIMESTAMP".equals(cn)) {
+                Object ts = v.getClass().getMethod("timestampValue").invoke(v);
+                if (ts instanceof java.sql.Timestamp) {
+                    return ts;
+                }
+            } else if ("oracle.sql.DATE".equals(cn)) {
+                Object ts = v.getClass().getMethod("timestampValue").invoke(v);
+                if (ts instanceof java.sql.Timestamp) {
+                    return ts;
+                }
+            } else if ("oracle.sql.INTERVALDS".equals(cn) || "oracle.sql.INTERVALYM".equals(cn)) {
+                // 区间类型转字符串（内部类结构各异，反射取 toString）
+                return String.valueOf(v);
+            } else if (cn.startsWith("oracle.sql.")) {
+                // 其他 Oracle 原生类型：尝试统一 toString（至少保证可比对）
+                String s = String.valueOf(v);
+                if (s.startsWith("oracle.sql.")) {
+                    return s;
+                }
+                return v;
+            }
+        } catch (Exception e) {
+            return v;
         }
         return v;
     }
@@ -2009,6 +2128,26 @@ public class ValidateSyncExecutor {
             return "`" + name + "`";
         }
         return "\"" + name + "\"";
+    }
+
+    /**
+     * Oracle 语法族（含达梦/OceanBase-Oracle）：不支持 LIMIT/OFFSET 简单分页，
+     * 需用 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY（12c+）或 ROWNUM 分页。
+     */
+    private boolean isOracleFamily(DatabaseConnectorInstance db) {
+        String type = db.getConfig() != null ? db.getConfig().getConnectorType() : "";
+        return isOracleFamilyType(type);
+    }
+
+    /**
+     * 按连接器类型判断是否 Oracle 语法族（可测试的静态判定）。
+     */
+    static boolean isOracleFamilyType(String connectorType) {
+        if (connectorType == null) {
+            return false;
+        }
+        String t = connectorType.toUpperCase();
+        return t.contains("ORACLE") || t.contains("DAMENG") || t.contains("OCEANBASE");
     }
 
     private String joinQuoted(DatabaseConnectorInstance db, List<String> names) {

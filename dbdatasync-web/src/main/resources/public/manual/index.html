@@ -4,45 +4,55 @@
 <!--
     DBDataSync 操作手册（系统管理 -> 操作手册）
     纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
+
+    文档基线：Wave24（2026-11-09）。
+    维护约定：本手册随功能实时同步。新增/修改系统配置项、菜单、REST 端点或默认行为时，
+    必须在同一次变更中更新本手册对应章节、第 13 章配置速查表与第 18 章变更记录，
+    并执行 python tools/check_manual_sync.py；CI 的 docs-sync 任务会阻断未同步的变更。
 -->
 
 <style id="manual-style">
     .manual-wrap { display: flex; gap: 24px; align-items: flex-start; }
     .manual-toc { width: 260px; flex-shrink: 0; position: sticky; top: 12px; max-height: calc(100vh - 90px); overflow-y: auto; }
-    .manual-toc a { display: block; padding: 7px 12px; color: inherit; text-decoration: none; border-left: 3px solid transparent; font-size: 14px; line-height: 1.5; }
-    .manual-toc a:hover { background: #eef4ff; border-left-color: #3567d6; }
-    .manual-toc .lv2 { padding-left: 28px; color: #64748b; }
+    .manual-toc a { display: block; padding: 7px 12px; color: var(--text-secondary, #475569); text-decoration: none; border-left: 3px solid transparent; font-size: 14px; line-height: 1.5; }
+    .manual-toc a:hover { background: var(--primary-lighter, #eef4ff); border-left-color: var(--primary-color, #3567d6); }
+    .manual-toc .lv2 { padding-left: 28px; color: var(--text-tertiary, #64748b); }
     .manual-main { flex: 1; min-width: 0; }
-    .manual-main section { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 22px 26px; margin-bottom: 20px; scroll-margin-top: 12px; }
-    .manual-main h2 { font-size: 19px; font-weight: 700; margin: 0 0 12px; color: #1e293b; }
-    .manual-main h3 { font-size: 15px; font-weight: 700; margin: 18px 0 8px; color: #334155; border-left: 4px solid #3567d6; padding-left: 8px; }
-    .manual-main h4 { font-size: 14px; font-weight: 700; margin: 14px 0 6px; color: #475569; }
-    .manual-main p, .manual-main li { font-size: 14px; line-height: 1.85; color: #374151; }
+    .manual-main section { background: var(--bg-primary, #fff); border: 1px solid var(--border-primary, #e5e7eb); border-radius: 10px; padding: 22px 26px; margin-bottom: 20px; scroll-margin-top: 12px; }
+    .manual-main h2 { font-size: 19px; font-weight: 700; margin: 0 0 12px; color: var(--text-primary, #1e293b); }
+    .manual-main h3 { font-size: 15px; font-weight: 700; margin: 18px 0 8px; color: var(--text-secondary, #334155); border-left: 4px solid var(--primary-color, #3567d6); padding-left: 8px; }
+    .manual-main h4 { font-size: 14px; font-weight: 700; margin: 14px 0 6px; color: var(--text-secondary, #475569); }
+    .manual-main p, .manual-main li { font-size: 14px; line-height: 1.85; color: var(--text-secondary, #374151); }
     .manual-main ol, .manual-main ul { padding-left: 22px; margin: 6px 0 10px; }
     .manual-main ol > li { margin-bottom: 4px; list-style: decimal; }
     .manual-main ul > li { margin-bottom: 4px; list-style: disc; }
     .manual-main table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; }
-    .manual-main th, .manual-main td { border: 1px solid #e2e8f0; padding: 7px 10px; font-size: 13px; text-align: left; vertical-align: top; }
-    .manual-main th { background: #f1f5f9; font-weight: 700; white-space: nowrap; }
-    .manual-main tr:nth-child(even) td { background: #fafbfd; }
-    .manual-main code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 1px 6px; font-size: 12.5px; color: #0f172a; word-break: break-all; }
+    .manual-main th, .manual-main td { border: 1px solid var(--border-secondary, #e2e8f0); padding: 7px 10px; font-size: 13px; text-align: left; vertical-align: top; }
+    .manual-main th { background: var(--bg-tertiary, #f1f5f9); font-weight: 700; white-space: nowrap; color: var(--text-primary, #1e293b); }
+    .manual-main tr:nth-child(even) td { background: var(--bg-secondary, #fafbfd); }
+    .manual-main code { background: var(--bg-tertiary, #f1f5f9); border: 1px solid var(--border-secondary, #e2e8f0); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; color: var(--text-primary, #0f172a); word-break: break-all; }
     .manual-main kbd { background: #1e293b; color: #fff; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
     .manual-main .tip, .manual-main .warn, .manual-main .danger { border-radius: 8px; padding: 10px 14px; font-size: 13.5px; line-height: 1.8; margin: 10px 0; }
-    .manual-main .tip { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
-    .manual-main .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
-    .manual-main .danger { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
-    .manual-main .uibox { display: inline-block; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; padding: 1px 8px; font-size: 12.5px; margin: 0 2px; }
+    .manual-main .tip { background: var(--info-light, #eff6ff); border: 1px solid var(--primary-border, #bfdbfe); color: var(--text-primary, #1e40af); }
+    .manual-main .warn { background: var(--warning-light, #fffbeb); border: 1px solid var(--warning-color, #fde68a); color: var(--text-primary, #92400e); }
+    .manual-main .danger { background: var(--error-light, #fef2f2); border: 1px solid var(--error-color, #fecaca); color: var(--text-primary, #991b1b); }
+    [data-theme="dark"] .manual-main .tip { color: #dbeafe; }
+    [data-theme="dark"] .manual-main .warn { color: #fde68a; }
+    [data-theme="dark"] .manual-main .danger { color: #fecaca; }
+    .manual-main .uibox { display: inline-block; border: 1px solid var(--border-primary, #cbd5e1); border-radius: 6px; background: var(--bg-secondary, #f8fafc); padding: 1px 8px; font-size: 12.5px; margin: 0 2px; color: var(--text-secondary, #475569); }
+    .manual-main .badge-new { display: inline-block; background: var(--primary-color, #2563eb); color: #fff; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 700; vertical-align: middle; }
     .manual-header { background: linear-gradient(90deg, #1d4ed8, #3567d6 55%, #6d9bff); border-radius: 12px; color: #fff; padding: 26px 30px; margin-bottom: 20px; }
     .manual-header h1 { margin: 0 0 8px; font-size: 24px; }
     .manual-header p { margin: 0; font-size: 13.5px; opacity: .92; }
-    .manual-header .meta { margin-top: 10px; font-size: 12.5px; opacity: .85; }
+    .manual-header .meta { margin-top: 10px; font-size: 12.5px; opacity: .9; }
+    .manual-header .meta b { font-weight: 700; }
 </style>
 
 <div th:fragment="content">
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
-        <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 一体化平台</p>
-        <div class="meta">适用版本 v2.x ｜ 更新日期 2026-10-18 ｜ 本手册内置离线查看，无需联网</div>
+        <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
+        <div class="meta">适用版本 <b>v2.1.5 及以上</b> ｜ 文档基线 <b>Wave24</b> ｜ 更新日期 <b>2026-11-09</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -60,16 +70,31 @@
             <a class="lv2" href="#manual-h4-4">4.4 同步方式与执行模式</a>
             <a class="lv2" href="#manual-h4-5">4.5 预检测（启动前校验）</a>
             <a class="lv2" href="#manual-h4-6">4.6 启动 / 停止 / 结果查看</a>
+            <a class="lv2" href="#manual-h4-7">4.7 写入失败后的行为</a>
             <a href="#manual-h5">5. 数据同步记录与导出</a>
             <a href="#manual-h6">6. 整库迁移</a>
             <a href="#manual-h7">7. 数据对比（一致性校验与差异订正）</a>
             <a href="#manual-h8">8. 数据血缘</a>
-            <a href="#manual-h9">9. 性能监控与告警通知</a>
-            <a href="#manual-h10">10. 系统管理</a>
-            <a href="#manual-h11">11. 增量同步前置条件（重要）</a>
-            <a href="#manual-h12">12. 故障诊断与排查</a>
-            <a href="#manual-h13">13. 常见问题 FAQ</a>
-            <a href="#manual-h14">14. 离线部署与升级</a>
+            <a href="#manual-h9">9. 迁移评估（六个辅助页面）</a>
+            <a href="#manual-h10">10. 性能监控与告警通知</a>
+            <a href="#manual-h11">11. 实时链路健康 <span class="badge-new">NEW</span></a>
+            <a class="lv2" href="#manual-h11-1">11.1 页面指标与健康等级</a>
+            <a class="lv2" href="#manual-h11-2">11.2 真实复制延迟与停滞的区别</a>
+            <a class="lv2" href="#manual-h11-3">11.3 死信明细与 Prometheus</a>
+            <a href="#manual-h12">12. 可靠性与数据一致性 <span class="badge-new">NEW</span></a>
+            <a class="lv2" href="#manual-h12-1">12.1 写入重试与死信标签</a>
+            <a class="lv2" href="#manual-h12-2">12.2 死信安全重放</a>
+            <a class="lv2" href="#manual-h12-3">12.3 事务型 checkpoint 与幂等键</a>
+            <a class="lv2" href="#manual-h12-4">12.4 集群 HA 与任务租约</a>
+            <a class="lv2" href="#manual-h12-5">12.5 无主键表与表级 DDL</a>
+            <a href="#manual-h13">13. 系统管理与配置速查</a>
+            <a class="lv2" href="#manual-h13-1">13.1 系统配置参数速查表</a>
+            <a class="lv2" href="#manual-h13-2">13.2 严格安全模式</a>
+            <a href="#manual-h14">14. 增量同步前置条件（重要）</a>
+            <a href="#manual-h15">15. 故障诊断与排查</a>
+            <a href="#manual-h16">16. 常见问题 FAQ</a>
+            <a href="#manual-h17">17. 离线部署、构建与升级</a>
+            <a href="#manual-h18">18. 文档基线、变更记录与维护约定</a>
         </div>
 
         <!-- 正文 -->
@@ -77,12 +102,14 @@
 
             <section id="manual-h1">
                 <h2><i class="fa fa-rocket"></i> 1. 产品概述与快速开始</h2>
-                <p>DBDataSync 是通用数据同步中间件，支持多种主流数据库之间的：<b>全量同步</b>、<b>增量同步（CDC）</b>、<b>全量+增量</b>、<b>整库迁移</b>，并提供 <b>数据校验/订正</b>、<b>数据血缘</b>、<b>性能监控</b>、<b>告警通知</b> 等运维能力。</p>
-                <h3>支持的数据库</h3>
+                <p>DBDataSync 是通用数据同步中间件，支持多种主流数据库之间的：<b>全量同步</b>、<b>增量同步（CDC）</b>、<b>全量+增量</b>、<b>整库迁移</b>，并提供 <b>数据对比/订正</b>、<b>数据血缘</b>、<b>迁移评估</b>、<b>性能监控</b>、<b>实时链路健康</b>、<b>告警通知</b>、<b>OpenAPI</b> 等运维能力。</p>
+                <h3>支持的数据库 / 连接器</h3>
+                <p>通过 SPI 注册 20+ 连接器，常见包括：MySQL / MariaDB、PostgreSQL、Oracle、SQLServer、达梦 DM8、人大金仓 KES、OceanBase、TiDB、MongoDB、ClickHouse、Doris / StarRocks、Elasticsearch、Kafka / RocketMQ、Redis、H2 / SQLite / DuckDB、File / Http 等。关系型库的实时增量以数据库日志（LOG）为主；TiDB、部分文件/消息类连接器使用 TIMING 定时轮询。</p>
                 <table>
                     <tr><th>类别</th><th>数据库</th><th>增量方式</th></tr>
-                    <tr><td>关系型</td><td>MySQL / MariaDB、PostgreSQL、Oracle、达梦(DM8)、人大金仓(KES V9)</td><td>binlog / 逻辑复制、test_decoding|syslogical_output、LogMiner、LogMiner(DM)、syslogical_output</td></tr>
-                    <tr><td>嵌入式</td><td>SQLite、H2</td><td>不支持增量（仅全量/定时）</td></tr>
+                    <tr><td>关系型</td><td>MySQL / MariaDB、PostgreSQL、Oracle、达梦(DM8)、人大金仓(KES)、SQLServer、OceanBase</td><td>binlog / 逻辑复制 / LogMiner / DM 归档，实时 LOG 监听</td></tr>
+                    <tr><td>嵌入式</td><td>SQLite、H2、DuckDB</td><td>不支持日志增量（仅全量 / 定时轮询）</td></tr>
+                    <tr><td>其他</td><td>MongoDB、ClickHouse、Kafka、Redis、ES、File</td><td>按连接器能力选择 LOG 或 TIMING，详见各连接器说明</td></tr>
                 </table>
                 <h3>五步快速开始</h3>
                 <ol>
@@ -90,7 +117,7 @@
                     <li>【数据同步 → 添加】创建同步（映射）任务，选择源/目标连接与库（Schema）；</li>
                     <li>选择需要同步的表，系统将<b>自动建立表映射与字段映射（同名自动匹配，忽略大小写）</b>，未自动匹配的字段在字段映射页面手动调整；</li>
                     <li>设置执行模式（全量 / 全量+增量），点击行内 <span class="uibox"><i class="fa fa-list-alt"></i> 预检测</span> 完成启动前校验；</li>
-                    <li>点击 <span class="uibox"><i class="fa fa-play"></i> 启动</span> 执行同步，在【数据同步】/【数据同步记录】页面查看进度与结果。</li>
+                    <li>点击 <span class="uibox"><i class="fa fa-play"></i> 启动</span> 执行同步，在【数据同步】/【数据同步记录】查看进度；增量任务运行期间到【监控告警 → 链路健康】观察复制延迟与死信。</li>
                 </ol>
                 <div class="tip"><b>提示：</b>任何任务启动前都建议先做一次「预检测」，它会集中给出所有阻断性问题（ERROR，无法启动）与建议项（WARN），并附修复说明，避免任务运行后才发现配置问题。</div>
             </section>
@@ -98,21 +125,25 @@
             <section id="manual-h2">
                 <h2><i class="fa fa-tachometer"></i> 2. 登录与工作台</h2>
                 <ol>
-                    <li>浏览器访问 <code>http://服务器IP:端口/</code>（默认 <code>http://127.0.0.1:18686</code>）；</li>
-                    <li>输入账号密码（默认管理员 admin），点击登录；</li>
+                    <li>浏览器访问 <code>http://服务器IP:端口/</code>（默认 <code>http://127.0.0.1:18686</code>）；未登录访问根路径会跳转到登录页；</li>
+                    <li>登录页采用左右分屏：<b>左侧</b>展示平台定位与核心能力（实时链路、全量/增量、一致性校验、可观测性等），<b>右侧</b>为登录表单；输入账号密码（默认管理员 <code>admin/admin</code>），点击登录；</li>
+                    <li>登录页与主界面右上角均支持<b>深色 / 浅色主题切换</b>，选择会被记忆；</li>
                     <li>登录后进入【工作台 → 仪表盘】，可查看连接器数量、任务总数、运行中任务、成功率概览等。</li>
                 </ol>
-                <h3>左侧菜单结构</h3>
+                <div class="danger"><b>安全提示：</b>默认口令仅用于首次安装。首次登录后请立即在【系统管理 → 用户管理】修改 admin 密码；生产环境建议开启「严格安全模式」（见 13.2），并把端口限制在内网。</div>
+                <h3>左侧菜单结构（与实际界面一致）</h3>
                 <table>
                     <tr><th>菜单组</th><th>功能项</th><th>说明</th></tr>
                     <tr><td>工作台</td><td>仪表盘</td><td>系统总览</td></tr>
                     <tr><td rowspan="5">数据同步</td><td>连接管理</td><td>数据源连接 CRUD、测试连接</td></tr>
-                    <tr><td>数据同步</td><td>同步（映射）任务的增删改查、启动/停止、预检测</td></tr>
-                    <tr><td>数据同步记录</td><td>所有同步任务的执行记录汇总、CSV 导出</td></tr>
-                    <tr><td>整库迁移</td><td>整库任务（一次同步整库全部表）的管理与运行</td></tr>
-                    <tr><td>数据对比 / 数据血缘</td><td>数据一致性对比（差异检测与订正）、表级同步关系展示</td></tr>
-                    <tr><td>监控告警</td><td>性能监控 / 告警通知</td><td>同步速率、异常告警与通知渠道</td></tr>
-                    <tr><td>系统管理</td><td>插件管理 / 配置管理 / 用户管理 / 系统配置 / <b>操作手册</b></td><td>扩展插件、全局配置、账号与系统参数、本手册</td></tr>
+                    <tr><td>数据同步</td><td>同步（映射）任务的增删改查、启动/停止、预检测、字段映射</td></tr>
+                    <tr><td>数据同步记录</td><td>执行记录汇总、CSV 导出</td></tr>
+                    <tr><td>整库迁移</td><td>整库任务的管理与运行</td></tr>
+                    <tr><td>数据血缘</td><td>表级同步关系展示</td></tr>
+                    <tr><td>数据对比</td><td>对比任务</td><td>一致性对比、差异明细、修复 SQL、批量订正</td></tr>
+                    <tr><td>迁移评估</td><td>SQL 兼容扫描 / 慢 SQL 采集 / 逻辑导入导出 / 切流编排 / 超大内容外置 / DBLink 查询</td><td>迁移前后的辅助工具（见第 9 章）</td></tr>
+                    <tr><td>监控告警</td><td>性能监控 / 链路健康 / 告警通知</td><td>速率与资源指标、实时链路健康与死信、通知渠道</td></tr>
+                    <tr><td>系统管理</td><td>插件管理 / 配置管理 / 用户管理 / 系统配置 / 操作手册</td><td>扩展插件、全局配置、账号与系统参数、本手册</td></tr>
                 </table>
                 <div class="warn"><b>注意：</b>页面上所有列表服务端分页默认可能较小，可通过列表中的分页条切换每页行数；搜索框支持按名称模糊过滤。</div>
             </section>
@@ -130,9 +161,9 @@
                 <h3 id="manual-h3-2">3.2 连接参数速查</h3>
                 <table>
                     <tr><th>数据库</th><th>默认端口</th><th>用户名形式 / 连接示例</th><th>备注</th></tr>
-                    <tr><td>MySQL / MariaDB</td><td>3306</td><td><code>host:port / user:password</code></td><td>需 binlog=ROW（增量前置见第 11 节）</td></tr>
+                    <tr><td>MySQL / MariaDB</td><td>3306</td><td><code>host:port / user:password</code></td><td>需 binlog=ROW（增量前置见第 14 章）</td></tr>
                     <tr><td>PostgreSQL</td><td>5432</td><td><code>host:port/database</code></td><td>逻辑复制需 wal_level=logical</td></tr>
-                    <tr><td>Oracle</td><td>1521</td><td><code>host:port/service_name(SID)</code></td><td>增量用 LogMiner，需归档与补充日志</td></tr>
+                    <tr><td>Oracle</td><td>1521</td><td><code>host:port/service_name(SID)</code></td><td>增量用 LogMiner，需归档与补充日志；DBLink 查询也在此配置</td></tr>
                     <tr><td>达梦 DM8</td><td>5236</td><td><code>host:port</code>（用户名 SYSDBA 等）</td><td>增量用 DM LogMiner，需归档</td></tr>
                     <tr><td>人大金仓 KES V9</td><td>54321</td><td><code>host:port/database</code></td><td>增量扩展参数 <code>pluginName=syslogical_output</code></td></tr>
                     <tr><td>SQLite / H2</td><td>—</td><td>文件路径</td><td>仅单机文件库</td></tr>
@@ -181,7 +212,7 @@
                     <li>映射表行内操作：<i class="fa fa-edit"></i> 修改该条映射、<i class="fa fa-trash-o"></i> 删除该条映射、<b>双击行</b> 标记/取消目标主键、<b>拖拽行</b> 调整顺序；</li>
                     <li>底部「提交」保存字段映射配置。</li>
                 </ul>
-                <div class="warn"><b>注意：</b>同一源字段只能映射到一条记录；目标主键至少要有一条映射标记（同步语义需要按键定位行）。字段映射为空时，预检测会报 ERROR 阻止启动。</div>
+                <div class="warn"><b>注意：</b>同一源字段只能映射到一条记录；目标主键至少要有一条映射标记。字段映射为空时预检测会报 ERROR 阻止启动。开启「无主键表退化支持」后，缺主键的表可用唯一索引列定位，详见 12.5。</div>
 
                 <h3 id="manual-h4-4">4.4 同步方式与执行模式</h3>
                 <p>在映射编辑页（<i class="fa fa-edit"></i> 修改）中：</p>
@@ -189,8 +220,8 @@
                     <tr><th>配置</th><th>取值</th><th>说明</th></tr>
                     <tr><td>执行模式</td><td>全量 / 全量+增量</td><td>「全量+增量」先做一次全量迁移，再进入 CDC 增量持续监听</td></tr>
                     <tr><td>增量方式</td><td>log 日志增量 / timing 定时拉取</td><td>log：实时解析数据库日志（推荐）；timing：按设定间隔轮询对比（分钟级延迟）</td></tr>
-                    <tr><td>增量选项</td><td>插入 / 更新 / 删除 / DDL</td><td>按需勾选；删除默认按主键定位目标行</td></tr>
-                    <tr><td>写入方式</td><td>SYNC / ASYNC</td><td>见「写入方式」单选；大批量建议默认</td></tr>
+                    <tr><td>增量选项</td><td>插入 / 更新 / 删除 / DDL</td><td>按需勾选；删除默认按主键定位目标行；表级 DDL 见 12.5</td></tr>
+                    <tr><td>写入方式</td><td>SYNC / ASYNC</td><td>SYNC 串行（强一致）/ ASYNC 并发写（高吞吐）</td></tr>
                     <tr><td>插件（可选）</td><td>转换处理插件</td><td>在【插件管理】上传企业自定义处理插件后，可在映射/表映射上挂载</td></tr>
                 </table>
 
@@ -210,8 +241,19 @@
                     <li>「同步结果」列实时显示 总条数 / 成功 / 失败 / 差异 / 耗时；状态列显示未运行-启动中-运行中-已完成等；</li>
                     <li>增量任务保持"运行中"持续监听；需要暂停时点击 <span class="uibox"><i class="fa fa-stop"></i></span> 停止；</li>
                     <li>点击任务名称可进入详情页查看各表进度明细；</li>
-                    <li>行内其他按钮：<i class="fa fa-indent"></i> 字段映射、<i class="fa fa-copy"></i> 复制任务（复制配置快速创建同构任务）。</li>
+                    <li>行内其他按钮：<i class="fa fa-indent"></i> 字段映射、<i class="fa fa-copy"></i> 复制任务（复制配置快速创建同构任务）；</li>
+                    <li>开启「集群 HA」后，启动会先申请 leader 与任务独占租约；未取得租约时启动失败并给出提示，详见 12.4。</li>
                 </ol>
+
+                <h3 id="manual-h4-7">4.7 写入失败后的行为（Wave22/23）</h3>
+                <p>写入不再是「失败就只落明细」：</p>
+                <ul>
+                    <li><b>瞬时故障自动重试</b>：死锁、连接闪断等按指数退避就地重试（默认 3 次、基础 50ms、单行预算 2000ms、整批预算不超过 8 秒），成功计入「自动重试挽回」，不产生失败明细；</li>
+                    <li><b>永久故障落死信</b>：主键冲突、类型/约束错误等不做无效重试，失败明细带结构化标签，可在【链路健康】页面筛选；</li>
+                    <li><b>失败明细可安全重放</b>：人工重推或开启自动重放时，只有拿到明确的写入成功确认才会删除明细，避免二次失败导致数据永久丢失；</li>
+                    <li><b>断点续传</b>：位点仍由既有 Meta 快照持久化；开启事务型 checkpoint 后额外按幂等键去重，详见 12.3。</li>
+                </ul>
+                <div class="tip">需要逐行查看全量任务的失败明细时，在系统配置页开启 <code>enableStorageWriteFull</code>；默认全量失败只计入死信指标而不落逐行明细。</div>
             </section>
 
             <section id="manual-h5">
@@ -233,7 +275,8 @@
                 <ul>
                     <li>顶部可按 <b>来源数据库类型</b>、<b>同步方案</b> 组合过滤后查看/导出；</li>
                     <li><b>导出迁移记录（CSV）</b>：按当前过滤条件导出任务维度记录（UTF-8 BOM，Excel 打开中文不乱码）；</li>
-                    <li><b>导出迁移清单（CSV）</b>：导出表映射维度明细（源库/源Schema/源表，目标库/目标Schema/目标表，字段映射条数，排序号）。</li>
+                    <li><b>导出迁移清单（CSV）</b>：导出表映射维度明细（源库/源Schema/源表，目标库/目标Schema/目标表，字段映射条数，排序号）；</li>
+                    <li>超大明细内容会自动外置为分块存储（见 9 节「超大内容外置」），避免单条记录撑爆存储字段。</li>
                 </ul>
                 <div class="warn"><b>重要：</b>删除数据同步任务会同时清除其记录展示数据源（记录页读取任务与运行元数据）。如需保留历史记录展示，请<b>停止</b>任务而非删除任务。</div>
             </section>
@@ -248,7 +291,8 @@
                     <li>点击下一步保存任务；</li>
                     <li>列表行内点击 <span class="uibox"><i class="fa fa-list-alt"></i></span> <b>预检测</b>（整库规则：库级连通性、建表权限、同库校验等；表无显式字段映射时按同名字段自动推断）；</li>
                     <li>点击 <span class="uibox"><i class="fa fa-play"></i></span> 启动迁移；「迁移结果」列实时刷新进度；</li>
-                    <li>点击任务名称进入详情，查看每张表的迁移状态（成功/失败/耗时）。</li>
+                    <li>点击任务名称进入详情，查看每张表的迁移状态（成功/失败/耗时）；</li>
+                    <li>迁移完成后可用「一键数据对比」创建对比任务，全量校验一致性。</li>
                 </ol>
                 <div class="warn"><b>注意：</b>整库迁移会在目标库创建表；若目标库已存在同名表，预检测/运行时会按提示处理（遇结构冲突建议先在目标库删除旧表）。</div>
             </section>
@@ -258,97 +302,290 @@
                 <p>路径：【数据对比 → 对比任务】（独立一级菜单）。用于对已完成迁移/同步的数据做<b>一致性校验</b>，输出差异明细与修复 SQL，并按需<b>订正差异</b>。</p>
                 <ol>
                     <li>创建对比任务：选择源/目标连接与库、配置表映射；<b>对比模式</b>可选——全量逐行对比（精确定位差异，推荐）或抽样对比（按步长跳页采样，大表快速健康检查，不定位具体行）；</li>
-                    <li>运行后查看对比结果：源/目标总行数、差异数（diffTotal）、字段级差异明细（哪些字段、源值/目标值各是什么）；</li>
+                    <li>运行后查看对比结果：源/目标总行数、差异数（diffTotal）、字段级差异明细（哪些字段、源值/目标值各是什么）；支持字段级指纹校验，减少大字段逐值比对开销；</li>
                     <li>每条差异自动携带<b>修复 SQL</b>（目标缺失→INSERT、数据不一致→UPDATE、目标多余→DELETE，BLOB 生成 0x 十六进制字面量），可直接复制到目标端人工执行；</li>
-                    <li>差异订正两种方式：①差异详情中逐条「手动订正」（系统直接修正目标端数据）；②创建任务时显式开启「发现差异自动订正」（默认关闭，开启后对比发现差异即自动修改目标端数据，请谨慎评估）；</li>
-                    <li>反向扫描（可选）：检查目标库中源端不存在的多余行并按需清理；</li>
+                    <li>差异订正：①差异详情中逐条「手动订正」；②批量勾选多条差异一键重推（支持跨明细按业务键聚合后分批执行）；③创建任务时显式开启「发现差异自动订正」（默认关闭，请谨慎评估）；</li>
+                    <li>对账报告可导出留档；反向扫描（可选）检查目标库中源端不存在的多余行并按需清理；</li>
                     <li>周期对比：任务触发方式选定时（cron），可按天/周自动执行对比；</li>
-                    <li>整库迁移任务完成后，可在【整库迁移】列表点击「一键数据对比」，按迁移任务的全部映射自动创建对比任务；</li>
-                    <li>建议：全量迁移完成后先做一次全量对比确认一致，增量运行期间可用抽样对比做周期健康检查。</li>
+                    <li>整库迁移任务完成后，可在【整库迁移】列表点击「一键数据对比」，按迁移任务的全部映射自动创建对比任务。</li>
                 </ol>
             </section>
 
-<section id="manual-h8">
+            <section id="manual-h8">
                 <h2><i class="fa fa-sitemap"></i> 8. 数据血缘</h2>
                 <p>路径：【数据同步 → 数据血缘】。展示 表 → 表 的同步链路关系图（源库 → 源表 → 目标库 → 目标表），用于梳理数据流向、评估变更影响。任务建立/修改后自动采集，可按连接、库、表过滤查询。</p>
             </section>
 
             <section id="manual-h9">
-                <h2><i class="fa fa-line-chart"></i> 9. 性能监控与告警通知</h2>
+                <h2><i class="fa fa-magic"></i> 9. 迁移评估（六个辅助页面）</h2>
+                <p>菜单组【迁移评估】包含六个页面，服务于异构迁移前后的评估、演练与辅助处理。它们都是<b>辅助工具</b>，不会自动改写生产数据。</p>
+                <table>
+                    <tr><th>页面</th><th>能做什么</th><th>主要端点</th></tr>
+                    <tr><td>SQL 兼容扫描</td><td>扫描源端 SQL / PL-SQL 的兼容性，给出风险分级与改写草稿；识别存储过程、函数、触发器、包、自定义类型；DDL 类型映射与分区子句识别</td><td><code>/sql-scan/scan</code></td></tr>
+                    <tr><td>慢 SQL 采集</td><td>查看 avg / max / p95 / TopN 慢 SQL，运行时调整阈值、容量与采样率；慢 SQL 记录追加式落盘，重启后回放最近 N 条</td><td><code>/slow-sql/report</code>、<code>/slow-sql/config</code></td></tr>
+                    <tr><td>逻辑导入导出</td><td>RFC4180 CSV 导出/导入（引号、转义、首行表头、列数校验）；按 mysql/oracle/pg 方言生成 INSERT 脚本</td><td><code>/logical-io/exportCsv</code>、<code>/logical-io/exportInsert</code>、<code>/logical-io/importCsv</code></td></tr>
+                    <tr><td>切流编排</td><td>10 相位切流状态机、影子写配对与 flipSafe 判定、回滚预案查看与状态迁移</td><td><code>/cutover/create</code>、<code>/cutover/transition</code>、<code>/cutover/state</code>、<code>/cutover/rollbackPlan</code></td></tr>
+                    <tr><td>超大内容外置</td><td>超过 65535 字节的内容外置为 <code>DBDS-REF</code> 引用串，支持存/取/删；块存储可在内存与文件持久化之间切换（文件方式跨重启可恢复）</td><td><code>/content-offload/store</code>、<code>/content-offload/resolve</code>、<code>/content-offload/storeConfig</code></td></tr>
+                    <tr><td>DBLink 查询</td><td>探测源库 <code>all_db_links</code>，执行带 <code>@dblink</code> 的只读查询（SELECT/WITH 白名单、maxRows 限行、截断标记）</td><td><code>/dblink/links</code>、<code>/dblink/query</code></td></tr>
+                </table>
+                <div class="warn"><b>边界：</b>切流编排给出的是状态权威与回滚预案，<b>真实切流动作需人工/外部编排执行，系统不会自动切换生产流量</b>；SQL 兼容扫描是离线静态扫描，不等于真库执行结果；DBLink 查询为只读白名单通道。</div>
+            </section>
+
+            <section id="manual-h10">
+                <h2><i class="fa fa-line-chart"></i> 10. 性能监控与告警通知</h2>
                 <h3>性能监控</h3>
                 <ul>
-                    <li>路径：【监控告警 → 性能监控】；展示当前运行任务的同步速率（行/秒）、缓冲区堆积、连接池等指标；</li>
-                    <li>长表格同步建议关注"缓冲区堆积"是否持续升高，必要时增加缓冲批大小（参考第 12 节诊断开关定位瓶颈）。</li>
+                    <li>路径：【监控告警 → 性能监控】；展示当前运行任务的同步速率（行/秒）、缓冲区堆积、连接池、JVM 等指标；</li>
+                    <li>长表格同步建议关注"缓冲区堆积"是否持续升高，必要时调整 <code>maxBufferActuatorSize</code>（参考第 15 章诊断开关）。</li>
                 </ul>
                 <h3>告警通知</h3>
                 <ul>
-                    <li>路径：【监控告警 → 告警通知】；可按任务运行失败/异常启用通知；</li>
+                    <li>路径：【监控告警 → 告警通知】；支持任务失败、连接离线、任务停止、校验失败以及<b>链路健康异常</b>等类型，可配置邮件、企微、钉钉、HTTP WebHook 等渠道；</li>
+                    <li><b>链路健康告警</b>由 <code>enableReplicationAlarm</code> 控制，按 <code>lagWarnSeconds</code> / <code>lagCriticalSeconds</code> / <code>failRateWarnPercent</code> 判定，同链路按 <code>healthAlarmCooldownSeconds</code>（默认 600 秒）冷却，避免告警风暴；后台每 60 秒评估一次；</li>
                     <li>配置通知渠道后在任务编辑页关联启用，异常发生时按渠道推送。</li>
                 </ul>
             </section>
 
-            <section id="manual-h10">
-                <h2><i class="fa fa-cog"></i> 10. 系统管理</h2>
-                <table>
-                    <tr><th>功能</th><th>说明</th></tr>
-                    <tr><td>插件管理</td><td>上传/管理数据处理扩展插件（jar），供映射/表映射挂载，用于字段转换等自定义逻辑</td></tr>
-                    <tr><td>配置管理</td><td>查看系统加载的配置文件内容（application.properties 等），修改后需重启生效</td></tr>
-                    <tr><td>用户管理</td><td>账号增删改、密码重置、启用停用；首次部署后请立即修改默认密码</td></tr>
-                    <tr><td>系统配置</td><td>系统级参数（工作线程、缓冲区、调度线程池等），调整后重启生效</td></tr>
-                    <tr><td>操作手册</td><td>本页面；离线内置，可离线环境直接查阅</td></tr>
-                </table>
-            </section>
-
             <section id="manual-h11">
-                <h2><i class="fa fa-cubes"></i> 11. 增量同步前置条件（重要）</h2>
-                <p>“全量+增量” 使用数据库日志实时监听，各数据库需提前做以下准备（一次性配置）：</p>
+                <h2><i class="fa fa-heartbeat"></i> 11. 实时链路健康 <span class="badge-new">Wave22/23</span></h2>
+                <p>路径：【监控告警 → 链路健康】（<code>/link-health</code>）。这是观察增量同步任务运行质量的主页面：端到端复制延迟、链路停滞、失败率、自动重试挽回、死信堆积与 Prometheus 指标一处掌握。页面每 <b>15 秒自动刷新</b>，也可点「立即刷新」；深浅主题均适配。</p>
+
+                <h3 id="manual-h11-1">11.1 页面指标与健康等级</h3>
                 <table>
-                    <tr><th>数据库</th><th>前置要求</th></tr>
-                    <tr>
-                        <td>MySQL / MariaDB</td>
-                        <td><code>server-id</code> 唯一、<code>binlog-format=ROW</code>、<code>binlog-row-image=FULL</code>；账号需 REPLICATION SLAVE 权限</td>
-                    </tr>
-                    <tr>
-                        <td>PostgreSQL</td>
-                        <td><code>wal_level=logical</code>、<code>max_replication_slots</code> ≥ 任务数；重启实例生效</td>
-                    </tr>
-                    <tr>
-                        <td>Oracle</td>
-                        <td>归档模式（ARCHIVELOG）、<code>ENABLE supplemental log data</code>；账号有 LogMiner 执行权限（SELECT ANY TRANSACTION 等）</td>
-                    </tr>
-                    <tr>
-                        <td>达梦 DM8</td>
-                        <td>开启归档（ARCH_INI）；同步账号具备 LogMiner 相关字典访问权限；start 选项可用 JVM 参数 <code>-Ddbdatasync.dm.logminer.options=NN</code> 调整（默认 16）。<b>实时性由产品自动保障</b>：每轮轮询重开会话读取最新归档，空轮询且有堆积时自动切归档（空闲库不切），实测增量延迟约 6 秒，无需人工切归档</td>
-                    </tr>
-                    <tr>
-                        <td>人大金仓 KES V9</td>
-                        <td><code>wal_level=logical</code> 并重启（配置备份 <code>kingbase.conf.bak_dbsync</code> 连接方式见现场部署记录）；连接<b>扩展参数</b>填 <code>{"pluginName":"syslogical_output"}</code>（V009R003C011 实测）</td>
-                    </tr>
+                    <tr><th>区域</th><th>内容</th></tr>
+                    <tr><td>KPI 卡</td><td>链路健康分（/100）、运行中链路数、最长链路停滞（秒）、<b>最大端到端复制延迟（秒）</b>、死信待处理条数（并显示自动重试挽回行数）</td></tr>
+                    <tr><td>运行策略卡</td><td>停滞预警/严重阈值、失败率阈值、健康告警开关、Prometheus 导出开关、真实延迟链路数、集群节点状态、最近更新时间</td></tr>
+                    <tr><td>链路清单</td><td>逐任务展示健康等级、lagSeconds、lagSource、事件数、失败/死信、重试挽回、最后事件时间；可按等级筛选</td></tr>
+                    <tr><td>失败明细 / 死信</td><td>列出带标签的失败记录，标记 <code>deadLetter</code> / <code>kind</code> / <code>syncFail</code>，便于定位哪些可自动恢复、哪些必须人工处理</td></tr>
+                    <tr><td>集群状态</td><td>未开启 HA 时显示 STANDALONE；开启后显示 leader / 节点 / 租约状态（来自 <code>/link-health/cluster</code>）</td></tr>
                 </table>
-                <div class="danger"><b>未满足前置条件时的典型现象：</b>任务能启动、全量成功，但增量数据一直为 0；或启动即报日志跳转错误。请先核对第 11 节配置，再用第 12 节诊断开关定位。</div>
+                <p>健康等级为 <code>IDLE / HEALTHY / WARN / CRITICAL / STALE</code>，按运行态、停滞或 lag、失败率、死信数量取<b>最严重等级与最低分</b>。纯空闲且无失败/死信的链路不会误报告警。</p>
+
+                <h3 id="manual-h11-2">11.2 真实复制延迟与停滞的区别（重要）</h3>
+                <ul>
+                    <li><b>端到端复制延迟（lagSeconds）</b>：以源端事件时间为准。MySQL 从 binlog event header 读取提交时间戳，经 <code>ChangedOffset.eventTime</code> 一路传到健康报告与 Prometheus；<code>lagSource=source</code> 时页面显示真实延迟；</li>
+                    <li><b>链路停滞（stall）</b>：以「系统最后一次收到事件 / 位点推进的墙钟时间」计算。<code>lagSource=estimated</code> 或 <code>unknown</code> 的连接器只有停滞，没有真实 lag——<b>此时源端长时间无变更也会计入停滞</b>；</li>
+                    <li>没有源端时间的连接器<b>绝不冒充</b>端到端延迟，页面用时间来源徽章明确区分；要拿到真实 lag 必须由对应 Listener 填充 <code>eventTime</code>。</li>
+                </ul>
+
+                <h3 id="manual-h11-3">11.3 死信明细与 Prometheus</h3>
+                <ul>
+                    <li><b>Prometheus 抓取端点</b>：<code>GET /link-health/prometheus</code>，标准 0.0.4 文本格式，含 <code>dbdatasync_max_lag_seconds</code>、<code>dbdatasync_link_lag_seconds</code>、链路状态、停滞秒数、健康分、成功/失败/死信与 JVM 指标。由 <code>enablePrometheus</code> 控制；</li>
+                    <li>端点<b>受登录会话保护</b>，不会匿名暴露。生产若需 Prometheus 免认证抓取，请在网关侧配置固定 Token / IP 白名单后反向代理，<b>不要</b>把端点直接开放到公网；</li>
+                    <li>运行时指标是<b>进程内累计量</b>，重启后重新累计（与 Prometheus 客户端语义一致）；位点等持久化状态仍由 Meta 快照负责。</li>
+                </ul>
+                <h3>相关 REST 端点（均需登录）</h3>
+                <table>
+                    <tr><th>方法 / 路径</th><th>说明</th></tr>
+                    <tr><td><code>GET /link-health</code></td><td>链路健康页面</td></tr>
+                    <tr><td><code>POST /link-health/report</code></td><td>健康总览 + 逐链路明细</td></tr>
+                    <tr><td><code>POST /link-health/deadLetters</code></td><td>失败明细 / 死信列表（可按任务过滤）</td></tr>
+                    <tr><td><code>POST /link-health/cluster</code></td><td>集群角色与租约状态（Wave23）</td></tr>
+                    <tr><td><code>GET /link-health/prometheus</code></td><td>Prometheus 文本指标</td></tr>
+                    <tr><td><code>POST /batch-profile/report</code></td><td>批写性能剖析（p50/p95/max 耗时与行数，Wave24）</td></tr>
+                    <tr><td><code>POST /batch-profile/reset</code></td><td>清空批写剖析计数（Wave24，严格模式需 admin + CSRF）</td></tr>
+                </table>
             </section>
 
             <section id="manual-h12">
-                <h2><i class="fa fa-stethoscope"></i> 12. 故障诊断与排查</h2>
+                <h2><i class="fa fa-shield"></i> 12. 可靠性与数据一致性 <span class="badge-new">Wave22–24</span></h2>
+                <p>本章说明增量链路在失败、重启、多节点场景下的实际行为，以及需要在【系统配置】显式开启的能力。<b>除写入重试、健康告警、Prometheus、无主键退化外，架构级能力默认全部关闭</b>，存量部署行为不变。</p>
+
+                <h3 id="manual-h12-1">12.1 写入重试与死信标签</h3>
+                <ul>
+                    <li>异常按 <code>TRANSIENT / PERMANENT / UNKNOWN</code> 分类（异常类名 + SQLState + cause 链 + 消息特征，永久优先），瞬时故障做指数退避 + 抖动重试，次数 / 单行时间预算 / 整批时间预算三重约束；</li>
+                    <li>失败明细的 <code>error</code> 文本会打结构化标签：<code>[SYNC_FAIL]</code>、<code>[DEAD_LETTER] [kind=...] [retry=n]</code>；重复打标幂等；</li>
+                    <li>混合批次按「永久优先」保守判定，避免把不可恢复的行误标为可重试；Wave24 起失败明细同时落<b>逐行分类</b>（<code>RowFailure</code>：行号、异常类名、SQLState、失败类别与是否死信），单行失败不再只体现批次口径；</li>
+                    <li>死信标记只占用既有 <code>error</code> 长文本列，<b>不改表结构、不改 isSuccess 值域</b>，对既有查询与报表零副作用。</li>
+                </ul>
+
+                <h3 id="manual-h12-2">12.2 死信安全重放</h3>
+                <p>旧版人工重推在写入尚未发生时就会删除失败明细，二次失败会永久丢数据。现在：</p>
+                <ul>
+                    <li>人工重推与自动重放都通过「重放结果确认」（<code>ReplayConfirmation</code>）门闩，<b>只有写入明确成功才删除失败明细并自减失败计数</b>，否则保留记录并报错；</li>
+                    <li>自动重放由 <code>enableDeadLetterAutoReplay</code> 控制（默认关闭），每 60 秒扫描一次带失败标签的记录，指数退避 + 次数上限 + 批量上限，参数见 <code>deadLetterReplayMaxAttempts</code> / <code>deadLetterReplayBaseMillis</code>；</li>
+                    <li>未拿到成功确认的记录会一直保留，可继续人工处置。</li>
+                </ul>
+
+                <h3 id="manual-h12-3">12.3 事务型 checkpoint 与幂等键</h3>
+                <p>由 <code>enableTransactionalCheckpoint</code> 控制（默认关闭）。开启后在真实增量链路上：</p>
+                <ol>
+                    <li>按 <code>metaId + 文件 + 位点 + 序号 + 表 + 事件 + 行内容</code> 计算 SHA-256 幂等键（行内容对 Map 排序，保证键稳定）；</li>
+                    <li>重复事件在缓冲执行器入口直接丢弃；位点以每个 metaId 一个 <code>.properties</code> 文件原子提交（临时文件 + ATOMIC_MOVE），幂等账本追加式落盘并在超 <code>checkpointMaxKeys</code> 时压缩；</li>
+                    <li><b>数据写入成功后</b>先提交 checkpoint，再发布位点刷新事件；崩溃重启时若账本缺失但 checkpoint 的 lastKey 命中，会自动补记，覆盖「写入完成、账本未落盘」的窗口。</li>
+                </ol>
+                <div class="warn"><b>边界：</b>这是向 exactly-once <b>收敛</b>，不是跨目标库事务与位点文件的强一致 exactly-once。目标端仍需主键 / 唯一键 upsert 配合，否则重复写入仍可能产生重复行。<code>checkpointDir</code> 目录必须可写；多节点部署时需共享存储。</div>
+                <p><b>Wave24 增强（目标库事务内位点，<code>enableCheckpointInTargetTx</code>，默认关闭）</b>：开启后位点写入目标库 <code>__DBSYNC_CHECKPOINT</code> 表，并在数据写入的<b>同一 JDBC 事务</b>内提交——数据与位点要么都成功要么都回滚，崩溃后从目标库读到什么就是什么，消除了「写入成功、位点未落盘」的窗口。<b>前置条件：</b>需先在目标库建表：</p>
+                <pre>CREATE TABLE __DBSYNC_CHECKPOINT (
+  META_ID VARCHAR(128) NOT NULL,
+  FILE_NAME VARCHAR(256),
+  POSITION VARCHAR(256),
+  EVENT_TIME BIGINT,
+  IDEMPOTENCY_KEY VARCHAR(128),
+  UPDATED_AT TIMESTAMP,
+  PRIMARY KEY (META_ID)
+);</pre>
+                <p>需与 <code>enableTransactionalCheckpoint</code> 配合使用；位点表查询失败会回退到文件位点并打 warn，不会阻塞链路。</p>
+
+                <h3 id="manual-h12-4">12.4 集群 HA 与任务租约</h3>
+                <p>由 <code>enableClusterHA</code> 控制（默认关闭），租约目录为 <code>clusterLeaseDir</code>。开启后：</p>
+                <ul>
+                    <li><b>启动任务</b>：先校验 leader 身份并申请任务独占租约，任一失败则启动报错；启动异常回滚时归还租约；</li>
+                    <li><b>停止 / 进程关闭</b>：正常关闭与 Spring 关闭事件都会释放租约，其它节点无需苦等 TTL；</li>
+                    <li><b>故障接管</b>：后台每 30 秒扫描过期租约，只对 RUNNING 态元信息自动恢复启动，逐条异常隔离；</li>
+                    <li><b>状态查看</b>：链路健康页「集群节点」或 <code>/link-health/cluster</code>。</li>
+                </ul>
+                <div class="danger"><b>边界：</b>当前实现是<b>共享文件租约</b>（leader 租约 + 任务独占租约 + 心跳），不是分布式共识。多节点 HA 必须把 <code>clusterLeaseDir</code> 挂到同一 NFS / 共享盘，否则各节点看到的是各自本地文件，HA 不成立。需要强一致选主时，后续应接 ZooKeeper / etcd 或数据库 advisory lock。</div>
+
+                <h3 id="manual-h12-5">12.5 无主键表与表级 DDL</h3>
+                <ul>
+                    <li><b>无主键表</b>：由 <code>enableNoPkFallback</code> 控制（默认开启）。行身份按 <code>PRIMARY_KEY → UNIQUE_KEY → FULL_ROW_HASH → NONE</code> 退化；只有主键 / 唯一索引能拼目标端 WHERE 条件，全行哈希仅用于审计与去重，不伪装成目标端列；</li>
+                    <li><b>表级 DDL</b>：识别 <code>CREATE/DROP/TRUNCATE/RENAME TABLE</code>、索引与约束变更，先分类再标记「需人工确认」；<code>DROP / TRUNCATE / RENAME</code> 必须人工确认，系统不会自动生成目标端可执行 SQL；</li>
+                    <li><b>Wave24 表级 DDL 自动同步（<code>enableDdlAutoSync</code>，默认关闭）</b>：开启后非高风险表级 DDL 自动翻译并写目标端，历史落 <code>schemaHistoryDir</code>（JSONL，含状态与目标端 SQL）；高风险类型（DROP/TRUNCATE/RENAME 等）仍必须人工确认；</li>
+                    <li><b>DDL-DML 顺序守卫（<code>enableDdlDmlOrderGuard</code>，默认开启）</b>：某表的 DDL 处于「待确认」状态时，同表 DML 自动挂起，确认应用后按原顺序重放，避免按旧 schema 写入；确认 / 解除挂起走 <code>/schema-history/confirm</code>、<code>/schema-history/unblock</code>；</li>
+                    <li>列级 ALTER（加字段、改类型、删列、改名）仍按 <code>ddlSyncPolicy</code> 策略执行；表级识别不会误伤加字段等存量自动能力。</li>
+                </ul>
+
+                <h3 id="manual-h12-6">12.6 Wave24 其它增强</h3>
+                <ul>
+                    <li><b>真实 lag 全连接器覆盖</b>：除 MySQL binlog 时间戳外，PG / Kingbase 从逻辑复制协议的 commit 时间取源端事件时间（<code>source</code>），Oracle 从 LogMiner redo 的 SCN 对应时间取值，MongoDB 用 change stream 的 cluster time，Kafka / RocketMQ 用消息生产时间，SQL Server 用 CDC <code>lsn_time_mapping</code> 的事务提交时间；Redis / 文件等无源端时钟的来源仍标注 <code>estimated</code>，不冒充真实延迟；</li>
+                    <li><b>慢 SQL 任务级上下文</b>：慢 SQL 记录带 <code>taskId</code>（写入线程自动继承），<code>GET /slowsql/list</code> 可按任务过滤；</li>
+                    <li><b>批写性能剖析</b>：<code>/batch-profile/report</code> 输出批写次数 / 行数 / p50 / p95 / max 耗时（滑动窗口），用于大事务批写性能定位；</li>
+                    <li><b>Trigger CDC（SQLite 源端）</b>：<code>TriggerLogListener</code> 通过源库触发器把 DML 写入 <code>__DBSYNC_SYNC_LOG</code> 表并按序消费，供不支持 binlog / 逻辑复制的库做增量兜底；需要启用时把任务的监听方式配置为触发器模式；</li>
+                    <li><b>自动切流执行器（<code>enableCutoverAutoExecute</code>，默认关闭）</b>：相位推进成功后调用真实执行动作（状态机 + 回滚预案 + 影子写不变）；未接入外部动作处理器时执行结果明确标记 <code>simulated</code>，不会冒充已切流；切流与回滚入口在【迁移评估 → 切流编排】。</li>
+                </ul>
+                <div class="tip"><b>代码说明：</b>历史原型 <code>dbdatasync-engine</code> 模块已从构建中<b>整体退役</b>（Wave24 起 pom 不再包含该模块，源码归档于仓库外），排查问题请以 manager 模块的 FullPuller / IncrementPuller / FullIncrementPuller 为准。</div>
+            </section>
+
+            <section id="manual-h13">
+                <h2><i class="fa fa-cog"></i> 13. 系统管理与配置速查</h2>
+                <table>
+                    <tr><th>功能</th><th>说明</th></tr>
+                    <tr><td>插件管理</td><td>上传/管理数据处理扩展插件（jar），供映射/表映射挂载，用于字段转换等自定义逻辑</td></tr>
+                    <tr><td>配置管理</td><td>查看系统加载的配置文件内容（application.properties 等），修改配置文件后需重启生效</td></tr>
+                    <tr><td>用户管理</td><td>账号增删改、密码重置、启用停用；首次部署后请立即修改默认密码</td></tr>
+                    <tr><td>系统配置</td><td>下表全部参数；<b>页面保存后即时生效</b>（写入重试、健康阈值、checkpoint、HA、严格安全、重放开关均通过运行期桥接生效），无需重启</td></tr>
+                    <tr><td>操作手册</td><td>本页面；离线内置，可离线环境直接查阅</td></tr>
+                </table>
+
+                <h3 id="manual-h13-1">13.1 系统配置参数速查表（与配置页一一对应）</h3>
+                <p>下表字段名即配置页表单字段，便于对照日志与接口排查。括号内为默认值。</p>
+                <h4>基础与存储</h4>
+                <table>
+                    <tr><th>字段</th><th>默认值</th><th>作用</th></tr>
+                    <tr><td><code>expireDataDays</code></td><td>30</td><td>业务数据保留天数</td></tr>
+                    <tr><td><code>expireLogDays</code></td><td>30</td><td>运行日志保留天数</td></tr>
+                    <tr><td><code>expireFileLogDays</code></td><td>15</td><td>文件日志保留天数</td></tr>
+                    <tr><td><code>enableStorageWriteSuccess</code></td><td>关</td><td>是否持久化成功明细</td></tr>
+                    <tr><td><code>enableStorageWriteFail</code></td><td>开</td><td>是否持久化失败明细（死信与人工重推依赖它）</td></tr>
+                    <tr><td><code>enableStorageWriteFull</code></td><td>关</td><td>是否持久化全量失败明细；开启后死信才有逐行明细</td></tr>
+                    <tr><td><code>maxStorageErrorLength</code></td><td>8192</td><td>错误信息最大长度</td></tr>
+                    <tr><td><code>enableWatermark</code> / <code>watermark</code></td><td>关 / 空</td><td>页面水印开关与内容</td></tr>
+                    <tr><td><code>maxBufferActuatorSize</code></td><td>50</td><td>缓冲执行器容量</td></tr>
+                    <tr><td><code>maxMappingSize</code></td><td>100</td><td>任务数量上限（0 表示不限）</td></tr>
+                    <tr><td><code>maxRunningMappingSize</code></td><td>20</td><td>同时运行任务上限（0 表示不限）</td></tr>
+                    <tr><td><code>ddlSyncPolicy</code></td><td>all</td><td>DDL 同步策略：all / add_only / off</td></tr>
+                    <tr><td><code>enablePrintTraceInfo</code></td><td>关</td><td>输出链路追踪信息</td></tr>
+                    <tr><td><code>enableOpenAPI</code> / <code>apiSecret</code></td><td>关 / 空</td><td>OpenAPI 网关开关与密钥</td></tr>
+                    <tr><td><code>rsaKeyLength</code> / <code>rsaPublicKey</code> / <code>rsaPrivateKey</code></td><td>—</td><td>RSA 密钥长度与密钥对（敏感信息，勿外泄）</td></tr>
+                    <tr><td><code>ipWhitelist</code> / <code>ipWhitelistEnabled</code> / <code>ipWhitelistAllowLocalhost</code></td><td>—</td><td>IP 白名单、启用开关、是否放行本机</td></tr>
+                </table>
+                <h4>写入可靠性与链路健康（Wave22，默认开启）</h4>
+                <table>
+                    <tr><th>字段</th><th>默认值</th><th>作用</th></tr>
+                    <tr><td><code>enableWriteRetry</code></td><td>开</td><td>瞬时写入故障自动重试总开关</td></tr>
+                    <tr><td><code>writeRetryMaxAttempts</code></td><td>3</td><td>单行最大重试次数</td></tr>
+                    <tr><td><code>writeRetryBaseMillis</code></td><td>50</td><td>指数退避基础间隔（ms）</td></tr>
+                    <tr><td><code>writeRetryMaxMillis</code></td><td>2000</td><td>单行重试时间预算（ms），整批另有上限</td></tr>
+                    <tr><td><code>enableReplicationAlarm</code></td><td>开</td><td>链路健康告警开关</td></tr>
+                    <tr><td><code>lagWarnSeconds</code></td><td>60</td><td>停滞 / 延迟预警阈值（秒）</td></tr>
+                    <tr><td><code>lagCriticalSeconds</code></td><td>300</td><td>停滞 / 延迟严重阈值（秒）</td></tr>
+                    <tr><td><code>failRateWarnPercent</code></td><td>5</td><td>失败率告警阈值（%）</td></tr>
+                    <tr><td><code>healthAlarmCooldownSeconds</code></td><td>600</td><td>同链路告警冷却（秒）</td></tr>
+                    <tr><td><code>enablePrometheus</code></td><td>开</td><td>Prometheus 指标导出开关</td></tr>
+                </table>
+                <h4>架构级能力（Wave23，默认关闭，启用前请确认目录可被所有节点访问）</h4>
+                <table>
+                    <tr><th>字段</th><th>默认值</th><th>作用</th></tr>
+                    <tr><td><code>enableTransactionalCheckpoint</code></td><td>关</td><td>幂等键去重 + 写入成功后提交位点（见 12.3）</td></tr>
+                    <tr><td><code>checkpointDir</code></td><td>data/checkpoints</td><td>位点文件与幂等账本目录，多节点需共享存储</td></tr>
+                    <tr><td><code>checkpointMaxKeys</code></td><td>200000</td><td>幂等账本上限，超限自动压缩</td></tr>
+                    <tr><td><code>enableClusterHA</code></td><td>关</td><td>leader + 任务独占文件租约与过期接管（见 12.4）</td></tr>
+                    <tr><td><code>clusterLeaseDir</code></td><td>data/cluster</td><td>租约目录，多节点必须指向同一 NFS / 共享盘</td></tr>
+                    <tr><td><code>enableStrictSecurity</code></td><td>关</td><td>严格安全模式（见 13.2）</td></tr>
+                    <tr><td><code>enableDeadLetterAutoReplay</code></td><td>关</td><td>死信自动重放（见 12.2）</td></tr>
+                    <tr><td><code>deadLetterReplayMaxAttempts</code></td><td>3</td><td>单条死信重放次数上限</td></tr>
+                    <tr><td><code>deadLetterReplayBaseMillis</code></td><td>500</td><td>重放退避基础间隔（ms）</td></tr>
+                    <tr><td><code>enableNoPkFallback</code></td><td>开</td><td>无主键表退化到唯一索引 / 全行哈希（见 12.5）</td></tr>
+                </table>
+                <h4>一致性与结构变更（Wave24，除顺序守卫外默认关闭）</h4>
+                <table>
+                    <tr><th>字段</th><th>默认值</th><th>作用</th></tr>
+                    <tr><td><code>enableCheckpointInTargetTx</code></td><td>关</td><td>位点写入目标库同一事务（需先建 <code>__DBSYNC_CHECKPOINT</code> 表，见 12.3）</td></tr>
+                    <tr><td><code>enableDdlAutoSync</code></td><td>关</td><td>非高风险表级 DDL 自动同步，高风险类型仍需人工确认（见 12.5）</td></tr>
+                    <tr><td><code>enableDdlDmlOrderGuard</code></td><td>开</td><td>DDL 待确认时挂起同表 DML，确认后按原顺序重放（见 12.5）</td></tr>
+                    <tr><td><code>schemaHistoryDir</code></td><td>data/schema-history</td><td>DDL 历史 JSONL 目录，多节点建议共享存储</td></tr>
+                    <tr><td><code>enableCutoverAutoExecute</code></td><td>关</td><td>切流相位推进后调用真实执行器；无动作处理器时结果标记 simulated（见 12.6）</td></tr>
+                </table>
+
+                <h3 id="manual-h13-2">13.2 严格安全模式</h3>
+                <p>开启 <code>enableStrictSecurity</code> 后，<code>/actuator/**</code>、<code>/system/**</code>、<code>/user/**</code> 仅 admin 角色可访问；开关通过安全表达式 Bean 在<b>每次请求时求值</b>，配置保存即时生效、无需重启。默认关闭以兼容存量部署。</p>
+                <p>同时，配置文件中的敏感口令已改为环境变量占位符：</p>
+                <table>
+                    <tr><th>环境变量</th><th>对应配置</th><th>默认值</th></tr>
+                    <tr><td><code>DBDATASYNC_H2_PASSWORD</code></td><td><code>dbdatasync.storage.h2.password</code></td><td>空</td></tr>
+                    <tr><td><code>DBDATASYNC_MYSQL_PASSWORD</code></td><td><code>dbdatasync.storage.mysql.password</code></td><td>空</td></tr>
+                    <tr><td><code>DBDATASYNC_SSL_KEYSTORE_PASSWORD</code></td><td><code>server.ssl.key-store-password</code></td><td>DBDataSync</td></tr>
+                </table>
+                <p>Actuator 端点已收敛为 <code>health,info,metrics</code>（<code>management.endpoints.web.exposure.include=health,info,metrics</code>，<code>show-details=when-authorized</code>），env / beans / heapdump / threaddump 等敏感端点不再暴露。</p>
+                <h3 id="manual-h13-3">13.3 RBAC 角色权限与 CSRF（Wave24，严格模式下生效）</h3>
+                <ul>
+                    <li><b>角色矩阵</b>：<code>admin</code> 全部权限；<code>operator / user</code> 可运行、观察、确认，不可改系统配置 / 用户 / actuator；<code>viewer</code> 只读，写操作一律拒绝（只读查询端点白名单除外）。权限矩阵可通过 <code>/rbac/policy</code> 查看；</li>
+                    <li><b>兼容策略</b>：严格安全模式关闭时所有已登录用户放行（与存量部署一致），开启后矩阵才逐请求生效，避免升级即锁死运维；</li>
+                    <li><b>CSRF 保护</b>：严格模式下对有副作用的管理动作（<code>/system/</code>、<code>/user/</code>、<code>/schema-history/confirm|unblock</code>、<code>/cutover/execute|rollback</code>、<code>/batch-profile/reset</code>）校验 token；前端由 <code>/js/security-headers.js</code> 统一从 <code>XSRF-TOKEN</code> cookie 注入 <code>X-XSRF-TOKEN</code> 头，存量页面无需逐个改造；登录与开放 API 不校验。</li>
+                </ul>
+                <div class="warn"><b>升级注意：</b>既有 H2 库若为 <code>sa</code> + 空口令，不要在未迁移凭据的情况下贸然设置 <code>DBDATASYNC_H2_PASSWORD</code>，否则启动会报 <code>Wrong user name or password [28000-224]</code>。</div>
+            </section>
+
+            <section id="manual-h14">
+                <h2><i class="fa fa-cubes"></i> 14. 增量同步前置条件（重要）</h2>
+                <p>“全量+增量” 使用数据库日志实时监听，各数据库需提前做以下准备（一次性配置）：</p>
+                <table>
+                    <tr><th>数据库</th><th>前置要求</th></tr>
+                    <tr><td>MySQL / MariaDB</td><td><code>server-id</code> 唯一、<code>binlog-format=ROW</code>、<code>binlog-row-image=FULL</code>；账号需 REPLICATION SLAVE 权限。Wave23 的真实 lag 从这里读取 binlog event header 时间戳</td></tr>
+                    <tr><td>PostgreSQL</td><td><code>wal_level=logical</code>、<code>max_replication_slots</code> ≥ 任务数；重启实例生效</td></tr>
+                    <tr><td>Oracle</td><td>归档模式（ARCHIVELOG）、<code>ENABLE supplemental log data</code>；账号有 LogMiner 执行权限（SELECT ANY TRANSACTION 等）</td></tr>
+                    <tr><td>达梦 DM8</td><td>开启归档（ARCH_INI）；同步账号具备 LogMiner 相关字典访问权限；start 选项可用 JVM 参数 <code>-Ddbdatasync.dm.logminer.options=NN</code> 调整（默认 16）。<b>实时性由产品自动保障</b>：每轮轮询重开会话读取最新归档，空轮询且有堆积时自动切归档（空闲库不切），实测增量延迟约 6 秒，无需人工切归档</td></tr>
+                    <tr><td>人大金仓 KES V9</td><td><code>wal_level=logical</code> 并重启；连接<b>扩展参数</b>填 <code>{"pluginName":"syslogical_output"}</code>（V009R003C011 实测）</td></tr>
+                </table>
+                <div class="danger"><b>未满足前置条件时的典型现象：</b>任务能启动、全量成功，但增量数据一直为 0；或启动即报日志跳转错误。请先核对本章配置，再用第 15 章诊断开关定位。</div>
+            </section>
+
+            <section id="manual-h15">
+                <h2><i class="fa fa-stethoscope"></i> 15. 故障诊断与排查</h2>
                 <h3>诊断日志开关（启动 App 时加 JVM 参数）</h3>
                 <table>
                     <tr><th>参数</th><th>作用</th></tr>
                     <tr><td><code>-Ddbdatasync.logminer.rowdebug=true</code></td><td>输出 <code>[logminer-rowdebug]</code>（SCN/操作/表/事务）、<code>[cdc-delete-debug]</code>（解析后的行数据，用于定位 DELETE 断链）</td></tr>
-                    <tr><td>-</td><td>目标端同时输出 <code>[dm-writer-debug]</code> / <code>[writer-debug]</code>：目标端执行的 SQL 与受影响行数（`execute=[1]` 表示命中 1 行）</td></tr>
+                    <tr><td>—</td><td>目标端同时输出 <code>[dm-writer-debug]</code> / <code>[writer-debug]</code>：目标端执行的 SQL 与受影响行数（<code>execute=[1]</code> 表示命中 1 行）</td></tr>
                     <tr><td><code>-Ddbdatasync.dm.logminer.options=NN</code></td><td>DM LogMiner start 选项位值（默认 16，DICT_FROM_ONLINE_CATALOG 语义），现场调优用</td></tr>
                 </table>
                 <h3>常见问题定位思路</h3>
                 <ol>
-                    <li><b>全量慢</b>：看监控页缓冲堆积与.writer日志；大批量时优先确认目标端批量写入已启用（buffer-writer-count）；</li>
-                    <li><b>增量为 0</b>：核对第 11 节前置；确认源库确实有新写入并被提交；开启 rowdebug 观察是否解析到行（表名/操作类型）；</li>
-                    <li><b>UPDATE/DELETE 目标未生效</b>：开 诊断开关 看目标端 execute 行数；0 说明主键定位未命中（检查目标键是否被业务改写）；</li>
+                    <li><b>全量慢</b>：看性能监控页缓冲堆积与 writer 日志；大批量时确认目标端批量写入已启用、<code>maxBufferActuatorSize</code> 合理；</li>
+                    <li><b>增量为 0</b>：核对第 14 章前置；确认源库确实有新写入并被提交；开启 rowdebug 观察是否解析到行（表名/操作类型）；</li>
+                    <li><b>UPDATE/DELETE 目标未生效</b>：开诊断开关看目标端 execute 行数；0 说明键定位未命中（检查目标键是否被业务改写，或表是否无主键且未开启退化）；</li>
+                    <li><b>失败 / 死信增多</b>：到【链路健康】看死信标签的 <code>kind</code>；<code>PERMANENT</code> 需修数据或映射，<code>TRANSIENT</code> 可看自动重试挽回是否生效；开启 <code>enableDeadLetterAutoReplay</code> 前先确认目标端具备幂等条件；</li>
+                    <li><b>复制延迟偏高</b>：先看 <code>lagSource</code> 是否为 <code>source</code>；是真实 lag 再排查目标端写入速率与缓冲堆积；仅为 estimated 时可能只是源端空闲；</li>
                     <li><b>启动报错</b>：先跑预检测，把 ERROR 逐条修复；日志 app.log 按规则编号搜索；</li>
+                    <li><b>启动报 H2 认证失败</b>：核对 <code>DBDATASYNC_H2_PASSWORD</code> 与既有库口令是否一致；</li>
+                    <li><b>端口不是 18686</b>：检查环境是否注入了 <code>SERVER__PORT</code> 一类会被 Spring Boot relaxed binding 当作 <code>server.port</code> 的变量，启动时 unset 并用 <code>-Dserver.port=18686</code> 锁定；</li>
                     <li><b>异构大小写不一致</b>：字段映射已支持忽略大小写自动匹配；若仍不匹配（如改名），在字段映射页手动编辑。</li>
                 </ol>
             </section>
 
-            <section id="manual-h13">
-                <h2><i class="fa fa-question-circle-o"></i> 13. 常见问题 FAQ</h2>
+            <section id="manual-h16">
+                <h2><i class="fa fa-question-circle-o"></i> 16. 常见问题 FAQ</h2>
                 <h3>Q1：预检测报“字段映射为空”？</h3>
                 <p>A：进入该表的「字段映射」编辑页会自动按同名（忽略大小写）补齐映射；确无同名字段时按提示手动编辑。历史遗留的空映射旧任务需补齐映射后重跑。</p>
                 <h3>Q2：字段数目不一致 / 类型不一致怎么办？</h3>
@@ -360,21 +597,66 @@
                 <h3>Q5：金仓 KES 为什么没有用 test_decoding？</h3>
                 <p>A：KES V9 实测仅内置 <code>syslogical_output</code>（协议为 pgoutput 二进制）。连接扩展参数选择插件名即可，系统自动按插件切换解码链路。</p>
                 <h3>Q6：能同步 DDL 吗？</h3>
-                <p>A：映射编辑中默认关闭 DDL 同步（enableDDL=0）；如需开启请评估目标库兼容性与权限，并先在测试链路验证。</p>
+                <p>A：列级 DDL 由 <code>ddlSyncPolicy</code> 控制（默认 all；映射编辑中也可关闭 DDL 选项）。CREATE / DROP / TRUNCATE / RENAME 等<b>表级 DDL 只识别与审计，必须人工确认</b>，系统不会自动在目标端执行。</p>
+                <h3>Q7：链路健康页的“停滞”和“复制延迟”为什么不一样？</h3>
+                <p>A：停滞是「距最后一次收到事件的墙钟时间」，源端空闲也会增长；复制延迟只在源端事件时间可用（<code>lagSource=source</code>，当前 MySQL）时才是真实端到端延迟。看时间来源徽章区分。</p>
+                <h3>Q8：死信会自动重放吗？失败明细什么时候会被删除？</h3>
+                <p>A：默认不自动重放。人工重推或开启 <code>enableDeadLetterAutoReplay</code> 后，只有在<b>写入明确成功</b>时才会删除失败明细；未确认的记录保留并等待下次重放或人工处理。</p>
+                <h3>Q9：开启事务型 checkpoint 就是 exactly-once 了吗？</h3>
+                <p>A：不是强一致 exactly-once，而是向它收敛。位点与目标库写入之间仍非原子事务，目标端需主键 / 唯一键 upsert 配合；开启前请确认 <code>checkpointDir</code> 可写且多节点共享。</p>
+                <h3>Q10：多节点部署开启 HA 需要注意什么？</h3>
+                <p>A：<code>clusterLeaseDir</code> 必须是同一 NFS / 共享盘；当前是文件租约，不是分布式共识。未挂共享盘时各节点各自持租约，不能提供 HA 保证。</p>
+                <h3>Q11：改了源码 / 页面，为什么线上没变化？</h3>
+                <p>A：以发行包 <code>lib/*.jar</code> 运行时，静态资源在 jar 内，<b>必须重新打包并替换发行包后重启</b>；源码方式（target/classes）重启即生效。</p>
+                <h3>Q12：构建时测试 JVM 崩溃、提示内存不足怎么办？</h3>
+                <p>A：不要用「再分配 8G 内存」的思路。JDK8 默认按物理内存 1/4 给每个 JVM 预留堆，构建不需要大堆。直接执行 <code>./build.sh</code>（已内置低内存 <code>MAVEN_OPTS</code> 与 surefire 参数），临时跳过用 <code>SKIP_TESTS=1 ./build.sh</code>。</p>
             </section>
 
-            <section id="manual-h14">
-                <h2><i class="fa fa-download"></i> 14. 离线部署与升级</h2>
+            <section id="manual-h17">
+                <h2><i class="fa fa-download"></i> 17. 离线部署、构建与升级</h2>
                 <ol>
-                    <li>安装包自带 JRE 与全部依赖（含前端字体/图标/脚本），<b>完全离线</b>，无需访问外网或 CDN；</li>
-                    <li>启动：双击 <code>start_app.cmd</code>（Windows）或对应 shell 脚本；确认日志出现端口监听（默认 18686）；</li>
-                    <li>访问 <code>http://127.0.0.1:18686</code> 登录；首次登录后立即修改 admin 密码（【用户管理】）；</li>
-                    <li>数据存储默认内置 H2（<code>data/DBDataSync</code>），生产建议在 application.properties 切换为 MySQL 存储；</li>
-                    <li>升级：备份 data 目录与 application.properties → 替换部署包 → 启动 → 【配置管理】核对配置；</li>
-                    <li>离线环境安全基线：禁用重置密码开关（<code>dbdatasync.web.security.reset-pwd=false</code>），端口仅内网开放。</li>
+                    <li>安装包自带 JRE 与全部依赖（含前端字体/图标/脚本），<b>完全离线</b>，无需访问外网或 CDN；环境要求 JDK 1.8+、内存建议 2GB+；</li>
+                    <li>启动：双击 <code>start_app.cmd</code>（Windows）或对应 shell 脚本；确认日志出现 <code>Tomcat started on port(s): 18686</code>；</li>
+                    <li>访问 <code>http://127.0.0.1:18686</code> → 跳转登录页；默认 <code>admin/admin</code>，首次登录后立即修改密码；</li>
+                    <li>数据存储默认内置 H2（<code>data/DBDataSync</code>），生产建议在 application.properties 切换为 MySQL 存储，并通过环境变量注入口令（见 13.2）；</li>
+                    <li><b>源码构建</b>：仓库根目录执行 <code>./build.sh</code>，默认跑单测并生成 <code>DBDataSync-{version}-bin.zip</code>；<code>SKIP_TESTS=1</code> 才会跳过测试；</li>
+                    <li><b>持续集成</b>：<code>push</code> / <code>pull_request</code> / <code>workflow_dispatch</code> 触发 CI，两个任务分别跑 <code>mvn clean verify</code> 与离线 CDC 一致性 / 断点续传 / 故障注入套件，并上传 surefire 报告；另有文档同步校验任务；</li>
+                    <li><b>升级</b>：备份 data 目录与 application.properties → 替换部署包 → 启动 → 【配置管理】核对配置 → 【系统配置】按需开启新能力 → 到【链路健康】确认链路正常；</li>
+                    <li><b>离线环境安全基线</b>：禁用重置密码开关（<code>dbdatasync.web.security.reset-pwd=false</code>）、开启 <code>enableStrictSecurity</code>、端口仅内网开放、修改默认口令。</li>
                 </ol>
-                <div class="tip"><b>技术支持：</b>离线交付场景收集 <code>logs/app.log</code>、预检测结果截图并联系运维支持人员。</div>
-                <p style="margin-top:14px;color:#94a3b8;font-size:12.5px;">— DBDataSync · 用户操作手册（v2.x，2026-10-18 更新）—</p>
+                <div class="warn"><b>发行包升级注意：</b>源码或页面改动不会自动更新已发布 jar 内的静态资源，必须重新打包替换；仅重启旧进程看不到新功能。</div>
+                <div class="tip"><b>技术支持：</b>离线交付场景收集 <code>logs/app.log</code>、预检测结果截图、链路健康报告截图并联系运维支持人员。</div>
+            </section>
+
+            <section id="manual-h18">
+                <h2><i class="fa fa-bookmark"></i> 18. 文档基线、变更记录与维护约定</h2>
+                <h3>当前文档基线</h3>
+                <table>
+                    <tr><th>项</th><th>值</th></tr>
+                    <tr><td>适用版本</td><td>v2.1.5 及以上</td></tr>
+                    <tr><td>功能基线</td><td><b>Wave24</b>（2026-11-09）</td></tr>
+                    <tr><td>手册更新日期</td><td>2026-11-09</td></tr>
+                    <tr><td>手册位置</td><td><code>public/manual/index.html</code>，菜单【系统管理 → 操作手册】，路径 <code>/manual</code></td></tr>
+                    <tr><td>同步校验</td><td><code>python tools/check_manual_sync.py</code>（CI 的 docs-sync 任务自动执行）</td></tr>
+                </table>
+                <h3>变更记录（相对 2026-10-18 版手册）</h3>
+                <table>
+                    <tr><th>批次</th><th>日期</th><th>手册本次补齐的用户可感知变化</th></tr>
+                    <tr><td>Wave17 / Wave18</td><td>2026-11-07</td><td>迁移评估六模块落地并接入运行时：SQL 兼容扫描（PL/SQL 识别）、慢 SQL 采集、逻辑导入导出、切流/影子写/回滚、超大内容外置、跨明细聚合批量重推，新增 REST 端点与页面</td></tr>
+                    <tr><td>Wave19 / Wave20</td><td>2026-11-07</td><td>块存储文件持久化与配置化、JDBC 慢 SQL 插桩、DBLink 只读查询通道与页面、四个迁移评估前端页面上线</td></tr>
+                    <tr><td>Wave21</td><td>2026-11-08</td><td>引擎主链路慢 SQL 插桩、task_detail 超大内容自动外置，避免单条记录撑爆存储字段</td></tr>
+                    <tr><td>Wave22</td><td>2026-11-08</td><td>写入瞬时故障自动重试与失败分类标签、死信语义、链路健康页与 Prometheus 导出、健康告警与冷却；新增 10 项系统配置；侧栏新增「链路健康」</td></tr>
+                    <tr><td>Wave23</td><td>2026-11-09</td><td>真实端到端复制延迟（MySQL binlog eventTime）、事务型 checkpoint + 幂等键、集群 HA 文件租约接入真实任务启停、死信安全重放、无主键退化、表级 DDL 识别与人工确认、严格安全模式与口令环境变量、Wave17/20 持久化收口、CI 与低内存构建；新增 10 项系统配置；登录页改为左核心能力 / 右登录的科技感分屏；全站深浅主题</td></tr>
+                    <tr><td>Wave24</td><td>2026-11-09</td><td>真实 lag 覆盖 PG/Kingbase/Oracle/Mongo/Kafka/RocketMQ/SQL Server、逐行失败分类（RowFailure）、慢 SQL 任务级上下文与批写性能剖析、目标库事务内位点（强一致收敛）、表级 DDL 自动同步 + schema history + DDL-DML 顺序守卫、自动切流执行器、SQLite Trigger CDC、RBAC 三角色矩阵与严格模式 CSRF、数据对比明细 200 条截断解除、PL/SQL 轻量 AST 自动改写、engine 模块退役、E2E 脚本入流水线；新增 5 项系统配置；手册升级至 v2.1.5</td></tr>
+                </table>
+                <h3>维护约定（强制）</h3>
+                <ol>
+                    <li><b>同批次同步</b>：任何新增或修改系统配置项、侧边栏菜单、REST 端点、默认行为、页面操作步骤的变更，必须在<b>同一次交付</b>中更新本手册对应章节、13.1 配置速查表与本章变更记录，并更新页头的「文档基线 / 更新日期」；</li>
+                    <li><b>不写未实现的能力</b>：只描述已接到真实运行路径的功能；处于规划、原型或 <code>@Deprecated</code> 状态的内容必须显式标注边界，不得写成可用能力；</li>
+                    <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
+                    <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
+                </ol>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.1.5+，文档基线 Wave24，2026-11-09 更新）—</p>
             </section>
 
         </div>

@@ -76,6 +76,10 @@ public final class SQLiteConnector extends AbstractDatabaseConnector {
         if (ListenerTypeEnum.isTiming(listenerType)) {
             return new DatabaseQuartzListener();
         }
+        // Wave24：Trigger CDC（早期 P1-6 设计项）在 SQLite 上落地为真实日志型监听器
+        if (ListenerTypeEnum.isLog(listenerType)) {
+            return new org.dbdatasync.connector.sqlite.cdc.TriggerLogListener();
+        }
         return null;
     }
 

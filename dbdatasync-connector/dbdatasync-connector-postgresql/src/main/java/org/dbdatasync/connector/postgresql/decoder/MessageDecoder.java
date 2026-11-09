@@ -27,6 +27,14 @@ public interface MessageDecoder {
 
     RowChangedEvent processMessage(ByteBuffer buffer);
 
+    /**
+     * Wave24：最近一次 BEGIN/COMMIT 消息携带的源端事务时间（epoch millis）。
+     * test_decoding 插件输出不含时间戳，默认返回 0，由 Listener 退化为估算。
+     */
+    default long lastSourceEventTimeMillis() {
+        return 0L;
+    }
+
     String getSlotName();
 
     String getOutputPlugin();

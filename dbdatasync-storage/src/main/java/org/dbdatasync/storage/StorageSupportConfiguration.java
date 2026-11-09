@@ -57,7 +57,15 @@ public class StorageSupportConfiguration {
                 Map<String, OriginTrackedValue> props = (Map<String, OriginTrackedValue>) propertySource.getSource();
                 props.forEach((k, v)-> {
                     if (StringUtil.startsWith(k, PREFIX_STORAGE)) {
-                        properties.put(k, v.getValue());
+                        // Wave23：这里直接取 PropertySource 的原始值，绕过了
+                        // Environment.getProperty() 的占位符解析。若配置写成
+                        // ${DBDATASYNC_H2_PASSWORD:} 之类的环境变量占位符，
+                        // 不解析就会把字面量当成数据库口令传给 H2，
+                        // 导致 "Wrong user name or password [28000-224]" 启动失败。
+                        // 统一用 resolvePlaceholders 解析，未设置环境变量时回落默认值。
+                        Object raw = v.getValue();
+                        String value = raw == null ? null : ae.resolvePlaceholders(String.valueOf(raw));
+                        properties.put(k, value);
                     }
                 });
             }

@@ -884,7 +884,8 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
             table.setName(metaInfo.getTable());
             table.setType(metaInfo.getTableType());
             table.setColumn(metaInfo.getColumn());
-            tableMap.put(metaInfo.getTable(), table);
+            // key 小写归一，与调用方表名匹配（Oracle-族回读为实际大写名）
+            tableMap.put(metaInfo.getTable().toLowerCase(), table);
         }
         return tableMap;
     }

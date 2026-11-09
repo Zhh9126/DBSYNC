@@ -30,6 +30,15 @@ public class SqlPrecheckReportVO {
     /** 是否阻断任务创建：固定 false，本轮不新增阻断开关 */
     private boolean blocking = false;
 
+    /** Wave24：是否请求了真实数据库预检（默认关闭，不连库） */
+    private boolean runtimeCheckEnabled = false;
+
+    /** Wave24：逐语句真实预检结果（prepare / EXPLAIN） */
+    private java.util.List<java.util.Map<String, Object>> runtimeChecks;
+
+    /** Wave24：真实预检汇总 */
+    private String runtimeCheckSummary;
+
     public SqlScanResult getResult() {
         return result;
     }
@@ -68,5 +77,29 @@ public class SqlPrecheckReportVO {
 
     public void setBlocking(boolean blocking) {
         this.blocking = blocking;
+    }
+
+    public boolean isRuntimeCheckEnabled() {
+        return runtimeCheckEnabled;
+    }
+
+    public void setRuntimeCheckEnabled(boolean runtimeCheckEnabled) {
+        this.runtimeCheckEnabled = runtimeCheckEnabled;
+    }
+
+    public java.util.List<java.util.Map<String, Object>> getRuntimeChecks() {
+        return runtimeChecks;
+    }
+
+    public void setRuntimeChecks(java.util.List<java.util.Map<String, Object>> runtimeChecks) {
+        this.runtimeChecks = runtimeChecks;
+    }
+
+    public String getRuntimeCheckSummary() {
+        return runtimeCheckSummary;
+    }
+
+    public void setRuntimeCheckSummary(String runtimeCheckSummary) {
+        this.runtimeCheckSummary = runtimeCheckSummary;
     }
 }

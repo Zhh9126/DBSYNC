@@ -40,6 +40,10 @@ import org.dbdatasync.sdk.schema.CustomData;
 import org.dbdatasync.sdk.spi.ConnectorService;
 import org.dbdatasync.sdk.util.DatabaseUtil;
 import org.dbdatasync.sdk.util.PrimaryKeyUtil;
+import org.dbdatasync.sdk.retry.WriteFailureTag;
+import org.dbdatasync.sdk.retry.WriteRetryPolicy;
+import org.dbdatasync.sdk.retry.WriteRetrySettings;
+import org.dbdatasync.sdk.retry.WriteRetrySettingsHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -166,8 +170,11 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
 
                 String tableName = table.getName();
                 List<Field> fields = new ArrayList<>();
-                List<String> primaryKeys = findTablePrimaryKeys(metaData, catalog, schema, tableName);
-                try (ResultSet columnMetadata = metaData.getColumns(catalog, schema, tableName, null)) {
+                // Oracle-族（Oracle/Dameng 等）未加引号标识符统一大写存储：小写表名 JDBC 元数据查不到列时，
+                // 自动用 UPPER 表名重试一次，保证异构目标端元数据可读（大小写敏感驱动下不会误伤已命中场景）。
+                String resolvedTableName = resolveMetaTableName(metaData, catalog, schema, tableName);
+                List<String> primaryKeys = findTablePrimaryKeys(metaData, catalog, schema, resolvedTableName);
+                try (ResultSet columnMetadata = metaData.getColumns(catalog, schema, resolvedTableName, null)) {
                     while (columnMetadata.next()) {
                         String columnName = columnMetadata.getString("COLUMN_NAME");
                         int columnType = columnMetadata.getInt("DATA_TYPE");
@@ -178,7 +185,8 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
                     }
                 }
                 MetaInfo metaInfo = new MetaInfo();
-                metaInfo.setTable(tableName);
+                // 表名回填解析后的大写实际名，保证后续 DML 用目标库真实标识符（Oracle-族）；未解析到列时保持原表名
+                metaInfo.setTable(resolvedTableName);
                 metaInfo.setTableType(TableTypeEnum.TABLE.getCode());
                 metaInfo.setColumn(fields);
                 metaInfos.add(metaInfo);
@@ -429,8 +437,17 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         }
         SimpleConnection connection = databaseTemplate.getSimpleConnection();
         try {
+            // Wave24：DDL 严格在事务外执行，避免 MySQL 等库隐式提交破坏原子性
+            org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.ensureTable(databaseTemplate);
             connection.setAutoCommit(false);
             int[] result = databaseTemplate.batchUpdate(executeSql, batchRows(fields, data));
+            // Wave24：业务数据与位点表在同一 JDBC 事务内提交；失败即 rollback（强一致收敛）
+            org.dbdatasync.sdk.checkpoint.CheckpointRecord pending =
+                    org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.current();
+            if (pending != null) {
+                org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint
+                        .writeInCurrentTransaction(databaseTemplate, pending);
+            }
             connection.commit();
             return result;
         } catch (Exception e) {
@@ -456,20 +473,91 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
         return result;
     }
 
+    /**
+     * 批量写失败后的逐条降级写入。
+     *
+     * <p>专业同步工具的关键差异点：逐条失败并非一律落库等人工处理。这里对瞬时故障
+     * （死锁 / 锁等待 / 连接闪断 / 超时）做「指数退避 + 抖动」的就地自动重试，
+     * 仅对永久故障（主键冲突 / 类型不符 / 语法错误 / 表不存在）与重试耗尽的行落失败明细，
+     * 并在错误文本里写入可检索的结构化分类标签。
+     *
+     * <p>重试受三重预算约束：单条最大次数、单条最大耗时、整批最大重试耗时，
+     * 避免目标库故障时逐条重试把同步线程拖死。策略默认开启，可在系统配置页关闭。
+     */
     private void forceUpdate(DatabaseConnectorInstance connectorInstance, PluginContext context, String executeSql, List<Field> fields, String event, List<Map> data, Result result) {
+        final WriteRetrySettings settings = WriteRetrySettingsHolder.settings();
+        // 整批重试预算：单条预算的 4 倍，且不超过 8 秒
+        final long batchBudget = Math.min(8000L, Math.max(0L, settings.getMaxElapsedMillis()) * 4L);
+        final long batchDeadline = System.currentTimeMillis() + batchBudget;
         data.forEach(row -> {
-            try {
-                int execute = connectorInstance.execute(databaseTemplate -> databaseTemplate.update(executeSql, batchRow(fields, row)));
-                if (execute == 0) {
-                    throw new SdkException("数据不存在或执行异常");
+            long started = System.currentTimeMillis();
+            int attempts = 0;
+            Throwable lastError = null;
+            boolean succeed = false;
+            while (true) {
+                attempts++;
+                try {
+                    int execute = connectorInstance.execute(databaseTemplate -> databaseTemplate.update(executeSql, batchRow(fields, row)));
+                    if (execute == 0) {
+                        throw new SdkException("数据不存在或执行异常");
+                    }
+                    succeed = true;
+                    break;
+                } catch (Exception e) {
+                    lastError = e;
+                    long elapsed = System.currentTimeMillis() - started;
+                    if (!WriteRetryPolicy.shouldRetry(e, attempts, settings, elapsed)
+                            || System.currentTimeMillis() >= batchDeadline) {
+                        break;
+                    }
+                    long backoff = WriteRetryPolicy.backoffMillis(attempts, settings.getBaseMillis(),
+                            settings.getCapMillis(), java.util.concurrent.ThreadLocalRandom.current().nextDouble());
+                    long remaining = settings.getMaxElapsedMillis() - elapsed;
+                    if (backoff > remaining) {
+                        backoff = remaining;
+                    }
+                    if (backoff > 0) {
+                        try {
+                            Thread.sleep(backoff);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                }
+            }
+            if (succeed) {
+                if (attempts > 1) {
+                    result.getAutoRetriedRows().incrementAndGet();
                 }
                 result.getSuccessData().add(row);
                 printTraceLog(context, event, row, Boolean.TRUE, null);
-            } catch (Exception e) {
-                result.getFailData().add(row);
-                result.getError().append(context.getTraceId()).append(" SQL:").append(executeSql).append(System.lineSeparator()).append("ERROR:").append(e.getMessage()).append(System.lineSeparator());
-                printTraceLog(context, event, row, Boolean.FALSE, e.getMessage());
+                return;
             }
+            String message = lastError == null ? "" : String.valueOf(lastError.getMessage());
+            // Wave24：逐行精确分类（不再让整批共享「永久优先」标签）
+            int errorCode = 0;
+            String sqlState = null;
+            Throwable cursor = lastError;
+            while (cursor != null) {
+                if (cursor instanceof java.sql.SQLException) {
+                    java.sql.SQLException sqlEx = (java.sql.SQLException) cursor;
+                    errorCode = sqlEx.getErrorCode();
+                    sqlState = sqlEx.getSQLState();
+                    break;
+                }
+                cursor = cursor.getCause();
+            }
+            result.recordRowFailure(String.valueOf(row), new org.dbdatasync.common.model.RowFailure(
+                    WriteRetryPolicy.classify(lastError).name(), errorCode, sqlState, attempts, message));
+            result.getFailData().add(row);
+            result.getError().append(context.getTraceId()).append(" SQL:").append(executeSql)
+                    .append(System.lineSeparator()).append("ERROR:").append(message)
+                    .append(System.lineSeparator())
+                    .append(WriteFailureTag.describe(lastError))
+                    .append("[attempts=").append(attempts).append("]")
+                    .append(System.lineSeparator());
+            printTraceLog(context, event, row, Boolean.FALSE, message);
         });
     }
 
@@ -1071,6 +1159,31 @@ public abstract class AbstractDatabaseConnector extends AbstractConnector implem
      * @return
      * @throws SQLException
      */
+    /**
+     * 兼容 Oracle-族（Oracle/Dameng）未加引号标识符统一大写存储：先用原表名查列元数据，
+     * 查询结果为空时回退到 UPPER 表名再查，返回可读列最多的表名；原表名已有列则原样返回。
+     */
+    private String resolveMetaTableName(DatabaseMetaData md, String catalog, String schema, String tableName) throws SQLException {
+        if (hasColumns(md, catalog, schema, tableName)) {
+            return tableName;
+        }
+        String upper = tableName == null ? null : tableName.toUpperCase();
+        if (StringUtil.isNotBlank(upper) && !upper.equals(tableName) && hasColumns(md, catalog, schema, upper)) {
+            return upper;
+        }
+        return tableName;
+    }
+
+    private boolean hasColumns(DatabaseMetaData md, String catalog, String schema, String tableName) throws SQLException {
+        ResultSet rs = null;
+        try {
+            rs = md.getColumns(catalog, schema, tableName, null);
+            return rs.next();
+        } finally {
+            DatabaseUtil.close(rs);
+        }
+    }
+
     private List<String> findTablePrimaryKeys(DatabaseMetaData md, String catalog, String schema, String tableName) throws SQLException {
         // 根据表名获得主键结果集
         ResultSet rs = null;

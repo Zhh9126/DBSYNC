@@ -71,6 +71,15 @@ public class SystemConfigChecker extends AbstractChecker {
         newParams.put("enableWatermark", StringUtil.isNotBlank(params.get("enableWatermark")));
         newParams.put("enablePrintTraceInfo", StringUtil.isNotBlank(params.get("enablePrintTraceInfo")));
         newParams.put("enableOpenAPI", StringUtil.isNotBlank(params.get("enableOpenAPI")));
+        newParams.put("enableWriteRetry", StringUtil.isNotBlank(params.get("enableWriteRetry")));
+        newParams.put("enableReplicationAlarm", StringUtil.isNotBlank(params.get("enableReplicationAlarm")));
+        newParams.put("enablePrometheus", StringUtil.isNotBlank(params.get("enablePrometheus")));
+        // Wave23 新增开关（checkbox 未勾选时表单不会提交，需显式反选）
+        newParams.put("enableTransactionalCheckpoint", StringUtil.isNotBlank(params.get("enableTransactionalCheckpoint")));
+        newParams.put("enableClusterHA", StringUtil.isNotBlank(params.get("enableClusterHA")));
+        newParams.put("enableStrictSecurity", StringUtil.isNotBlank(params.get("enableStrictSecurity")));
+        newParams.put("enableDeadLetterAutoReplay", StringUtil.isNotBlank(params.get("enableDeadLetterAutoReplay")));
+        newParams.put("enableNoPkFallback", StringUtil.isNotBlank(params.get("enableNoPkFallback")));
         String watermark = params.get("watermark");
         if (StringUtil.isNotBlank(watermark)) {
             Assert.isTrue(watermark.length() <= 64, "允许水印内容最多输入64个字.");

@@ -3,23 +3,86 @@
       xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-    <title>数据同步工具 404</title>
-    <!-- favicon 使用内联 SVG data URI, 离线可用 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DBDataSync · 页面未找到</title>
+    <link type="text/css" rel="stylesheet" th:href="@{/plugins/css/font-awesome.min.css}"/>
+    <link type="text/css" rel="stylesheet" th:href="@{/css/theme/variables.css}"/>
     <style>
-    body {margin: 0;padding: 0;width: 100%;height: 100%;color: #B0BEC5;display: table;font-weight: 100;font-family: 'Lato';}
-    .container {text-align: center;display: table-cell;vertical-align: middle;}
-    .content {text-align: center;display: inline-block;}
-    .title {font-size: 42px;margin-bottom: 40px;}
-    .content p a { color:#B0BEC5; text-decoration:none;}
-    .content p a:hover { color:#333; text-decoration:underline;}
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            color: #fff;
+            background: linear-gradient(135deg, #1E3A8A 0%, #1D4ED8 45%, #0EA5E9 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        body::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+            background-size: 44px 44px;
+        }
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: .4;
+            pointer-events: none;
+        }
+        .orb-a { width: 420px; height: 420px; left: -120px; top: -140px; background: #38BDF8; }
+        .orb-b { width: 380px; height: 380px; right: -100px; bottom: -140px; background: #6366F1; }
+        .box { position: relative; z-index: 1; text-align: center; padding: 24px; }
+        .code {
+            font-size: 132px;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -6px;
+            text-shadow: 0 16px 40px rgba(2,6,23,.24);
+            margin: 0;
+        }
+        .code span { color: rgba(255,255,255,.72); }
+        .title { font-size: 22px; font-weight: 600; margin: 22px 0 10px; letter-spacing: .5px; }
+        .desc { font-size: 14px; color: rgba(255,255,255,.8); line-height: 1.8; margin: 0 0 28px; }
+        .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 11px 22px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all .2s ease;
+        }
+        .btn-solid { background: #fff; color: #1D4ED8; border: 1px solid #fff; box-shadow: 0 8px 24px rgba(2,6,23,.18); }
+        .btn-solid:hover { transform: translateY(-2px); background: #EFF6FF; }
+        .btn-ghost { background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+        .btn-ghost:hover { background: rgba(255,255,255,.24); transform: translateY(-2px); }
+        .foot { margin-top: 40px; font-size: 12px; color: rgba(255,255,255,.55); letter-spacing: 1px; }
+        @media (max-width: 600px) { .code { font-size: 96px; } }
     </style>
 </head>
 <body>
-<div class="container">
-    <div class="content">
-        <div class="title">404 很抱歉，您查看的页面找不到了！</div>
-        <p>》<a style="cursor:pointer" onclick="history.back()">返回上一页面</a></p>
+<div class="orb orb-a"></div>
+<div class="orb orb-b"></div>
+<div class="box">
+    <p class="code">4<span>0</span>4</p>
+    <h1 class="title">很抱歉，您查看的页面找不到了</h1>
+    <p class="desc">页面可能已被移动、删除，或地址输入有误。<br>可以返回上一页，或回到控制台首页继续操作。</p>
+    <div class="actions">
+        <a class="btn btn-solid" th:href="@{/}"><i class="fa fa-home"></i>返回控制台首页</a>
+        <a class="btn btn-ghost" href="javascript:history.back()"><i class="fa fa-arrow-left"></i>返回上一页</a>
     </div>
+    <div class="foot">DBDATASYNC · DATA SYNC PLATFORM</div>
 </div>
 </body>
 </html>

@@ -2,12 +2,15 @@
 <html xmlns="http://www.w3.org/1999/xhtml"
       xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 
-<!-- 左侧边栏 -->
+<!-- 左侧边栏 · DataX Web 深蓝导航 -->
 <aside th:fragment="nav" class="sidebar">
     <!-- 品牌标识 -->
     <div class="sidebar-brand">
-        <i class="fa fa-database"></i>
-        <span>数据同步工具</span>
+        <div class="sidebar-brand-logo"><i class="fa fa-database"></i></div>
+        <div class="sidebar-brand-text">
+            <strong>DBDataSync</strong>
+            <span>DATA SYNC PLATFORM</span>
+        </div>
     </div>
 
     <!-- 导航菜单 -->
@@ -91,6 +94,10 @@
                 <i class="fa fa-line-chart w-5 text-center"></i>
                 <span>性能监控</span>
             </div>
+            <div class="sidebar-item" url="/link-health">
+                <i class="fa fa-heartbeat w-5 text-center"></i>
+                <span>链路健康</span>
+            </div>
             <div class="sidebar-item" url="/notice">
                 <i class="fa fa-bell w-5 text-center"></i>
                 <span>告警通知</span>
@@ -125,8 +132,10 @@
 
     <!-- 底部品牌（固定在 sidebar 底部） -->
     <div class="sidebar-footer">
-        DBDataSync 通用数据同步中间件
-        <br/>
+        <div class="sidebar-footer-row">
+            <span>通用数据同步中间件</span>
+            <span class="status-dot" title="服务运行中"></span>
+        </div>
         <span class="version-tag" id="sidebarVersionTag">v2.x</span>
     </div>
 </aside>

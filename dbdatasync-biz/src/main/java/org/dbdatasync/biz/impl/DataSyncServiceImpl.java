@@ -201,8 +201,21 @@ public class DataSyncServiceImpl implements DataSyncService {
         List<Object> changedRow = picker.pickSourceData(tableGroup.getSourceTable().getColumn(), binlogData);
         RowChangedEvent changedEvent = new RowChangedEvent(sourceTableName, event, changedRow, null, null);
 
-        // 执行同步是否成功
-        bufferActuatorRouter.execute(metaId, changedEvent);
+        // Wave23：重放改为「可确认写入」。旧实现投递后无条件删除明细并自减 fail，
+        // 写入再次失败时会永久丢数据，这里必须等写入链路回报明确成功。
+        org.dbdatasync.sdk.replay.ReplayConfirmation.begin(metaId, messageId);
+        changedEvent.getChangedOffset().setReplayId(messageId);
+        boolean confirmed = false;
+        try {
+            bufferActuatorRouter.execute(metaId, changedEvent);
+            confirmed = org.dbdatasync.sdk.replay.ReplayConfirmation.awaitSuccess(metaId, messageId);
+        } finally {
+            org.dbdatasync.sdk.replay.ReplayConfirmation.end(metaId, messageId);
+        }
+        if (!confirmed) {
+            logger.warn("重放结果未确认，保留失败明细等待下一轮: metaId={}, messageId={}", metaId, messageId);
+            throw new IllegalStateException("重放写入结果未确认，失败明细已保留，请稍后重试");
+        }
         // 明细分表：从该任务分表(DBDataSync_task_detail_{taskId})删除该条同步数据
         Meta meta = metaProfile.getMeta(metaId);
         Assert.notNull(meta, "Meta can not be null.");

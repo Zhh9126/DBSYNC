@@ -15,6 +15,25 @@
             <groupId>org.ghi</groupId>
             <artifactId>DBDataSync-parser</artifactId>
             <version>${project.parent.version}</version>
+            <exclusions>
+                <!-- 与 DBDataSync-biz / DBDataSync-web 保持同一日志桥约定：
+                     项目主日志是 log4j2（log4j-slf4j-impl），需排除 spring-boot
+                     默认的 spring-boot-starter-logging（含 log4j-to-slf4j）。
+                     否则 manager 自身单测 classpath 会同时出现两个桥，
+                     LoggerFactory 静态初始化直接抛 LoggingException，
+                     任何带 static logger 的类（如 StandaloneProvider）都无法加载。 -->
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-logging</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- Wave23 HA 租约离线单测 -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

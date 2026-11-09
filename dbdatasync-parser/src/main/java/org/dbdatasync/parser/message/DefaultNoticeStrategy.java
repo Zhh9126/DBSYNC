@@ -43,7 +43,8 @@ public final class DefaultNoticeStrategy {
     public static NoticeStrategy immediate() {
         return new NoticeStrategy(IMMEDIATE, "立即发送", NoticeFrequencyEnum.IMMEDIATE, null,
                 types(NoticeTypeEnum.VALIDATE_SYNC_FAIL, NoticeTypeEnum.MAPPING_STOP,
-                        NoticeTypeEnum.MAPPING_ERROR, NoticeTypeEnum.CONNECTOR_OFFLINE));
+                        NoticeTypeEnum.MAPPING_ERROR, NoticeTypeEnum.CONNECTOR_OFFLINE,
+                        NoticeTypeEnum.REPLICATION_HEALTH));
     }
 
     public static NoticeStrategy interval1d() {

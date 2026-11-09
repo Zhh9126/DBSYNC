@@ -31,6 +31,9 @@ public class SlowSqlRecord {
     /** 是否超过慢 SQL 阈值 */
     private boolean thresholdExceeded;
 
+    /** Wave24：所属同步任务 ID（由引擎观察事件 source 的 |task= 段解析，可为空） */
+    private String taskId;
+
     public SlowSqlRecord() {
     }
 
@@ -100,5 +103,13 @@ public class SlowSqlRecord {
 
     public void setThresholdExceeded(boolean thresholdExceeded) {
         this.thresholdExceeded = thresholdExceeded;
+    }
+
+    public String getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(String taskId) {
+        this.taskId = taskId;
     }
 }

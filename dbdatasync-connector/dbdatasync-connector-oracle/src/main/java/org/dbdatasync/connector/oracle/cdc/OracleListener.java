@@ -92,7 +92,12 @@ public class OracleListener extends AbstractDatabaseListener {
         }
     }
 
-    private void trySendEvent(ChangedEvent event) {
+    private void trySendEvent(ChangedEvent event, java.sql.Timestamp sourceTime) {
+        // Wave24：LogMiner TIMESTAMP 是源端 redo 产生时间，直接作为真实 lag 基准（此前只有 SCN，无源端时间）
+        if (sourceTime != null) {
+            org.dbdatasync.sdk.model.SourceEventTime.apply(event, sourceTime.getTime(),
+                    org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_SOURCE);
+        }
         try {
             // 如果消费事件失败，重试
             while (logMiner.isConnected()) {
@@ -134,7 +139,7 @@ public class OracleListener extends AbstractDatabaseListener {
                             tableName, event.getScn(), event.getRedoSql());
                     return;
                 }
-                trySendEvent(new RowChangedEvent(tableName, ConnectorConstant.OPERTION_UPDATE, data, null, event.getScn()));
+                trySendEvent(new RowChangedEvent(tableName, ConnectorConstant.OPERTION_UPDATE, data, null, event.getScn()), event.getSourceTime());
             }
             return;
         }
@@ -152,7 +157,7 @@ public class OracleListener extends AbstractDatabaseListener {
                             tableName, event.getScn(), event.getRedoSql());
                     return;
                 }
-                trySendEvent(new RowChangedEvent(tableName, ConnectorConstant.OPERTION_INSERT, data, null, event.getScn()));
+                trySendEvent(new RowChangedEvent(tableName, ConnectorConstant.OPERTION_INSERT, data, null, event.getScn()), event.getSourceTime());
             }
             return;
         }
@@ -166,7 +171,7 @@ public class OracleListener extends AbstractDatabaseListener {
                 if (Boolean.getBoolean("dbdatasync.logminer.rowdebug")) {
                     logger.info("[cdc-delete-debug] table={}, redoSql={}, data={}", tableName, event.getRedoSql(), data);
                 }
-                trySendEvent(new RowChangedEvent(tableName, ConnectorConstant.OPERTION_DELETE, data, null, event.getScn()));
+                trySendEvent(new RowChangedEvent(tableName, ConnectorConstant.OPERTION_DELETE, data, null, event.getScn()), event.getSourceTime());
             }
         }
 
@@ -175,7 +180,7 @@ public class OracleListener extends AbstractDatabaseListener {
             String tableName = getTableName(alter.getTable());
             if (tableFiledMap.containsKey(tableName)) {
                 logger.info("sql:{}", event.getRedoSql());
-                trySendEvent(new DDLChangedEvent(tableName, ConnectorConstant.OPERTION_ALTER, event.getRedoSql(), null, event.getScn()));
+                trySendEvent(new DDLChangedEvent(tableName, ConnectorConstant.OPERTION_ALTER, event.getRedoSql(), null, event.getScn()), event.getSourceTime());
             }
         }
     }

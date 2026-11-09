@@ -218,7 +218,11 @@ public class KafkaListener extends AbstractListener<KafkaConnectorInstance> {
         List<Object> rowData = mapToRowList(consumerInfo.table.getColumn(), rowMap);
 
         // 触发事件，使用下一条消息的offset（nextOffset）作为position
-        trySendEvent(new RowChangedEvent(sourceTableName, event, rowData, topic, record.offset() + 1));
+        RowChangedEvent changedEvent = new RowChangedEvent(sourceTableName, event, rowData, topic, record.offset() + 1);
+        // Wave24：Kafka record timestamp 是消息进入 broker 的源端时间；-1 表示不可用，退化为估算
+        org.dbdatasync.sdk.model.SourceEventTime.apply(changedEvent, record.timestamp(),
+                org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_SOURCE);
+        trySendEvent(changedEvent);
     }
 
     final class Worker extends Thread {

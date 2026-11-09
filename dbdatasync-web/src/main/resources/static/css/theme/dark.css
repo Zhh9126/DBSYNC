@@ -1,17 +1,17 @@
 /**
  * DBDataSync 深色主题
- * 设计规范：Slate 深色底 + Teal 主色，与浅色体系一一对应
+ * 设计规范：深蓝底 + 提亮科技蓝主色，与浅色 DataX Web 体系一一对应
  * 挂载方式：<html data-theme="dark">
  */
 
 [data-theme="dark"] {
-  /* 主色调（Teal, 深色环境下提亮一档） */
-  --primary-color: #2DD4BF;        /* teal-400 */
-  --primary-hover: #5EEAD4;        /* teal-300 */
-  --primary-active: #14B8A6;       /* teal-500 */
-  --primary-light: rgba(45, 212, 191, 0.16);
-  --primary-lighter: rgba(45, 212, 191, 0.08);
-  --primary-border: rgba(45, 212, 191, 0.45);
+  /* 主色调（深色环境下提亮一档） */
+  --primary-color: #60A5FA;        /* blue-400 */
+  --primary-hover: #93C5FD;        /* blue-300 */
+  --primary-active: #3B82F6;       /* blue-500 */
+  --primary-light: rgba(96, 165, 250, 0.18);
+  --primary-lighter: rgba(96, 165, 250, 0.09);
+  --primary-border: rgba(96, 165, 250, 0.45);
 
   /* 状态色（深色下提高亮度保证对比度） */
   --success-color: #34D399;        /* emerald-400 */
@@ -23,9 +23,9 @@
   --error-color: #F87171;          /* red-400 */
   --error-hover: #FCA5A5;
   --error-light: rgba(248, 113, 113, 0.15);
-  --info-color: #2DD4BF;
-  --info-light: rgba(45, 212, 191, 0.10);
-  --violet-color: #5EEAD4;
+  --info-color: #38BDF8;
+  --info-light: rgba(56, 189, 248, 0.12);
+  --violet-color: #818CF8;
 
   /* 中性色（反转） */
   --text-primary: #F1F5F9;         /* slate-100 */
@@ -33,23 +33,23 @@
   --text-tertiary: #94A3B8;        /* slate-400 */
   --text-disabled: #64748B;        /* slate-500 */
 
-  /* 背景色（Slate 深色阶梯） */
-  --bg-primary: #1E293B;           /* slate-800 卡片/面板 */
-  --bg-secondary: #0F172A;         /* slate-900 主内容区 */
-  --bg-tertiary: #273449;          /* slate-750 自定义阶梯 */
-  --bg-quaternary: #334155;        /* slate-700 */
+  /* 背景色（深蓝阶梯） */
+  --bg-primary: #16213D;           /* 卡片/面板 */
+  --bg-secondary: #0B1428;         /* 主内容区 */
+  --bg-tertiary: #1D2C4E;
+  --bg-quaternary: #2A3D64;
 
   /* 边框色 */
-  --border-primary: #334155;       /* slate-700 */
-  --border-secondary: #273449;
-  --border-tertiary: #1E293B;
+  --border-primary: #2B3C63;
+  --border-secondary: #22314F;
+  --border-tertiary: #1B2842;
 
   /* 侧边栏（深色下与内容区拉开层次） */
-  --sidebar-bg: #0B1120;           /* slate-950 微调 */
-  --sidebar-hover: #1E293B;
-  --sidebar-active: rgba(45, 212, 191, 0.18);
-  --sidebar-text: #CBD5E1;
-  --sidebar-text-muted: #64748B;
+  --sidebar-bg: #08142F;
+  --sidebar-hover: #152C5C;
+  --sidebar-active: rgba(96, 165, 250, 0.18);
+  --sidebar-text: #A9BEE3;
+  --sidebar-text-muted: #6B83B0;
 
   /* 阴影（深色下用更深的投影） */
   --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 1px 2px -1px rgba(0, 0, 0, 0.4);
@@ -106,20 +106,20 @@
 
 /* ===== 深色侧边栏 ===== */
 [data-theme="dark"] .sidebar {
-  background: linear-gradient(180deg, #0B1120 0%, #0F172A 100%);
+  background: linear-gradient(180deg, #08142F 0%, #0C1E45 55%, #0A1836 100%);
   border-color: var(--border-primary);
 }
 [data-theme="dark"] .sidebar-brand { color: var(--text-secondary); }
 /* 侧边栏底部品牌条: sidebar.css 硬编码白色背景, 需显式覆盖 */
 [data-theme="dark"] .sidebar-footer {
-  background: #0B1120;
+  background: #08142F;
   border-top: 1px dashed var(--border-primary);
   color: var(--text-tertiary);
 }
-/* 提高特异性以压过 .sidebar-footer .version-tag 的绿色渐变(后加载) */
+/* 提高特异性以压过 .sidebar-footer .version-tag 的品牌渐变(后加载) */
 [data-theme="dark"] .sidebar-footer .version-tag {
-  background: rgba(45, 212, 191, 0.15);
-  color: var(--primary-color);
+  background: rgba(96, 165, 250, 0.16);
+  color: #93C5FD;
 }
 [data-theme="dark"] .sidebar-group-title { color: var(--text-tertiary); }
 [data-theme="dark"] .sidebar-item { color: var(--sidebar-text); }

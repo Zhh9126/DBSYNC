@@ -37,6 +37,19 @@ public class DefaultBufferActuatorRouter extends AbstractBufferActuatorRouter {
     @Override
     public void execute(String metaId, ChangedEvent event) {
         event.getChangedOffset().setMetaId(metaId);
+        // Wave23 事务型 checkpoint：开关打开时计算幂等键，重复事件直接丢弃
+        org.dbdatasync.sdk.checkpoint.TransactionalCheckpoint checkpoint =
+                org.dbdatasync.sdk.checkpoint.Checkpoints.coordinator();
+        if (checkpoint != null && event != null) {
+            org.dbdatasync.sdk.model.ChangedOffset offset = event.getChangedOffset();
+            String key = org.dbdatasync.sdk.checkpoint.IdempotencyKey.of(metaId,
+                    offset.getNextFileName(), offset.getPosition(), offset.getSeq(),
+                    event.getSourceTableName(), event.getEvent(), event.getChangedRow());
+            if (checkpoint.isDuplicate(metaId, key)) {
+                return;
+            }
+            offset.setIdempotencyKey(key);
+        }
         printTraceInfo(event);
         Map<String, TableGroupBufferActuator> processor = router.get(metaId);
         if (processor == null) {

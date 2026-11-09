@@ -222,6 +222,9 @@ public class RedisListener extends AbstractListener<RedisConnectorInstance> {
         String offsetId = entry.getID().toString();
         RowChangedEvent event = new RowChangedEvent(tableName, ConnectorConstant.OPERTION_INSERT, rowData,
                 consumerInfo.stream, offsetId);
+        // Wave24：Redis Stream ID 前缀即写入时的毫秒时间戳，是天然源端事件时间
+        org.dbdatasync.sdk.model.SourceEventTime.apply(event, entry.getID().getTime(),
+                org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_SOURCE);
         trySendEvent(event);
         ackEntry(consumerInfo, offsetId);
     }

@@ -12,6 +12,7 @@ import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.parser.ddl.AlterStrategy;
 import org.dbdatasync.parser.ddl.DDLParser;
+import org.dbdatasync.parser.ddl.DDLStatementClassifier;
 import org.dbdatasync.parser.ddl.alter.AddStrategy;
 import org.dbdatasync.parser.ddl.alter.ChangeStrategy;
 import org.dbdatasync.parser.ddl.alter.DropStrategy;
@@ -65,6 +66,13 @@ public class DDLParserImpl implements DDLParser {
     public DDLConfig parse(ConnectorInstance connectorInstance, ConnectorService connectorService, TableGroup tableGroup, String sql) throws JSQLParserException {
         DDLConfig ddlConfig = new DDLConfig();
         logger.info("ddl:{}", sql);
+        // Wave23：表级 DDL 先做识别与审计，不生成可执行 SQL（防止误删/误清目标表）
+        DDLOperationEnum tableLevel = DDLStatementClassifier.classifyTableLevel(sql);
+        if (tableLevel != null) {
+            ddlConfig.setDdlOperationEnum(tableLevel);
+            logger.warn("表级 DDL 已识别，需人工确认后执行（不自动同步）: {} -> {}", tableLevel, sql);
+            return ddlConfig;
+        }
         Statement statement = SqlParserUtil.parse(sql);
         if (statement instanceof Alter && connectorService instanceof Database) {
             Alter alter = (Alter) statement;

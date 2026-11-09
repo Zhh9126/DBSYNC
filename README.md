@@ -739,7 +739,58 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 34. 许可声明
+## 34. 2026-11-08 更新摘要（Wave21：引擎主链路慢 SQL 插桩 + task_detail 超大内容外置）
+
+- **引擎主链路慢 SQL 自动插桩**：通过 SPI 观察点 + biz 桥接把主链路 SQL 执行耗时送入慢 SQL 采集与分析链路。
+- **task_detail 超大内容自动外置**：超长明细内容按分块外置，避免单条记录撑爆存储字段。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE21.md`。
+
+---
+
+## 35. 2026-11-08 更新摘要（Wave22：实时链路可靠性与可观测性）
+
+- **写入可靠性**：`WriteRetryPolicy` 异常分类（TRANSIENT / PERMANENT / UNKNOWN）与指数退避重试、`WriteFailureTag` 结构化死信标签 `[SYNC_FAIL] / [DEAD_LETTER] [kind=...] [retry=n]`；系统配置保存后即时生效。
+- **链路健康**：`ReplicationEventObservers` 观察点 → `ReplicationHealthTracker` / `HealthEvaluator` → 新增 `/link-health` 页面、`/link-health/report`、`/link-health/deadLetters`、`/link-health/prometheus`（0.0.4 文本格式）；新增 `REPLICATION_HEALTH` 告警类型，按冷却窗口触发，邮件 / 企微 / 钉钉 / WebHook 全覆盖。
+- **配置与前端**：系统配置新增 10 项，侧边栏「监控告警」组新增「链路健康」。
+- **诚实边界**：本轮的「停滞」是距最后事件的墙钟时间，不是端到端复制延迟；死信只分类与查询、不自动重放；两项均在 Wave23 补齐。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE22.md`。
+
+---
+
+## 36. 2026-11-09 更新摘要（Wave23：P0/P1/P2 路线图落地 + 构建内存治理 + 服务实启）
+
+- **P0**：真实端到端复制延迟（MySQL binlog event header → `ChangedOffset.eventTime` → 健康报告 / Prometheus / 页面，`lagSource` 区分 source / estimated / unknown）；事务型 checkpoint + 幂等键（写入成功后才提交位点，向 exactly-once 收敛）；集群 HA 文件租约接入 `ManagerFactory` 真实任务启停、关闭归还租约与定时接管。
+- **P1**：死信安全重放（只有写入成功确认才删失败明细）、无主键表退化（主键 → 唯一索引 → 全行哈希）、表级 DDL 识别与人工确认、`dbdatasync-engine` 历史原型标 `@Deprecated`。
+- **P2**：口令改环境变量占位符、actuator 收敛为 `health,info,metrics`、严格安全模式运行期求值、Wave17/20 持久化收口、`build.sh` 默认跑单测与 CI 流水线、Spring Boot `@EnableScheduling`。
+- **内存治理**：不增加内存，改为小堆 + SerialGC + 仅 C1 + 单 fork；34 模块 `test-compile` 成功、离线可靠性套件 55/55、CI 默认全量 533/533。
+- **服务实启**：`Tomcat started on port(s): 18686`，修复 H2 口令占位符未解析、MetricsEndpoint 注入失败、`SERVER__PORT` 环境变量覆盖端口三个真实问题。
+- **边界**：checkpoint 是收敛而非强一致 exactly-once；HA 需 NFS/共享盘而非分布式共识；架构级开关默认关闭；发行包 jar 内静态资源需重新打包替换。
+- 细节见 `reports/OPTIMIZATION_REPORT_WAVE23.md`。
+
+---
+
+## 37. 文档同步约定（操作手册实时更新）
+
+- 面向最终用户的**内置操作手册**位于 `dbdatasync-web/src/main/resources/public/manual/index.html`（菜单「系统管理 → 操作手册」，路径 `/manual`，离线内置），当前基线 **Wave24 / 2026-11-09**，共 18 章，覆盖登录与菜单、迁移评估、实时链路健康、可靠性与数据一致性、47 项系统配置速查、RBAC 与 CSRF 安全基线、构建部署与 FAQ。
+- **强制规则**：任何新增或修改系统配置项、侧边栏菜单、REST 端点、默认行为或页面操作步骤的变更，必须在同一次交付中更新手册对应章节、13.1 配置速查表与第 18 章变更记录，并更新页头「文档基线 / 更新日期」；只描述已接入真实运行路径的功能，规划 / 原型 / `@Deprecated` 必须显式标注边界。
+- **自动卡口**：`python tools/check_manual_sync.py` 校验配置字段、菜单项、最新 Wave 基线与报告日期、Thymeleaf fragment 与 HTML 结构；CI 的 `docs-sync` 任务与 `build.sh`（`SKIP_DOCS_CHECK=1` 可临时跳过）会阻断未同步的变更。
+
+---
+
+## 38. 2026-11-09 更新摘要（Wave24：未完成项清账）
+
+§22 未完成总账按「可离线闭环优先」推进，详见 `reports/OPTIMIZATION_REPORT_WAVE24.md` 与 §23 清账表。要点：
+
+- **可观测性**：真实 lag 覆盖 PG/Kingbase（逻辑复制 commit 时间）、Oracle（LogMiner）、MongoDB（cluster time）、Kafka/RocketMQ（消息时间）、SQL Server（`lsn_time_mapping`），无源端时钟来源诚实标 `estimated`；逐行失败分类 `RowFailure` 落明细；慢 SQL 带 `taskId`；新增批写性能剖析 `/batch-profile/report`。
+- **一致性与结构变更**：`TargetTxCheckpoint` 位点写入目标库 `__DBSYNC_CHECKPOINT` 同一 JDBC 事务（`enableCheckpointInTargetTx`）；表级 DDL 自动同步 + schema history + DDL-DML 顺序守卫（`enableDdlAutoSync` / `enableDdlDmlOrderGuard`）；自动切流执行器 SPI（`enableCutoverAutoExecute`，无动作处理器时明确标 `simulated`）；数据对比明细 200 条截断解除（超限外置 chunk）；SQLite Trigger CDC。
+- **迁移评估**：`PlSqlAstRewriter` 轻量 AST 结构化改写（token 层保护字符串/注释，机械等价项自动改写，语义项列人工清单）；SQL 预检支持真实 EXPLAIN / 预编译执行（无连接回退静态扫描）。
+- **安全与工程**：RBAC 三角色矩阵（admin/operator/viewer，严格模式逐请求求值）+ 严格模式管理动作 CSRF；`dbdatasync-engine` 模块退役（33 模块 reactor）；手工 E2E 脚本卡口入 CI；发行包全量重打包（30 jar + bin.zip 均为 Wave24）。
+- **验证**：全 reactor 测试 548/548 通过（基线 533 + 新增 15，见 `TEST_REPORT_WAVE24.md`）；操作手册升级 v2.1.5，`check_manual_sync.py` 47 字段全过；18686 服务重启并线上验证新端点（`/rbac/policy`、`/batch-profile/report`、`/schema-history/*`）。
+- **仍保留**（需外部条件）：真库 E2E 实跑、切流真实动作处理器、共识型 HA、编译器级 PL/SQL 语义改写。
+
+---
+
+## 39. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

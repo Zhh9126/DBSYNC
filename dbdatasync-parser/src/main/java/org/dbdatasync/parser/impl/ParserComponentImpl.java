@@ -691,7 +691,11 @@ public class ParserComponentImpl implements ParserComponent {
         int batchSize = context.getBatchSize();
         List<Map> targetList = context.getTargetList();
         int total = targetList.size();
-        // 单次任务
+        // Wave24：线程池线程不继承 ThreadLocal，捕获父线程任务 ID 后在子任务内显式 set/clear
+        final String taskId = org.dbdatasync.sdk.context.TaskContextHolder.currentTaskId();
+        final org.dbdatasync.sdk.checkpoint.CheckpointRecord pendingCheckpoint =
+                org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.current();
+        // 单次任务（当前线程，Holder 已由分发方设置）
         if (total <= batchSize) {
             return connectorFactory.writer(context);
         }
@@ -704,19 +708,40 @@ public class ParserComponentImpl implements ParserComponent {
                 PluginContext tmpContext = (PluginContext) context.clone();
                 tmpContext.setTargetList(batch);
                 executor.execute(() -> {
+                    // Wave24：把任务上下文带进线程池子任务，慢 SQL 观察点才能拿到 taskId
+                    if (taskId != null) {
+                        org.dbdatasync.sdk.context.TaskContextHolder.set(taskId);
+                    }
+                    // Wave24：待提交位点随子任务透传，保证大事务也在目标库事务内写位点表
+                    if (pendingCheckpoint != null) {
+                        org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.begin(pendingCheckpoint);
+                    }
                     try {
                         Result w = connectorFactory.writer(tmpContext);
                         result.addSuccessData(w.getSuccessData());
                         result.addFailData(w.getFailData());
                         result.getError().append(w.getError());
+                        // Wave24：逐行失败分类必须随子批结果合并，否则大事务路径分类丢失
+                        result.getRowFailures().putAll(w.getRowFailures());
                     } catch (Exception e) {
-                        logger.error(e.getMessage());
+                        logger.error(e.getMessage(), e);
+                        // 子批整体异常时旧实现只打日志，整批既不进 successData 也不进 failData，
+                        // 数据会静默丢失且无法进入失败队列。这里按失败明细兜底，保证可观测、可重推。
+                        result.addFailData(batch);
+                        result.getError().append("[BATCH_FAILED] ").append(e.getMessage())
+                                .append(" ").append(org.dbdatasync.sdk.retry.WriteFailureTag.describe(e))
+                                .append(System.lineSeparator());
                     } finally {
+                        org.dbdatasync.sdk.context.TaskContextHolder.clear();
+                        org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.end();
                         latch.countDown();
                     }
                 });
             } catch (CloneNotSupportedException e) {
                 logger.error(e.getMessage(), e);
+                result.addFailData(batch);
+                result.getError().append("[BATCH_CLONE_FAILED] ").append(e.getMessage())
+                        .append(System.lineSeparator());
                 latch.countDown();
             }
         });

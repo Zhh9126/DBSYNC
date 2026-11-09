@@ -38,6 +38,41 @@ public class CutoverManagerService {
 
     private final Map<String, CutoverSession> sessions = new ConcurrentHashMap<String, CutoverSession>();
 
+    /** Wave24：真实执行器（默认内置，便于离线单测；部署方可注入外部实现） */
+    private volatile CutoverExecutor executor = new DefaultCutoverExecutor();
+
+    public void setExecutor(CutoverExecutor executor) {
+        this.executor = executor == null ? new DefaultCutoverExecutor() : executor;
+    }
+
+    /** 注入外部动作处理器（流量切换 / 任务启停等真实动作） */
+    public void registerActionHandler(CutoverExecutor.ActionHandler handler) {
+        executor.register(handler);
+    }
+
+    /** 注入目标库连接，供切流/回滚 SQL 真实执行 */
+    public void setConnectionProvider(org.dbdatasync.biz.dblink.ConnectionProvider provider) {
+        if (executor instanceof DefaultCutoverExecutor) {
+            ((DefaultCutoverExecutor) executor).setConnectionProvider(provider);
+        }
+    }
+
+    /** Wave24：按相位执行真实切流动作（不改变状态机，状态推进由 transition 负责） */
+    public CutoverExecutor.ActionResult execute(String taskId, CutoverPhase to,
+                                                Map<String, String> params) {
+        return executor.execute(taskId, to, params);
+    }
+
+    /** Wave24：按当前相位的回滚预案逐步执行真实回滚（不可逆步骤需 confirm=true） */
+    public CutoverExecutor.ActionResult rollback(String taskId, Map<String, String> params) {
+        return executor.rollback(taskId, rollbackPlan(taskId), params);
+    }
+
+    /** Wave24：执行台账 */
+    public List<CutoverExecutor.ActionResult> executionLog() {
+        return executor.executionLog();
+    }
+
     /** 创建切流会话（已存在则原样返回，不重置） */
     public CutoverSession create(String taskId) {
         if (taskId == null || taskId.trim().isEmpty()) {

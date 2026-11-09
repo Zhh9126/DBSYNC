@@ -54,6 +54,21 @@ public final class ParserConsumer implements Watcher {
 
     @Override
     public void changeEvent(ChangedEvent event) {
+        // 增量事件的唯一汇聚点：零开销通知链路健康观察点（无观察者时直接短路）。
+        // receivedTimeMillis 是「本系统接收到事件的墙钟时间」，用于计算链路停滞时长；
+        // 源端事件时间当前未由各 Listener 携带，故不冒充端到端延迟。
+        long receivedAt = System.currentTimeMillis();
+        // Wave23：携带源端事件时间（source 标记）与来源，业务层据此计算真实端到端延迟；
+        // 未拿到源端时间的连接器会标 estimated，不冒充 lag。
+        org.dbdatasync.sdk.observer.ReplicationEventObservers.notifyEvent(metaId,
+                event == null ? null : event.getEvent(), receivedAt,
+                event == null ? 0L : org.dbdatasync.sdk.observer.ReplicationEventObservers
+                        .safeSourceEventTimeMillis(event.getChangedOffset()),
+                event == null ? org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_UNKNOWN
+                        : org.dbdatasync.sdk.observer.ReplicationEventObservers
+                        .safeEventTimeSource(event.getChangedOffset()),
+                event == null ? null : org.dbdatasync.sdk.observer.ReplicationEventObservers
+                        .safePosition(event.getChangedOffset()));
         bufferActuatorRouter.execute(metaId, event);
     }
 

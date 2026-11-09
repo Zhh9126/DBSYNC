@@ -35,7 +35,9 @@ public class SqlPrecheckController extends BaseController {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
-    private final SqlPrecheckService sqlPrecheckService = new SqlPrecheckService();
+    /** Wave24：真实预检的可选连接来源（按连接器配置 ID 打开目标库连接） */
+    @javax.annotation.Resource
+    private org.dbdatasync.biz.dblink.DbLinkConnectionSource dbLinkConnectionSource;
 
     /**
      * 生成兼容度预检报告（可选输入；不填时返回「未输入，未执行扫描」零副作用结果）。
@@ -48,11 +50,22 @@ public class SqlPrecheckController extends BaseController {
     public RestResult sqlPrecheck(HttpServletRequest request) {
         try {
             Map<String, String> params = getParams(request);
-            SqlPrecheckReportVO report = sqlPrecheckService.precheck(
+            // Wave24：真实预检默认关闭；只有显式 runtimeCheck=true 且给出 connectorId 才连库
+            boolean runtimeCheck = Boolean.parseBoolean(params.get("runtimeCheck"));
+            boolean explain = Boolean.parseBoolean(params.get("explain"));
+            String connectorId = params.get("connectorId");
+            SqlPrecheckService service = new SqlPrecheckService();
+            if (runtimeCheck && connectorId != null && !connectorId.trim().isEmpty()
+                    && dbLinkConnectionSource != null) {
+                final String id = connectorId.trim();
+                service.setConnectionProvider(() -> dbLinkConnectionSource.open(id));
+            }
+            SqlPrecheckReportVO report = service.precheck(
                     params.get("appSqlText"),
                     params.get("appSqlDir"),
                     params.get("sourceDialect"),
-                    params.get("targetDialect"));
+                    params.get("targetDialect"),
+                    runtimeCheck, explain);
             return RestResult.restSuccess(report);
         } catch (Exception e) {
             logger.error("sql precheck failed", e);

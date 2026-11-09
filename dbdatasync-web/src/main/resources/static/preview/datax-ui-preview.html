@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DBDataSync · DataX Web 视觉升级预览</title>
+    <link type="text/css" rel="stylesheet" href="../plugins/css/font-awesome.min.css"/>
+    <link type="text/css" rel="stylesheet" href="../css/dbdatasync-theme.css"/>
+    <script src="../plugins/js/chartjs/chart.umd.min.js"></script>
+    <style>
+        /* 仅预览页使用的辅助样式 */
+        .preview-tag {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 11px; border-radius: 999px;
+            background: rgba(37,99,235,.1); color: #1D4ED8;
+            font-size: 11px; font-weight: 700; letter-spacing: .5px;
+        }
+        .demo-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; }
+        .demo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+        .demo-label { font-size: 12px; color: var(--text-tertiary); width: 100%; margin-bottom: 2px; font-weight: 600; }
+        .demo-input-row { display: flex; gap: 12px; flex-wrap: wrap; }
+        .demo-input-row .form-control { max-width: 220px; }
+        @media (max-width: 1100px) { .demo-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body class="bg-primary overflow-hidden">
+<div class="flex h-screen">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-logo"><i class="fa fa-database"></i></div>
+            <div class="sidebar-brand-text">
+                <strong>DBDataSync</strong>
+                <span>DATA SYNC PLATFORM</span>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="sidebar-group-title">工作台</div>
+            <div class="space-y-1">
+                <div class="sidebar-item active" url="/index"><i class="fa fa-tachometer w-5 text-center"></i><span>仪表盘</span></div>
+            </div>
+            <div class="sidebar-group-title sync">数据同步</div>
+            <div class="space-y-1">
+                <div class="sidebar-item" url="/connector/list"><i class="fa fa-database w-5 text-center"></i><span>连接管理</span></div>
+                <div class="sidebar-item" url="/mapping/list"><i class="fa fa-exchange w-5 text-center"></i><span>数据同步</span></div>
+                <div class="sidebar-item" url="/sync-record/list"><i class="fa fa-history w-5 text-center"></i><span>数据同步记录</span></div>
+                <div class="sidebar-item" url="/database-sync/list"><i class="fa fa-clone w-5 text-center"></i><span>整库迁移</span></div>
+                <div class="sidebar-item" url="/lineage/list"><i class="fa fa-sitemap w-5 text-center"></i><span>数据血缘</span></div>
+            </div>
+            <div class="sidebar-group-title compare">数据对比</div>
+            <div class="space-y-1">
+                <div class="sidebar-item" url="/validate-sync/list"><i class="fa fa-check-circle-o w-5 text-center"></i><span>对比任务</span></div>
+            </div>
+            <div class="sidebar-group-title compare">迁移评估</div>
+            <div class="space-y-1">
+                <div class="sidebar-item" url="/sql-scan"><i class="fa fa-code w-5 text-center"></i><span>SQL 兼容扫描</span></div>
+                <div class="sidebar-item" url="/slow-sql"><i class="fa fa-hourglass-2 w-5 text-center"></i><span>慢 SQL 采集</span></div>
+                <div class="sidebar-item" url="/logical-io"><i class="fa fa-file-text-o w-5 text-center"></i><span>逻辑导入导出</span></div>
+                <div class="sidebar-item" url="/cutover"><i class="fa fa-exchange w-5 text-center"></i><span>切流编排</span></div>
+                <div class="sidebar-item" url="/content-offload"><i class="fa fa-database w-5 text-center"></i><span>超大内容外置</span></div>
+                <div class="sidebar-item" url="/dblink"><i class="fa fa-link w-5 text-center"></i><span>DBLink 查询</span></div>
+            </div>
+            <div class="sidebar-group-title monitor">监控告警</div>
+            <div class="space-y-1">
+                <div class="sidebar-item" url="/monitor"><i class="fa fa-line-chart w-5 text-center"></i><span>性能监控</span></div>
+                <div class="sidebar-item" url="/notice"><i class="fa fa-bell w-5 text-center"></i><span>告警通知</span></div>
+            </div>
+            <div class="sidebar-group-title system">系统管理</div>
+            <div class="space-y-1 pb-3">
+                <div class="sidebar-item" url="/plugin"><i class="fa fa-plug w-5 text-center"></i><span>插件管理</span></div>
+                <div class="sidebar-item" url="/config"><i class="fa fa-file-code-o w-5 text-center"></i><span>配置管理</span></div>
+                <div class="sidebar-item" url="/user"><i class="fa fa-user w-5 text-center"></i><span>用户管理</span></div>
+                <div class="sidebar-item" url="/system"><i class="fa fa-cog w-5 text-center"></i><span>系统配置</span></div>
+                <div class="sidebar-item" url="/manual"><i class="fa fa-book w-5 text-center"></i><span>操作手册</span></div>
+            </div>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="sidebar-footer-row"><span>通用数据同步中间件</span><span class="status-dot"></span></div>
+            <span class="version-tag">v2.x</span>
+        </div>
+    </aside>
+
+    <!-- 主内容 -->
+    <main class="flex-1 flex flex-col overflow-hidden main-content">
+        <header class="h-14 border-b border-gray-200 flex items-center justify-between">
+            <div class="topbar-left">
+                <div class="topbar-crumb">
+                    <i class="fa fa-home"></i><span>工作台</span>
+                    <i class="fa fa-angle-right crumb-sep"></i><span id="pageCrumb">仪表盘</span>
+                </div>
+                <span class="topbar-divider"></span>
+                <span class="topbar-heading">数据集成控制台</span>
+            </div>
+            <div class="topbar-right">
+                <span class="preview-tag"><i class="fa fa-eye"></i>视觉预览 · 静态数据</span>
+                <span class="topbar-status"><span class="status-dot"></span>服务运行正常</span>
+                <span class="topbar-date" id="topbarDate"></span>
+                <button class="topbar-icon-btn" type="button" onclick="location.reload()" title="重新载入预览"><i class="fa fa-refresh"></i></button>
+                <button id="themeToggleBtn" class="theme-toggle" type="button" title="切换深色/浅色主题">
+                    <i class="fa fa-moon-o"></i><i class="fa fa-sun-o"></i>
+                </button>
+                <div class="dropdown flex items-center">
+                    <button class="flex items-center text-gray-500" data-toggle>
+                        <i class="fa fa-user-circle user-avatar badge-primary"></i>
+                        <span class="md:inline font-medium ml-2">admin</span>
+                        <i class="fa fa-angle-down"></i>
+                    </button>
+                    <ul class="dropdown-menu hidden">
+                        <li><button><i class="fa fa-edit"></i> 修改</button></li>
+                        <div class="dropdown-divider"></div>
+                        <li><button><i class="fa fa-power-off"></i> 注销</button></li>
+                    </ul>
+                </div>
+            </div>
+        </header>
+
+        <div id="mainContent" class="p-5">
+            <div class="ui-page">
+
+                <!-- Hero -->
+                <section class="hero-banner">
+                    <div class="hero-orb hero-orb-a"></div>
+                    <div class="hero-orb hero-orb-b"></div>
+                    <div class="hero-ring"></div>
+                    <div class="hero-content">
+                        <span class="hero-eyebrow"><i class="fa fa-circle"></i>DATA SYNC OVERVIEW</span>
+                        <h1 class="hero-title">数据集成控制台 · 运行总览</h1>
+                        <p class="hero-sub">统一纳管异构数据源，覆盖全量迁移、实时增量、整库迁移与数据校验，链路状态一目了然。</p>
+                        <div class="hero-actions">
+                            <button class="hero-btn hero-btn-solid" type="button"><i class="fa fa-plus"></i> 新建同步任务</button>
+                            <button class="hero-btn" type="button"><i class="fa fa-database"></i> 添加数据源</button>
+                            <button class="hero-btn" type="button"><i class="fa fa-line-chart"></i> 运行报表</button>
+                        </div>
+                    </div>
+                    <div class="hero-metrics">
+                        <div class="hero-metric"><div class="hero-metric-label">同步任务</div><div class="hero-metric-value">128</div><div class="hero-metric-foot">全部任务数</div></div>
+                        <div class="hero-metric"><div class="hero-metric-label">运行中</div><div class="hero-metric-value">42</div><div class="hero-metric-foot">实时执行中</div></div>
+                        <div class="hero-metric"><div class="hero-metric-label">成功率</div><div class="hero-metric-value">99.2<small>%</small></div><div class="hero-metric-foot">按同步记录统计</div></div>
+                    </div>
+                </section>
+
+                <!-- KPI -->
+                <div class="kpi-grid">
+                    <div class="card kpi-card kpi-accent-blue">
+                        <div class="kpi-top"><p class="kpi-label">总任务数</p><div class="kpi-icon"><i class="fa fa-tasks"></i></div></div>
+                        <div class="kpi-main"><span class="kpi-value">128</span><span class="kpi-unit">个任务</span></div>
+                        <div class="kpi-foot"><span class="kpi-trend up"><i class="fa fa-arrow-up"></i>12.50%</span><span>较上周增长 14 个</span></div>
+                        <svg class="kpi-spark" viewBox="0 0 118 52" preserveAspectRatio="none"><path d="M0 42 L16 36 L32 38 L48 24 L64 28 L82 14 L100 18 L118 6" fill="none" stroke="#2563EB" stroke-width="3" stroke-linecap="round"/></svg>
+                    </div>
+                    <div class="card kpi-card kpi-accent-green">
+                        <div class="kpi-top"><p class="kpi-label">运行中任务</p><div class="kpi-icon"><i class="fa fa-play"></i></div></div>
+                        <div class="kpi-main"><span class="kpi-value">42</span><span class="kpi-unit">个任务</span></div>
+                        <div class="kpi-foot"><span class="kpi-trend up"><i class="fa fa-check"></i>正常</span><span>占总任务 32.81%</span></div>
+                        <svg class="kpi-spark" viewBox="0 0 118 52" preserveAspectRatio="none"><path d="M0 40 L18 34 L34 36 L50 22 L68 26 L86 16 L118 10" fill="none" stroke="#059669" stroke-width="3" stroke-linecap="round"/></svg>
+                    </div>
+                    <div class="card kpi-card kpi-accent-red">
+                        <div class="kpi-top"><p class="kpi-label">失败任务</p><div class="kpi-icon"><i class="fa fa-exclamation-triangle"></i></div></div>
+                        <div class="kpi-main"><span class="kpi-value">3</span><span class="kpi-unit">个</span></div>
+                        <div class="kpi-foot"><span class="kpi-trend flat">需关注</span><span>异常任务建议及时处理</span></div>
+                        <svg class="kpi-spark" viewBox="0 0 118 52" preserveAspectRatio="none"><path d="M0 40 L18 30 L34 34 L52 20 L70 26 L88 14 L118 22" fill="none" stroke="#DC2626" stroke-width="3" stroke-linecap="round"/></svg>
+                    </div>
+                    <div class="card kpi-card kpi-accent-cyan">
+                        <div class="kpi-top"><p class="kpi-label">同步总数</p><div class="kpi-icon"><i class="fa fa-database"></i></div></div>
+                        <div class="kpi-main"><span class="kpi-value">1,286,430</span><span class="kpi-unit">条记录</span></div>
+                        <div class="kpi-foot"><span class="kpi-trend up"><i class="fa fa-arrow-up"></i>8.32%</span><span>较昨日增长</span></div>
+                        <svg class="kpi-spark" viewBox="0 0 118 52" preserveAspectRatio="none"><path d="M0 44 L16 38 L32 30 L48 32 L64 20 L82 22 L100 10 L118 4" fill="none" stroke="#0284C7" stroke-width="3" stroke-linecap="round"/></svg>
+                    </div>
+                </div>
+
+                <!-- 图表 -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 mb-5">
+                    <div class="form-container panel-card lg:col-span-2">
+                        <div class="panel-head">
+                            <h3 class="panel-title"><i class="fa fa-line-chart"></i>同步趋势<span class="panel-sub">成功 / 失败记录按日统计</span></h3>
+                            <div class="seg-control">
+                                <button class="btn btn-outline text-sm trend-item text-primary" data-key="7">一周</button>
+                                <button class="btn btn-outline text-sm trend-item" data-key="15">半个月</button>
+                                <button class="btn btn-outline text-sm trend-item" data-key="30">一个月</button>
+                            </div>
+                        </div>
+                        <div class="panel-body chart-wrap"><canvas id="trendChart"></canvas></div>
+                    </div>
+                    <div class="form-container panel-card lg:col-span-1">
+                        <div class="panel-head"><h3 class="panel-title"><i class="fa fa-pie-chart"></i>同步事件<span class="panel-sub">点击可下钻明细</span></h3></div>
+                        <div class="panel-body">
+                            <div class="mini-stats-grid mb-3">
+                                <div class="mini-stat-card mini-stat-card--success"><div class="mini-stat-info"><p class="mini-stat-title">成功</p></div><span class="mini-stat-number text-success">1,275,902</span></div>
+                                <div class="mini-stat-card mini-stat-card--error"><div class="mini-stat-info"><p class="mini-stat-title">失败</p></div><span class="mini-stat-number text-error">10,528</span></div>
+                                <div class="mini-stat-card mini-stat-card--primary"><div class="mini-stat-info"><p class="mini-stat-title">新增</p></div><span class="mini-stat-number text-primary">861,204</span></div>
+                                <div class="mini-stat-card mini-stat-card--info"><div class="mini-stat-info"><p class="mini-stat-title">修改</p></div><span class="mini-stat-number text-info">402,318</span></div>
+                                <div class="mini-stat-card mini-stat-card--warning"><div class="mini-stat-info"><p class="mini-stat-title">删除</p></div><span class="mini-stat-number text-warning">22,640</span></div>
+                                <div class="mini-stat-card mini-stat-card--violet"><div class="mini-stat-info"><p class="mini-stat-title">DDL</p></div><span class="mini-stat-number text-violet">268</span></div>
+                            </div>
+                            <p class="section-caption">任务状态分布</p>
+                            <div class="chart-wrap"><canvas id="statusChart"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 连接与任务 -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 mb-5">
+                    <div class="form-container panel-card lg:col-span-1">
+                        <div class="panel-head">
+                            <h3 class="panel-title"><i class="fa fa-database"></i>数据源连接</h3>
+                            <button class="btn btn-info btn-sm"><i class="fa fa-plus"></i><span>添加连接</span></button>
+                        </div>
+                        <div class="panel-body flush">
+                            <div class="conn-row"><div class="flex items-center"><div class="conn-logo"><i class="fa fa-database" style="color:#1D4ED8;font-size:20px"></i></div><div class="ml-3"><p class="conn-name">生产 MySQL</p><p class="conn-url">jdbc:mysql://10.0.1.20:3306/order</p></div></div><span class="badge badge-success">在线</span></div>
+                            <div class="conn-row"><div class="flex items-center"><div class="conn-logo"><i class="fa fa-database" style="color:#1D4ED8;font-size:20px"></i></div><div class="ml-3"><p class="conn-name">Oracle 19c</p><p class="conn-url">jdbc:oracle:thin:@10.0.1.31:1521/orcl</p></div></div><span class="badge badge-success">在线</span></div>
+                            <div class="conn-row"><div class="flex items-center"><div class="conn-logo"><i class="fa fa-database" style="color:#94A3B8;font-size:20px"></i></div><div class="ml-3"><p class="conn-name">达梦备库</p><p class="conn-url">jdbc:dm://10.0.1.20:5237</p></div></div><span class="badge badge-error">离线</span></div>
+                        </div>
+                    </div>
+                    <div class="form-container panel-card lg:col-span-2">
+                        <div class="panel-head">
+                            <h3 class="panel-title"><i class="fa fa-exchange"></i>最近同步任务<span class="panel-sub">最近更新的驱动与状态</span></h3>
+                            <button class="btn btn-info btn-sm"><i class="fa fa-plus"></i><span>添加同步</span></button>
+                        </div>
+                        <div class="panel-body flush">
+                            <table class="table">
+                                <thead><tr><th>名称</th><th>类型</th><th>结果</th><th>状态</th><th>最后同步</th></tr></thead>
+                                <tbody>
+                                    <tr><td><div class="font-medium">订单库全量迁移</div></td><td>全量</td><td><span class="text-success">成功 1,024,880</span></td><td><span class="badge badge-success">已完成</span></td><td>2 分钟前</td></tr>
+                                    <tr><td><div class="font-medium">用户表实时同步</div></td><td>增量 CDC</td><td><span class="text-success">成功 12,406</span></td><td><span class="badge badge-primary">运行中</span></td><td>刚刚</td></tr>
+                                    <tr><td><div class="font-medium">日志表归档</div></td><td>定时全量</td><td><span class="text-error">失败 3</span></td><td><span class="badge badge-error">异常</span></td><td>18 分钟前</td></tr>
+                                    <tr><td><div class="font-medium">商品维表同步</div></td><td>增量 CDC</td><td><span class="text-success">成功 8,932</span></td><td><span class="badge badge-primary">运行中</span></td><td>1 小时前</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 组件规范 -->
+                <div class="ui-page-head">
+                    <div>
+                        <h2 class="ui-page-title">组件视觉规范</h2>
+                        <p class="ui-page-desc">以下组件沿用原有 class 名，全站页面自动继承新主题</p>
+                    </div>
+                    <span class="preview-tag"><i class="fa fa-paint-brush"></i>DataX Web 蓝调</span>
+                </div>
+                <div class="demo-grid mb-5">
+                    <div class="form-container panel-card">
+                        <div class="panel-head"><h3 class="panel-title"><i class="fa fa-hand-pointer-o"></i>按钮与徽章</h3></div>
+                        <div class="panel-body">
+                            <div class="demo-row">
+                                <p class="demo-label">操作按钮</p>
+                                <button class="btn btn-primary"><i class="fa fa-save"></i>保存配置</button>
+                                <button class="btn btn-info"><i class="fa fa-plus"></i>新建</button>
+                                <button class="btn btn-outline"><i class="fa fa-search"></i>查询</button>
+                                <button class="btn btn-success"><i class="fa fa-check"></i>启用</button>
+                                <button class="btn btn-danger"><i class="fa fa-trash"></i>删除</button>
+                            </div>
+                            <div class="demo-row" style="margin-top:18px">
+                                <p class="demo-label">状态徽章</p>
+                                <span class="badge badge-primary">运行中</span>
+                                <span class="badge badge-success">在线 / 成功</span>
+                                <span class="badge badge-warning">等待中</span>
+                                <span class="badge badge-error">离线 / 失败</span>
+                                <span class="badge badge-info">信息</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-container panel-card">
+                        <div class="panel-head"><h3 class="panel-title"><i class="fa fa-keyboard-o"></i>表单与进度</h3></div>
+                        <div class="panel-body">
+                            <div class="demo-input-row">
+                                <input class="form-control" type="text" placeholder="请输入任务名称">
+                                <select class="form-control"><option>全量同步</option><option>增量同步</option></select>
+                            </div>
+                            <div style="margin-top:18px">
+                                <p class="demo-label">同步进度 · 72%</p>
+                                <div class="progress-card" style="padding:14px">
+                                    <div class="progress-header progress-header-compact"><span class="progress-title">order_detail</span><span class="progress-value">72%</span></div>
+                                    <div class="progress-bar progress-bar-compact"><div class="progress-fill" style="--progress-width:72%"></div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="text-xs text-center mt-4 mb-2" style="color:var(--text-tertiary)">
+                    DBDataSync · DataX Web 视觉升级预览　|　页面引用真实主题 CSS，切换右上角按钮可查看深色主题
+                </p>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    // 支持 #dark 直接预览深色主题（也可点右上角按钮切换）
+    if (location.hash === '#dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
+    // 顶栏日期
+    var d = new Date();
+    var weeks = ['周日','周一','周二','周三','周四','周五','周六'];
+    var el = document.getElementById('topbarDate');
+    if (el) { el.textContent = d.getFullYear() + '年' + (d.getMonth()+1) + '月' + d.getDate() + '日 · ' + weeks[d.getDay()]; }
+
+    // 主题切换（演示）
+    var toggle = document.getElementById('themeToggleBtn');
+    if (toggle) {
+        toggle.addEventListener('click', function () {
+            var root = document.documentElement;
+            if (root.getAttribute('data-theme') === 'dark') {
+                root.removeAttribute('data-theme');
+            } else {
+                root.setAttribute('data-theme', 'dark');
+            }
+        });
+    }
+
+    // 侧栏 active 与面包屑（演示）
+    var crumb = document.getElementById('pageCrumb');
+    document.querySelectorAll('.sidebar-item').forEach(function (item) {
+        item.addEventListener('click', function () {
+            document.querySelectorAll('.sidebar-item').forEach(function (i) { i.classList.remove('active'); });
+            item.classList.add('active');
+            var span = item.querySelector('span');
+            if (crumb && span) { crumb.textContent = span.textContent.trim(); }
+        });
+    });
+
+    // 分段控件（演示）
+    document.querySelectorAll('.trend-item').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('.trend-item').forEach(function (b) { b.classList.remove('text-primary'); });
+            btn.classList.add('text-primary');
+        });
+    });
+
+    // 图表（Chart.js 本地文件，加载失败时静默降级）
+    if (typeof window.Chart === 'undefined') { return; }
+    var gridColor = 'rgba(148,163,184,.16)';
+    var tickColor = '#94A3B8';
+    var trend = document.getElementById('trendChart');
+    if (trend) {
+        new Chart(trend.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: ['周一','周二','周三','周四','周五','周六','周日'],
+                datasets: [
+                    { label: '同步成功', data: [820,960,1100,980,1280,1420,1350], borderColor:'#2563EB', backgroundColor:'rgba(37,99,235,.12)', borderWidth:2.5, pointRadius:0, pointHoverRadius:5, tension:.35, fill:true },
+                    { label: '同步失败', data: [12,8,15,6,10,4,7], borderColor:'#F59E0B', backgroundColor:'rgba(245,158,11,.12)', borderWidth:2, pointRadius:0, pointHoverRadius:5, tension:.35, fill:true }
+                ]
+            },
+            options: {
+                responsive:true, maintainAspectRatio:true, aspectRatio:2.35,
+                interaction:{mode:'index',intersect:false},
+                plugins:{ legend:{position:'bottom',labels:{usePointStyle:true,pointStyle:'circle',boxWidth:8,padding:18,color:'#64748B'}}, tooltip:{backgroundColor:'rgba(15,23,42,.92)',cornerRadius:8,padding:10} },
+                scales:{ x:{grid:{display:false},ticks:{color:tickColor,font:{size:11}}}, y:{beginAtZero:true,grid:{color:gridColor},ticks:{color:tickColor,font:{size:11}}} }
+            }
+        });
+    }
+    var status = document.getElementById('statusChart');
+    if (status) {
+        new Chart(status.getContext('2d'), {
+            type: 'bar',
+            data: { labels:['总任务','运行中','已失败'], datasets:[{ data:[128,42,3], backgroundColor:['rgba(37,99,235,.72)','rgba(16,185,129,.72)','rgba(239,68,68,.72)'], borderWidth:0, borderRadius:5, barThickness:15 }] },
+            options: {
+                indexAxis:'y', responsive:true, maintainAspectRatio:true, aspectRatio:2.1,
+                plugins:{legend:{display:false},tooltip:{backgroundColor:'rgba(15,23,42,.92)',cornerRadius:8}},
+                scales:{x:{beginAtZero:true,grid:{color:gridColor},ticks:{color:tickColor,font:{size:11}}},y:{grid:{display:false},ticks:{color:'#64748B',font:{size:11}}}}
+            }
+        });
+    }
+})();
+</script>
+</body>
+</html>
