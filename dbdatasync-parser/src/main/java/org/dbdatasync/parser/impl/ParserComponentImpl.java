@@ -228,10 +228,16 @@ public class ParserComponentImpl implements ParserComponent {
     }
 
     /**
-     * 分片并发读主流程：将单表按 splitKey 值域切分为 splitCount 个左闭右开区间，
+     * 分片并发读主流程：将单表按 splitKey 切分为 splitCount 个左闭右开区间，
      * 每个区间一个独立子上下文（继承 command/映射/插件，注入 [start,end) 过滤条件），
      * 并发执行各自的游标循环；共享 task 启停信号与 meta 计数（flush 原子累加，天然线程安全）。
-     * <p>任何子分片异常都将聚合后上抛，保证失败可见。</p>
+     * <p>切分方式（Wave32）：
+     * <ul>
+     *     <li>{@code fullSplitMode=value}（默认）：值域算术均分（Wave4 行为，存量零影响）；</li>
+     *     <li>{@code fullSplitMode=sample}：按 {@code ORDER BY 分片键 LIMIT n,1} 采样断点均分，
+     *         按行均分、抗倾斜，适合 uuid / 字符串 / 日期 / 倾斜数值键。</li>
+     * </ul>
+     * 任何子分片异常都将聚合后上抛，保证失败可见。</p>
      *
      * @param task     父任务（子分片共享其 isRunning 信号）
      * @param mapping  映射配置
@@ -242,6 +248,7 @@ public class ParserComponentImpl implements ParserComponent {
     private void executeSliced(Task task, Mapping mapping, TableGroup group, Map<String, String> command, Executor executor, MigrationRateLimiter limiter) {
         final String splitKey = mapping.getParams().get(ConfigConstant.FULL_SPLIT_KEY);
         final int splitCount = normalizeSplitCount(mapping.getParams().get(ConfigConstant.FULL_SPLIT_COUNT));
+        final String mode = parseSplitMode(mapping);
         final String metaId = task.getId();
 
         List<FieldMapping> fieldMappings = group.getFieldMapping();
@@ -251,26 +258,78 @@ public class ParserComponentImpl implements ParserComponent {
                 .orElse(null);
         Assert.notNull(splitField, String.format("分片键[%s]在源表中不存在.", splitKey));
 
-        // 1、探测源端 splitKey 值域（MIN/MAX），探测失败或空表降级串行
-        FullyQualifiedSplitRange range = probeSplitRange(task, mapping, group, command, splitKey);
-        if (range == null || range.max <= range.min) {
-            logger.warn("分片值域探测失败或空表，降级为串行:{} 分片键[{}]", metaId, splitKey);
-            executeCommon(task, mapping, group, group.getCommand(), fieldMappings, executor, limiter);
-            return;
+        SplitBound[] intervals;
+        if ("sample".equals(mode)) {
+            intervals = buildSampleIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        } else {
+            intervals = buildValueIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
         }
-
-        // 2、按值域切分（左闭右开，最后一片闭合到 max）
-        long[][] intervals = splitHalfOpenRange(range.min, range.max, splitCount);
-        if (intervals.length <= 1) {
+        if (intervals == null || intervals.length <= 1) {
             logger.info("分片并发读降级为串行:{} 值域不足2片", metaId);
             executeCommon(task, mapping, group, group.getCommand(), fieldMappings, executor, limiter);
             return;
         }
-        logger.info("分片并发读:{} 表[{}] 分片键[{}] 值域[{}~{}] 分片数[{}]", metaId,
-                group.getSourceTable().getName(), splitKey, range.min, range.max, intervals.length);
+        logger.info("分片并发读:{} 表[{}] 分片键[{}] 方式[{}] 分片数[{}]", metaId,
+                group.getSourceTable().getName(), splitKey, mode, intervals.length);
 
-        // 3、并发执行各分片（共享 task/meta，flush 与 meta 计数天然线程安全）
+        // 并发执行各分片（共享 task/meta，flush 与 meta 计数天然线程安全）
         runSlices(task, mapping, group, command, fieldMappings, splitKey, intervals, executor, limiter);
+    }
+
+    /**
+     * 构建值域算术均分区间（Wave4 行为）。
+     * <p>探测失败 / 空表 / 值域不足时返回 null（调用方降级串行）。</p>
+     */
+    private SplitBound[] buildValueIntervals(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                                             String splitKey, int splitCount, String metaId) {
+        FullyQualifiedSplitRange range = probeSplitRange(task, mapping, group, command, splitKey);
+        if (range == null || range.max <= range.min) {
+            logger.warn("分片值域探测失败或空表，降级为串行:{} 分片键[{}]", metaId, splitKey);
+            return null;
+        }
+        long[][] raw = splitHalfOpenRange(range.min, range.max, splitCount);
+        if (raw.length <= 1) {
+            return null;
+        }
+        SplitBound[] intervals = new SplitBound[raw.length];
+        for (int i = 0; i < raw.length; i++) {
+            intervals[i] = new SplitBound(raw[i][0], raw[i][1]);
+        }
+        return intervals;
+    }
+
+    /**
+     * 构建采样均分区间（Wave32 新增）。
+     * <ul>
+     *     <li>先探测值域（MIN/MAX）兜底；</li>
+     *     <li>再按采样断点切；断点探测失败自动降级 value 均分；</li>
+     *     <li>结果区间与原 value 模式同为左闭右开，断点续传/并发语义 100% 复用。</li>
+     * </ul>
+     * 任一环节不可用返回 null（调用方降级串行）。
+     */
+    private SplitBound[] buildSampleIntervals(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                                              String splitKey, int splitCount, String metaId) {
+        // 1、MIN/MAX 兜底（与 value 共用探测，采样失败降级用）
+        FullyQualifiedSplitRange range = probeSplitRange(task, mapping, group, command, splitKey);
+        if (range == null || range.max <= range.min) {
+            logger.warn("分片值域探测失败或空表，降级为串行:{} 分片键[{}]", metaId, splitKey);
+            return null;
+        }
+        // 2、采样断点
+        int sampleCap = parseSampleCap(mapping);
+        int points = Math.min(splitCount - 1, sampleCap);
+        Object[] bounds = probeSampleBounds(task, mapping, group, command, splitKey, splitCount);
+        if (bounds == null || bounds.length == 0) {
+            logger.info("采样断点探测失败，降级 value 均分:{} 分片键[{}]", metaId, splitKey);
+            return buildValueIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        }
+        // 3、断点转区间；断点去重后不足 2 片降级 value
+        SplitBound[] intervals = buildSampleIntervals(bounds, range.min, range.max);
+        if (intervals != null && intervals.length <= 1) {
+            logger.info("采样断点去重后仅{}片，降级 value 均分:{}", intervals.length, metaId);
+            return buildValueIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        }
+        return intervals;
     }
 
     /**
@@ -334,6 +393,161 @@ public class ParserComponentImpl implements ParserComponent {
     }
 
     /**
+     * 采样均分断点探测：按 {@code ORDER BY splitKey LIMIT offset,1} 采样行分位断点。
+     * <p>对源表执行 N 次索引点查（N=采样点数，默认 64，可配置），每次取第 offset 行的分片键值，
+     * 天然按行均分，不受键值分布偏斜影响（uuid/字符串/日期/倾斜数值均适用）。</p>
+     *
+     * @return 断点数组（升序，长度 n-1）；探测失败返回 null（由调用方降级）
+     */
+    private Object[] probeSampleBounds(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                                       String splitKey, int sampleCount) {
+        String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
+        if (StringUtil.isBlank(countSql)) {
+            return null;
+        }
+        // 取 COUNT 的 FROM 子句做采样 base（与 COUNT 同口径）
+        final String countToken = "COUNT(*)";
+        int idx = countSql.toUpperCase().indexOf(countToken);
+        if (idx < 0) {
+            return null;
+        }
+        SqlIdentifierValidator.validateIdentifier(splitKey);
+        String fromAndWhere = countSql.substring(idx + countToken.length());
+        // 采样 SQL: SELECT splitKey FROM <fromAndWhere> ORDER BY splitKey LIMIT ?, 1
+        final String sampleSql = "SELECT " + splitKey + " FROM " + fromAndWhere + " ORDER BY " + splitKey + " LIMIT ?, 1";
+        // 总行数先探一次（COUNT），避免采样偏移越界
+        Long totalRows = probeTotalRows(task, mapping, group, command);
+        if (totalRows == null || totalRows <= 0) {
+            return null;
+        }
+        final int n = Math.min(sampleCount, Math.max(1, (int) (totalRows / 1000L + 1))); // 采样点 ≥1
+        if (n <= 1) {
+            return null;
+        }
+        final int points = n - 1;
+        final int cap = Math.max(16, points);
+        Object[] bounds = new Object[points];
+        final String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getSourceConnectorId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+        try {
+            ConnectorInstance sourceInstance = connectorFactory.connect(sourceInstanceId);
+            java.util.List<Object> pointList = ((DatabaseConnectorInstance) sourceInstance).execute(databaseTemplate -> {
+                java.util.List<Object> result = new ArrayList<>(points);
+                for (int i = 0; i < points; i++) {
+                    long offset = (long) Math.ceil((double) (i + 1) * totalRows / n);
+                    if (offset >= totalRows) {
+                        offset = totalRows - 1;
+                    }
+                    java.util.List<Map<String, Object>> rows =
+                            databaseTemplate.queryForList(sampleSql, offset, 1);
+                    if (CollectionUtils.isEmpty(rows)) {
+                        return null;
+                    }
+                    Object v = rows.get(0).values().iterator().next();
+                    if (v == null) {
+                        return null;
+                    }
+                    result.add(v);
+                }
+                return result;
+            });
+            if (pointList == null || pointList.size() != points) {
+                return null;
+            }
+            for (int i = 0; i < points; i++) {
+                bounds[i] = pointList.get(i);
+            }
+            return bounds;
+        } catch (Exception e) {
+            logger.warn("分片采样断点探测失败（降级 value 均分）:{} 原因:{}", task.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 探测分片键总行数（COUNT），供采样偏移计算。
+     */
+    private Long probeTotalRows(Task task, Mapping mapping, TableGroup group, Map<String, String> command) {
+        String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
+        if (StringUtil.isBlank(countSql)) {
+            return null;
+        }
+        final String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getSourceConnectorId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+        try {
+            ConnectorInstance sourceInstance = connectorFactory.connect(sourceInstanceId);
+            return ((DatabaseConnectorInstance) sourceInstance).execute(databaseTemplate -> {
+                java.util.List<Map<String, Object>> rows = databaseTemplate.queryForList(countSql);
+                if (CollectionUtils.isEmpty(rows)) {
+                    return null;
+                }
+                Object v = rows.get(0).values().iterator().next();
+                if (v == null) {
+                    return null;
+                }
+                return v instanceof Number ? ((Number) v).longValue() : Long.parseLong(String.valueOf(v).trim());
+            });
+        } catch (Exception e) {
+            logger.warn("分片表总行数探测失败:{} 原因:{}", task.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 把采样断点数组转为 SplitBound 区间（左闭右开，覆盖全值域）。
+     * <p>断点已升序（ORDER BY 保证），相邻断点间构成一片；断点相等（同键多行）时合并窄片。
+     * 最后一片上界 = maxValue（探测值），与 value 模式 {@code max+1} 闭区间语义一致，避免 null 参数导致恒假。</p>
+     * <p>包级可见以便单元测试。</p>
+     */
+    SplitBound[] buildSampleIntervals(Object[] bounds, Object minValue, Object maxValue) {
+        if (bounds == null || bounds.length == 0) {
+            return new SplitBound[0];
+        }
+        java.util.List<SplitBound> list = new ArrayList<>(bounds.length + 1);
+        Object prev = minValue;
+        for (Object b : bounds) {
+            // 相等断点（同键多行）合并：不断点该处，否则产生空片
+            if (b != null && b.equals(prev)) {
+                continue;
+            }
+            list.add(new SplitBound(prev, b));
+            prev = b;
+        }
+        // 最后一片 [prev, maxValue]（inclusiveEnd 闭区间，用探测的 MAX 承载上界）
+        list.add(new SplitBound(prev, maxValue));
+        return list.toArray(new SplitBound[0]);
+    }
+
+    /**
+     * 解析分片切分方式：value（默认） / sample。非法值回退 value。
+     */
+    String parseSplitMode(Mapping mapping) {
+        String mode = mapping.getParams() == null ? null : mapping.getParams().get(ConfigConstant.FULL_SPLIT_MODE);
+        if (mode == null) {
+            return "value";
+        }
+        String m = mode.trim().toLowerCase();
+        return "sample".equals(m) ? "sample" : "value";
+    }
+
+    /**
+     * 解析采样点数：默认 64，[2,4096] 收敛（上限防资源爆炸）。
+     */
+    int parseSampleCap(Mapping mapping) {
+        String cap = mapping.getParams() == null ? null : mapping.getParams().get(ConfigConstant.FULL_SPLIT_SAMPLE_CAP);
+        if (cap == null || !cap.matches("\\d+")) {
+            return 64;
+        }
+        try {
+            long v = Long.parseLong(cap);
+            if (v < 2) {
+                return 64;
+            }
+            return (int) Math.min(v, 4096);
+        } catch (NumberFormatException e) {
+            return 64;
+        }
+    }
+
+    /**
      * 并发执行全量分片读：每分片一个独立游标循环，共享父 task 启停信号。
      * 任一子分片失败即取消中止父任务并上抛首个异常，其余分片尽力退出。
      *
@@ -342,7 +556,7 @@ public class ParserComponentImpl implements ParserComponent {
      * 已完成分片直接跳过。</p>
      */
     private void runSlices(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
-                           List<FieldMapping> fieldMappings, String splitKey, long[][] intervals, Executor executor,
+                           List<FieldMapping> fieldMappings, String splitKey, SplitBound[] intervals, Executor executor,
                            MigrationRateLimiter limiter) {
         long t0 = System.nanoTime();
         final int count = intervals.length;
@@ -357,12 +571,13 @@ public class ParserComponentImpl implements ParserComponent {
         // Wave31：恢复前先把本次切分的边界写入各分片进度（值域漂移的分片重置为从头读）
         prepareSliceProgress(task, group, intervals);
         for (int i = 0; i < count; i++) {
-            final long[] interval = intervals[i];
+            final SplitBound interval = intervals[i];
             final boolean firstSlice = i == 0;
             final String sliceKey = sliceProgressKey(group.getId(), i);
             // 已完成且边界未漂移的分片直接跳过（断点续传）
             if (FullTableProgressUtil.isDone(metaSnapshot(task.getId()), sliceKey)) {
-                logger.info("分片已完成，跳过:{} {} 区间[{}~{})", task.getId(), sliceKey, interval[0], interval[1]);
+                logger.info("分片已完成，跳过:{} {} 区间[{}~{})", task.getId(), sliceKey,
+                        interval.getLower(), interval.getUpper() == null ? "+∞" : interval.getUpper());
                 latch.countDown();
                 continue;
             }
@@ -371,8 +586,8 @@ public class ParserComponentImpl implements ParserComponent {
                 Task sliceTask = task.createTableTask(sliceKey);
                 restoreSliceProgress(sliceTask, task.getId(), sliceKey, interval);
                 try {
-                    executeSlice(sliceTask, mapping, group, command, fieldMappings, splitKey, interval[0], interval[1],
-                            firstSlice, executor, limiter);
+                    executeSlice(sliceTask, mapping, group, command, fieldMappings, splitKey,
+                            interval.getLower(), interval.getUpper(), firstSlice, executor, limiter);
                     // 仅在任务未被中止时标记完成：因其它分片失败而提前退出的分片，
                     // 重跑时必须重读（宁可重复读不可误跳过）
                     if (task.isRunning()) {
@@ -381,7 +596,8 @@ public class ParserComponentImpl implements ParserComponent {
                 } catch (Throwable e) {
                     failure.compareAndSet(null, e);
                     task.stop();
-                    logger.error(String.format("分片执行失败[%s] 区间[%d, %d):%s", task.getId(), interval[0], interval[1]), e);
+                    logger.error(String.format("分片执行失败[%s] 区间[%s~%s):%s", task.getId(),
+                            interval.getLower(), interval.getUpper() == null ? "+∞" : interval.getUpper()), e);
                 } finally {
                     latch.countDown();
                 }
@@ -412,9 +628,11 @@ public class ParserComponentImpl implements ParserComponent {
 
     /**
      * 分片边界串：{@code start~end}，用于恢复断点时校验值域未漂移。
+     * <p>Wave32：支持任意对象边界（数值 Long / uuid / 字符串 / 日期），统一 {@code String.valueOf} 序列化；
+     * Wave31 数值模式（{@code 10~20}）格式完全不变，存量断点零影响。</p>
      */
-    static String intervalBounds(long start, long end) {
-        return start + "~" + end;
+    static String intervalBounds(Object start, Object end) {
+        return String.valueOf(start) + "~" + (end == null ? "" : String.valueOf(end));
     }
 
     private Map<String, String> metaSnapshot(String taskId) {
@@ -426,7 +644,7 @@ public class ParserComponentImpl implements ParserComponent {
      * 恢复单分片断点：仅当已有进度未完成、且边界与本次切分一致时才复用游标/页码；
      * 边界漂移（源表 MIN/MAX 变化导致切分变化）一律从头读，避免按旧游标漏数据。
      */
-    private void restoreSliceProgress(Task sliceTask, String rootTaskId, String sliceKey, long[] interval) {
+    private void restoreSliceProgress(Task sliceTask, String rootTaskId, String sliceKey, SplitBound interval) {
         Map<String, String> snapshot = metaSnapshot(rootTaskId);
         if (snapshot == null) {
             return;
@@ -435,7 +653,7 @@ public class ParserComponentImpl implements ParserComponent {
         if (progress.isDone()) {
             return;
         }
-        boolean boundsMatched = intervalBounds(interval[0], interval[1]).equals(progress.getBounds());
+        boolean boundsMatched = intervalBounds(interval.getLower(), interval.getUpper()).equals(progress.getBounds());
         if (!boundsMatched) {
             return;
         }
@@ -451,7 +669,7 @@ public class ParserComponentImpl implements ParserComponent {
      * 分片启动前统一准备进度：为每个分片写入/修正 bounds（值域漂移的旧进度重置）。
      * 无 Meta（如纯内存测试环境）时静默跳过。
      */
-    private void prepareSliceProgress(Task task, TableGroup group, long[][] intervals) {
+    private void prepareSliceProgress(Task task, TableGroup group, SplitBound[] intervals) {
         Map<String, String> snapshot = metaSnapshot(task.getId());
         if (snapshot == null) {
             return;
@@ -459,7 +677,7 @@ public class ParserComponentImpl implements ParserComponent {
         boolean changed = false;
         for (int i = 0; i < intervals.length; i++) {
             String sliceKey = sliceProgressKey(group.getId(), i);
-            String bounds = intervalBounds(intervals[i][0], intervals[i][1]);
+            String bounds = intervalBounds(intervals[i].getLower(), intervals[i].getUpper());
             TableSyncProgress progress = FullTableProgressUtil.getOrInit(snapshot, sliceKey);
             if (!bounds.equals(progress.getBounds())) {
                 TableSyncProgress fresh = new TableSyncProgress();
@@ -479,7 +697,7 @@ public class ParserComponentImpl implements ParserComponent {
     /**
      * 分片成功完成：标记该分片 done=true（保留 bounds），供续传跳过。
      */
-    private void markSliceDone(String rootTaskId, String sliceKey, long[] interval) {
+    private void markSliceDone(String rootTaskId, String sliceKey, SplitBound interval) {
         Map<String, String> snapshot = metaSnapshot(rootTaskId);
         if (snapshot == null) {
             return;
@@ -494,7 +712,7 @@ public class ParserComponentImpl implements ParserComponent {
                 progress.setPageIndex(1);
                 progress.setCursor("");
                 progress.setDone(true);
-                progress.setBounds(intervalBounds(interval[0], interval[1]));
+                progress.setBounds(intervalBounds(interval.getLower(), interval.getUpper()));
                 FullTableProgressUtil.put(meta.getSnapshot(), sliceKey, progress);
                 profileComponent.editConfigModel(meta);
             } catch (Exception e) {
@@ -523,13 +741,15 @@ public class ParserComponentImpl implements ParserComponent {
      *     <li>每次游标读取的 args 前缀追加 [start, end]（与注入 SQL 的占位符顺序对齐）；</li>
      *     <li>子上下文独立，不共享 cursors/pageIndex 可变状态。</li>
      * </ol>
+     * <p>Wave32：start/end 由 long 扩展为 Object（采样模式承载 uuid/字符串/日期原值），
+     * 统一走 JDBC 参数化绑定（?），SQL 生成逻辑与 Wav4 完全一致。</p>
      */
     private void executeSlice(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
-                              List<FieldMapping> fieldMapping, String splitKey, long start, long end,
+                              List<FieldMapping> fieldMapping, String splitKey, Object start, Object end,
                               boolean includeNullRows, Executor executor, MigrationRateLimiter limiter) {
         final String metaId = task.getId();
-        // 最后一片 end 饱和在 Long.MAX_VALUE 时改用 <= 闭区间，否则该行会被 "< max" 排除
-        final boolean inclusiveEnd = end == Long.MAX_VALUE;
+        // 最后一片 end 饱和在 Long.MAX_VALUE（value 模式）或为 null（sample 模式最后一片），改用 <= 闭区间兜住上界
+        final boolean inclusiveEnd = end == null || (end instanceof Long && (Long) end == Long.MAX_VALUE);
         final String sourceConnectorId = mapping.getSourceConnectorId();
         final String targetConnectorId = mapping.getTargetConnectorId();
         final String sTableName = group.getSourceTable().getName();
@@ -581,7 +801,8 @@ public class ParserComponentImpl implements ParserComponent {
         Map<String, Field> targetFieldMap = picker.getTargetFieldMap();
         pluginFactory.process(context, ProcessEnum.BEFORE);
 
-        // 分片范围参数前缀（每次读取必须存在于 args 起始位，与注入 SQL 占位符顺序一致）
+        // 分片范围参数前缀（每次读取必须存在于 args 起始位，与注入 SQL 占位符顺序一致；
+        // injectRangeCondition 始终生成 2 个占位符 [start, end]，即使 inclusiveEnd 也绑 2 个）
         final List<Object> rangePrefix = Arrays.asList(start, end);
 
         for (; ; ) {
@@ -659,16 +880,17 @@ public class ParserComponentImpl implements ParserComponent {
     }
 
     /**
-     * Wave30：分片范围条件。
+     * Wave30：分片范围条件（Wave32 起 start/end 支持任意可比较类型 Object）。
      * <ul>
      *     <li>{@code includeNullRows}：MIN/MAX 忽略 NULL，且 {@code >= / <} 对 NULL 求值为 UNKNOWN，
      *         旧实现会 100% 丢掉分片键为 NULL 的行；第一片显式加 {@code IS NULL} 分支兜住。</li>
-     *     <li>{@code inclusiveEnd}：值域上界为 {@code Long.MAX_VALUE} 时不可能是 {@code max+1}，
-     *         最后一片改用闭区间 {@code <= ?}，否则该行读不到。</li>
+     *     <li>{@code inclusiveEnd}：值域上界为 {@code Long.MAX_VALUE}（value）或最后一片（sample 用探测 MAX）
+     *         时改用闭区间 {@code <= ?}，否则该行读不到。</li>
      * </ul>
-     * 两个分支都不增加绑定参数个数，rangePrefix 的 [start, end] 顺序不变。
+     * 两个分支都保持 2 个绑定参数（【start, end】），与 executeSlice 的 rangePrefix 一一对应。
+     * start/end 仅决定占位符个数，不进入 SQL 文本（恒以 {@code ?} 绑定原值），对字符串/uuid/日期安全。
      */
-    String injectRangeCondition(String sql, String splitKey, long start, long end,
+    String injectRangeCondition(String sql, String splitKey, Object start, Object end,
                                 boolean includeNullRows, boolean inclusiveEnd) {
         SqlIdentifierValidator.validateIdentifier(splitKey);
         String upperOp = inclusiveEnd ? " <= ?" : " < ?";
@@ -748,6 +970,59 @@ public class ParserComponentImpl implements ParserComponent {
             this.min = min;
             this.max = max;
         }
+    }
+
+    /**
+     * 分片区间边界值对象（Wave32：采样均分引入）。
+     * <p>承载「参数化绑定值」语义，不再强制 long：
+     * <ul>
+     *     <li>value 模式：lower/upper 均为 {@link Long}，行为与 Wave4 完全一致（bounds 串 {@code start~end} 不变）；</li>
+     *     <li>sample 模式：lower/upper 为 uuid/字符串/日期等原值（{@code ORDER BY 采样断点}），JDBC 按类型绑定；
+     *         boundaryUpper 为 {@code null} 表示最后一片开到 +∞（上限由 probe 的 MAX 值承载，见 {@link #buildSampleIntervals}）。</li>
+     * </ul>
+     * bounds 字符串由 {@link #intervalBoundsValue(Object, Object)} 生成，保持 {@code start~end} 形式，
+     * 与 Wave31 断点持久化兼容（数值模式 {@code start~end} 完全不变）。
+     * <p>包级可见以便单元测试。</p>
+     */
+    static final class SplitBound {
+        /** 区间起点（含），可为 null 表示无下界（理论不出现，见 executeSlice includeNullRows 第一片） */
+        private final Object lower;
+        /** 区间终点（不含），null 表示无上界（仅最后一片） */
+        private final Object upper;
+
+        private SplitBound(Object lower, Object upper) {
+            this.lower = lower;
+            this.upper = upper;
+        }
+
+        Object getLower() {
+            return lower;
+        }
+
+        Object getUpper() {
+            return upper;
+        }
+    }
+
+    /**
+     * 采样均分断点结果：探测出的行分位值 + 是否成功。
+     */
+    private static final class SampleBoundsResult {
+        private final Object[] bounds; // [0..n-2] 为断点值（升序），可为 null 表示失败
+        private final int count;
+
+        private SampleBoundsResult(Object[] bounds, int count) {
+            this.bounds = bounds;
+            this.count = count;
+        }
+    }
+
+    /**
+     * 分片边界字符串（兼容 Wave31）：{@code String.valueOf(lower)~String.valueOf(upper)}。
+     * upper 为 null（最后一片无上界）时直接拼 {@code lower~}，由 {@link TableSyncProgress#setBounds} 兜底。
+     */
+    static String intervalBoundsValue(Object lower, Object upper) {
+        return String.valueOf(lower) + "~" + (upper == null ? "" : String.valueOf(upper));
     }
 
     /**

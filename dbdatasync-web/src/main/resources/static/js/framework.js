@@ -555,7 +555,9 @@ function doRequest(action, data) {
         // 同一账号在其它窗口/浏览器再次登录（并发登录上限 1，旧会话被踢）。统一跳回登录页。
         bootGrowl("登录状态已失效（服务可能已重启、超过 30 分钟未操作，或账号已在其它窗口登录），3秒后将访问登录主页...", "danger");
         setTimeout(function () {
-            location.href = $basePath;
+            // 必须跳登录页(/login.html)而非主页：主页 '/' 是 permitAll 的静态欢迎页，
+            // 跳主页后框架页 AJAX 依旧全部失效，会形成「弹窗→跳主页→再弹」死循环。
+            location.href = $basePath + 'login.html';
         }, 3000);
     } else {
         action(data);
