@@ -73,6 +73,9 @@
                                             <input type="text" id="detailTargetDatabase" class="form-control"
                                                    maxlength="128" placeholder="目标库名"/>
                                         </div>
+                                        <div class="text-xs text-tertiary mt-1" id="multiTargetHint" style="display:none;">
+                                            <i class="fa fa-copy"></i> 已映射到 <span id="multiTargetCount">0</span> 个目标库
+                                        </div>
                                     </div>
                                     <div class="form-item mb-0" id="detailTargetSchemaWrap">
                                         <label class="form-label">目标 Schema</label>
@@ -89,6 +92,10 @@
                                     <i class="fa fa-table"></i> 表映射明细
                                 </h4>
                                 <div class="flex items-center gap-2">
+                                    <button type="button" id="btnMultiTargets" class="btn btn-outline btn-sm"
+                                            title="把当前源库映射到同连接器的多个目标库（一源多目标）">
+                                        <i class="fa fa-clone"></i> 多目标库
+                                    </button>
                                     <button type="button" id="btnAddTablesToMapping" class="btn btn-outline btn-sm">
                                         <i class="fa fa-plus"></i> 添加表
                                     </button>

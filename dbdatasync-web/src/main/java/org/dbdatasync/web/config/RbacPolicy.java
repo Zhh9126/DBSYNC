@@ -1,5 +1,6 @@
 package org.dbdatasync.web.config;
 
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Component;
@@ -56,7 +57,11 @@ public class RbacPolicy {
 
     /** Spring Security 表达式入口 */
     public boolean check(Authentication authentication, HttpServletRequest request) {
-        if (authentication == null || !authentication.isAuthenticated() || request == null) {
+        // Wave31-fix: AnonymousAuthenticationToken.isAuthenticated() 也返回 true，
+        // 未登录请求会被误判为已认证而放行（实测假会话可调任意业务接口）。
+        // 必须显式拒绝匿名 Token，让会话失效回归「302 到登录页」的正确语义。
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken || request == null) {
             return false;
         }
         if (!webSecurityPolicy.isStrict()) {
