@@ -158,7 +158,35 @@ fi
 # execute command
 echo "Starting DBDataSync Application..."
 
-nohup "$JAVA_BIN" "${JAVA_OPTS[@]}" "$APP" > /dev/null 2>&1 &
+# Wave31-fix: Spring Boot relaxed binding maps BOTH SERVER_PORT and SERVER__PORT to
+# server.port, and OS env vars rank HIGHER than conf/application.properties. Dev shells
+# (WorkBuddy/CodeBuddy/CI) inject SERVER__PORT=<random session port>, which silently
+# moved the bind port. Clear them, resolve a free port (auto-avoid +1, up to 20 tries)
+# and pass it explicitly as a command-line arg (highest priority, immune to env pollution).
+if [[ -n "${SERVER_PORT:-}" ]]; then
+  echo "WARN: SERVER_PORT=$SERVER_PORT found in environment, cleared to use conf server.port."
+  unset SERVER_PORT
+fi
+if [[ -n "${SERVER__PORT:-}" ]]; then
+  echo "WARN: SERVER__PORT=$SERVER__PORT found in environment, cleared to use conf server.port."
+  unset SERVER__PORT
+fi
+
+CONF_PORT=$(grep -E '^server\.port=' "$CONFIG_PATH" | tail -1 | cut -d= -f2 | tr -d ' \r')
+USE_PORT="${CONF_PORT:-18686}"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if ! (netstat -an 2>/dev/null || true) | grep -E "[:.]${USE_PORT}[[:space:]]" | grep -qi listen; then
+    break
+  fi
+  echo "WARN: port ${USE_PORT} is busy, trying next..."
+  USE_PORT=$((USE_PORT + 1))
+done
+if [[ "$USE_PORT" != "${CONF_PORT:-18686}" ]]; then
+  echo "WARN: conf port ${CONF_PORT:-18686} is busy, using ${USE_PORT} instead."
+fi
+echo "Using port: ${USE_PORT} (busy ports auto-avoided)"
+
+nohup "$JAVA_BIN" "${JAVA_OPTS[@]}" "$APP" --server.port="$USE_PORT" > /dev/null 2>&1 &
 APP_PID=$!
 
 # 保存 PID 并反馈结果

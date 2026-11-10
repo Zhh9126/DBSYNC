@@ -541,9 +541,11 @@ function doLoader(url) {
 // 异常请求
 function doRequest(action, data) {
     hideLoading();
-    // 异常请求：302
+    // 异常请求：响应非 JSON（302 跟随到登录页返回 HTML），即服务端会话已失效
     if (!(data instanceof Object)) {
-        bootGrowl("会话过期, 3秒后将访问登录主页...", "danger");
+        // 会话失效的三种常见来头：服务重启后浏览器仍持旧 JSESSIONID；超过 30 分钟无操作超时；
+        // 同一账号在其它窗口/浏览器再次登录（并发登录上限 1，旧会话被踢）。统一跳回登录页。
+        bootGrowl("登录状态已失效（服务可能已重启、超过 30 分钟未操作，或账号已在其它窗口登录），3秒后将访问登录主页...", "danger");
         setTimeout(function () {
             location.href = $basePath;
         }, 3000);

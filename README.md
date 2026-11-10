@@ -859,6 +859,7 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 - **运行服务真实验证**：恢复被杀的 18686 服务（Wave30 产物 + 小堆重启），实测 `/login`、`/manual`(Wave30)、`/link-health`、`/database-sync/pageAdd` 全 200；排障记录——shell 代理变量会污染本机探测，需 `--noproxy`。
 - **验证**：新增回归 12 例（分片断点 5 / 过期清理 4 / fetchSize 3）全过；`./build.sh` BUILD_EXIT=0，全量单测 607 tests / 0 失败 / 0 错误（79 份 surefire），H2 真库 E2E 14/14 PASS；手册 v2.2.1 / 基线 Wave31（6.1、9、13.1、18 章同步）。
 - **诚实边界**：明细导出完全 keyset 化、MySQL 流式 fetchSize 自动化、亿级真机压测、共识型 HA、编译器级 PL/SQL 改写仍未完成，见报告 §5。
+- **发行脚本端口三重防御（Wave31 续做）**：根因定位——Spring Boot relaxed binding 会把工作台注入的 `SERVER__PORT`（双下划线，随机会话端口）与 `SERVER_PORT` 都映射为 `server.port`，且 OS 环境变量优先级高于 conf，bat 启动因此改绑随机端口，表现为「页面反复提示登录失效」或「Port already in use」。`startup.bat`/`startup.sh` 现自动清理两个变量、以命令行参数 `--server.port` 显式传入 conf 端口（最高优先级）、端口被占自动 +1 避让（≤20 次）并打印实际端口；实测污染环境绑 18686 成功、18686 被占避让 18687 成功。页面「会话过期」提示改为「登录状态已失效」并注明三种来头（手册 17.2 同步）。
 
 ---
 
