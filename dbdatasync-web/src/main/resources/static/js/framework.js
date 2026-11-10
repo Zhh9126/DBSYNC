@@ -538,11 +538,19 @@ function doLoader(url) {
     }
 }
 
+// 会话失效只提示一次：仪表盘等页面有定时轮询，失效后每个请求都会走到这里，
+// 不去重会每几秒弹一个关不完的提示框；置位后静默等待统一跳转登录页。
+var _sessionExpiredHandled = false;
+
 // 异常请求
 function doRequest(action, data) {
     hideLoading();
     // 异常请求：响应非 JSON（302 跟随到登录页返回 HTML），即服务端会话已失效
     if (!(data instanceof Object)) {
+        if (_sessionExpiredHandled) {
+            return;
+        }
+        _sessionExpiredHandled = true;
         // 会话失效的三种常见来头：服务重启后浏览器仍持旧 JSESSIONID；超过 30 分钟无操作超时；
         // 同一账号在其它窗口/浏览器再次登录（并发登录上限 1，旧会话被踢）。统一跳回登录页。
         bootGrowl("登录状态已失效（服务可能已重启、超过 30 分钟未操作，或账号已在其它窗口登录），3秒后将访问登录主页...", "danger");

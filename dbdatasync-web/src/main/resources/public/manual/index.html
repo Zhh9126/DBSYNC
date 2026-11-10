@@ -675,7 +675,7 @@
                     <li>日志在 <code>logs/</code>（info / warn / error），停止用 <code>bin\stop.sh</code>（Linux）或 <code>Ctrl+C</code>（Windows 前台窗口）。</li>
                 </ol>
                 <div class="warn"><b>端口防御与自动避让（Wave31）：</b>Spring Boot 的 relaxed binding 会把环境变量 <code>SERVER_PORT</code> <b>和</b> <code>SERVER__PORT</code>（双下划线，WorkBuddy/CodeBuddy/CI 等开发工作台会向 shell 注入该变量，值是其会话随机端口）都映射为 <code>server.port</code>，且 OS 环境变量优先级<b>高于</b> <code>conf/application.properties</code>——这是「bat 启动后页面反复提示会话失效/端口起不来」的根因。启动脚本现已三重防御：① 自动清理 <code>SERVER_PORT</code> / <code>SERVER__PORT</code> 并打印 WARN；② 把 conf 的端口作为命令行参数 <code>--server.port=...</code> 显式传入（优先级最高，环境变量无法再覆盖）；③ 端口被占用时自动 +1 避让（最多 20 次），启动日志打印 <code>Using port: N</code>，按打印的实际端口访问即可。确需固定其它端口时改 conf 的 <code>server.port</code> 或用 <code>DBS_JAVA_OPTS</code> 传 <code>-Dserver.port=...</code>。</div>
-                <div class="tip"><b>页面提示「登录状态已失效」的三种来头：</b>① 服务重启后浏览器仍持旧会话 Cookie（重新登录即可）；② 超过 30 分钟（<code>server.servlet.session.timeout=1800</code>）无操作；③ 同一账号在其它窗口/浏览器再次登录——系统并发登录上限为 1，后登录者会使先前会话失效。弹出后 3 秒自动跳回登录页，重新登录即恢复，不影响已保存的数据与任务。</div>
+                <div class="tip"><b>页面提示「登录状态已失效」的三种来头：</b>① 服务重启后浏览器仍持旧会话 Cookie（重新登录即可）；② 超过 30 分钟（<code>server.servlet.session.timeout=1800</code>）无操作；③ 同一账号在其它窗口/浏览器再次登录——系统并发登录上限为 1，后登录者会使先前会话失效。弹出后<b>只提示一次</b>（轮询请求不去重会弹个不停），3 秒自动跳回登录页，重新登录即恢复，不影响已保存的数据与任务。</div>
 
                 <h3>17.3 内存与启动参数（Wave29）</h3>
                 <p>发行脚本不再固定 3g / 3.8g 堆，默认小堆起步，可用环境变量按数据量放大；不再靠「多分配内存」硬扛：</p>
