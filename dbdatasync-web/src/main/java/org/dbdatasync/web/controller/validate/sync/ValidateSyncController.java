@@ -25,8 +25,11 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
@@ -344,11 +347,12 @@ public class ValidateSyncController extends BaseController {
                              @RequestParam(value = "detailId", required = false) String detailId,
                              HttpServletResponse response) throws IOException {
         try {
-            List<Map<String, Object>> rows = validateSyncService.listResultDetails(taskId, detailStatus, detailId);
-            String csv = ReconciliationCsvBuilder.build(taskId, rows);
+            // Wave30：两遍分页扫描取数，不再一次性装载全量明细 List，也不再有 5000 行静默截断
+            ReconciliationCsvBuilder.DetailSource source = sink ->
+                    validateSyncService.scanResultDetails(taskId, detailStatus, detailId, sink);
             String fileName = "对账报告_" + taskId + "_"
                     + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")) + ".csv";
-            writeCsvResponse(response, fileName, csv);
+            writeCsvResponse(response, fileName, taskId, source);
         } catch (Exception e) {
             logger.error("导出对账报告失败, taskId=" + taskId, e);
             // 响应尚未提交时改写为纯文本，避免浏览器把错误页当成 CSV 下载；已写出则只记日志。
@@ -419,9 +423,10 @@ public class ValidateSyncController extends BaseController {
     }
 
     /**
-     * 写 CSV 下载流：响应头 + UTF-8 BOM + 已转义的 CSV 文本（不再二次拼接/转义）。
+     * 写 CSV 下载流：响应头 + UTF-8 BOM + 流式写出（不再二次拼接/转义，不再整块 getBytes）。
      */
-    private void writeCsvResponse(HttpServletResponse response, String fileName, String csv) throws IOException {
+    private void writeCsvResponse(HttpServletResponse response, String fileName, String taskId,
+                                  ReconciliationCsvBuilder.DetailSource source) throws IOException {
         response.setContentType("application/octet-stream;charset=UTF-8");
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Content-Disposition", "attachment;filename=" + URLEncoder.encode(fileName, "UTF-8"));
@@ -429,8 +434,9 @@ public class ValidateSyncController extends BaseController {
         os.write(0xEF);
         os.write(0xBB);
         os.write(0xBF);
-        os.write(csv.getBytes(StandardCharsets.UTF_8));
-        os.flush();
+        Writer writer = new BufferedWriter(new OutputStreamWriter(os, StandardCharsets.UTF_8));
+        ReconciliationCsvBuilder.writeTo(writer, taskId, source, System.currentTimeMillis());
+        writer.flush();
     }
 
 }

@@ -243,6 +243,16 @@ public class ValidateSyncExecutor {
                             reversePkCols, rowContent, autoDelete, taskId);
                     rowDiff += reverse[0];
                     rowFixed += reverse[1];
+                } else if (task.isEnableReverseScan()) {
+                    // Wave30：超过阈值时旧实现静默跳过，对账结论会被误判为一致；必须留可见提示
+                    logger.warn("校验任务 [{}] 目标表 [{}] 共 {} 行，超过反向扫描上限 {}，本轮未检测目标多余行",
+                            taskId, targetTable, targetTotal, MAX_REVERSE_SCAN_ROWS);
+                    Map<String, Object> skipped = rowDataItem(sourceTable, targetTable,
+                            "已跳过反向扫描：目标表 " + targetTotal + " 行超过 " + MAX_REVERSE_SCAN_ROWS
+                                    + " 行上限，未检测目标多余行，本轮结论不完整",
+                            "targetRows=" + targetTotal,
+                            Collections.<Map<String, Object>>emptyList(), Collections.<String>emptyList());
+                    addItem(rowContent, skipped);
                 }
             } else {
                 sourceTotal = countRows(source, sourceTable);
@@ -918,6 +928,7 @@ public class ValidateSyncExecutor {
             }
             // 批量存在性检查: 每页一次 IN 查询(替代逐行 EXISTS 的 N+1)
             java.util.Set<String> existsKeys = existsByKeysBatch(source, sourceTable, pkNames, tgtPage);
+            long deletedInPage = 0L;
             for (Map<String, Object> tgtRow : tgtPage) {
                 String key = buildKey(tgtRow, pkNames);
                 boolean exists = existsKeys.contains(key);
@@ -929,11 +940,20 @@ public class ValidateSyncExecutor {
                     addItem(content, item);
                     if (autoDelete && repairDelete(target, targetTable, pkNames, tgtRow)) {
                         fixed++;
+                        deletedInPage++;
                         markRepaired(content, key, "目标多余");
                     }
                 }
             }
-            offset += tgtPage.size() * ("sample".equalsIgnoreCase(task.getCompareMode()) ? Math.max(1, task.getSampleStep()) : 1);
+            // Wave30：边删边用 OFFSET 翻页会漏行——删掉 d 行后剩余行整体前移 d，
+            // 下一页必须从 (原 offset + 步长 - d) 开始，否则紧邻的一批行被跳过。
+            long step = (long) tgtPage.size()
+                    * ("sample".equalsIgnoreCase(task.getCompareMode()) ? Math.max(1, task.getSampleStep()) : 1);
+            long nextOffset = (long) offset + step - deletedInPage;
+            if (nextOffset > Integer.MAX_VALUE) {
+                break;
+            }
+            offset = (int) Math.max(0L, nextOffset);
             if (tgtPage.size() < pageSize) {
                 break;
             }
@@ -1761,26 +1781,49 @@ public class ValidateSyncExecutor {
             // DBDS-REF 引用串：读取端 deserializeContent 会还原完整明细
             return text;
         }
+        // Wave30：并发写入时先在同一把锁下取快照，避免遍历时 CME；
+        // 旧实现每加一条就序列化一次完整 data，是 O(n²)，上万条差异会卡死校验任务。
+        java.util.List<Map<String, Object>> snapshot;
+        synchronized (content) {
+            snapshot = new java.util.ArrayList<>(content);
+        }
+        Object original = data.get(ConfigConstant.TASK_CONTENT);
+        data.put(ConfigConstant.TASK_CONTENT, java.util.Collections.emptyList());
+        int baseBytes = JsonUtil.objToJson(data).getBytes(utf8).length;
+        // 空数组 "[]" 占 2 字节；逐条按「单条 JSON + 逗号」增量累计，整体只序列化一次
+        long used = baseBytes - 2L;
+        final int tipReserve = 512;
         java.util.List<Map<String, Object>> kept = new java.util.ArrayList<>();
-        for (Map<String, Object> item : content) {
-            kept.add(item);
-            data.put(ConfigConstant.TASK_CONTENT, kept);
-            if (JsonUtil.objToJson(data).getBytes(utf8).length > limit) {
-                kept.remove(kept.size() - 1);
+        for (Map<String, Object> item : snapshot) {
+            int add = (kept.isEmpty() ? 0 : 1) + JsonUtil.objToJson(item).getBytes(utf8).length;
+            if (used + add + tipReserve > limit) {
                 break;
             }
+            kept.add(item);
+            used += add;
         }
         Map<String, Object> tip = new java.util.LinkedHashMap<>();
         tip.put("type", "tip");
-        tip.put("msg", "共 " + content.size() + " 条差异，DATA 列 65535 字节上限内完整保留 "
+        tip.put("msg", "共 " + snapshot.size() + " 条差异，DATA 列 65535 字节上限内完整保留 "
                 + kept.size() + " 条；启用文件内容外置可查看全部");
         kept.add(tip);
         data.put(ConfigConstant.TASK_CONTENT, kept);
-        if (JsonUtil.objToJson(data).getBytes(utf8).length > limit && kept.size() > 1) {
-            kept.remove(kept.size() - 1);
-            kept.set(kept.size() - 1, tip);
+        String out = JsonUtil.objToJson(data);
+        // 估算与实际转义长度可能略有偏差，最多回退 20 条（常态 0~1 次），再不行只保留提示
+        int guard = 0;
+        while (out.getBytes(utf8).length > limit && kept.size() > 1 && guard++ < 20) {
+            kept.remove(kept.size() - 2);
+            out = JsonUtil.objToJson(data);
         }
-        return JsonUtil.objToJson(data);
+        if (out.getBytes(utf8).length > limit) {
+            java.util.List<Map<String, Object>> onlyTip = new java.util.ArrayList<>();
+            onlyTip.add(tip);
+            data.put(ConfigConstant.TASK_CONTENT, onlyTip);
+            out = JsonUtil.objToJson(data);
+        }
+        // 保留原始引用语义，避免调用方后续复用 data 时拿到降级副本
+        data.put(ConfigConstant.TASK_CONTENT, original);
+        return out;
     }
 
     private Map<String, Object> findDetailRow(String taskId, String tableGroupId, String type) {
@@ -1870,14 +1913,21 @@ public class ValidateSyncExecutor {
 
     private void addItem(List<Map<String, Object>> content, Map<String, Object> item) {
         // Wave24：全量保留，大小问题交给 saveDetailRow 的内容外置/字节预算降级处理
-        content.add(item);
+        // Wave30：分片并发下 content 会被多线程共享，写入与遍历必须同一把锁，避免 CME
+        synchronized (content) {
+            content.add(item);
+        }
     }
 
     private void markRepaired(List<Map<String, Object>> content, String key, String msg) {
-        for (Map<String, Object> item : content) {
-            if (key != null && key.equals(str(item.get("key"))) && msg.equals(str(item.get("msg")))) {
-                item.put("msg", msg + "(已订正)");
-                return;
+        synchronized (content) {
+            // 刚 addItem 的项在末尾，从后往前找平均 O(1)；避免每次订正全量 O(n) 扫描
+            for (int i = content.size() - 1; i >= 0; i--) {
+                Map<String, Object> item = content.get(i);
+                if (key != null && key.equals(str(item.get("key"))) && msg.equals(str(item.get("msg")))) {
+                    item.put("msg", msg + "(已订正)");
+                    return;
+                }
             }
         }
     }

@@ -33,9 +33,12 @@ public class DatabaseSyncTask extends ConfigModel {
      */
     private boolean overwriteSchema;
     /**
-     * 是否同步数据
+     * 是否同步数据。
+     * <p>Wave30：默认 true。存量任务 JSON 若早于该字段，反序列化保留此默认值，
+     * 仍按「整库全量迁移」执行；新建/编辑由 {@code fillSyncStrategy} 按页面开关显式赋值。
+     * 这样「仅结构迁移」的开关才真正生效，又不会让历史任务突然停止灌数据。</p>
      */
-    private boolean enableCopyData;
+    private boolean enableCopyData = true;
     /**
      * 数据是否覆盖（目标已存在时）
      */

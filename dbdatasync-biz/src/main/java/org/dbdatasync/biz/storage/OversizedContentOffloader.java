@@ -3,6 +3,7 @@ package org.dbdatasync.biz.storage;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 超大内容外置器：为超过 inline 阈值（默认 65535 字节，即既有 H2 DATA 字段上限）的内容
@@ -58,7 +59,9 @@ public final class OversizedContentOffloader {
         }
 
         List<String> chunks = ContentChunker.split(src, chunkBytes);
-        String refId = "c" + System.nanoTime() + "-" + chunks.size();
+        // Wave30：nanoTime 在部分 JVM/OS 上精度只有微秒级，多线程同批数内容会拿到相同 refId，
+        // 后写块覆盖先写块导致重组 SHA 校验失败甚至串读到别的明细。改用 UUID 保证唯一。
+        String refId = "c" + UUID.randomUUID().toString().replace("-", "") + "-" + chunks.size();
         for (int i = 0; i < chunks.size(); i++) {
             store.save(refId, i, chunks.get(i));
         }

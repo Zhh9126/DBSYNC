@@ -88,6 +88,8 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
     private static final int EXPORT_PAGE_SIZE = 200;
     private static final int MAX_EXPORT_DETAIL_ROWS = 5000;
     private static final int EXPORT_MAX_PAGES = MAX_EXPORT_DETAIL_ROWS / EXPORT_PAGE_SIZE;
+    /** Wave30：流式导出的安全上限（200 行/页 × 100 万页 = 2 亿行），防止异常分页死循环。 */
+    private static final int EXPORT_SCAN_MAX_PAGES = 1_000_000;
 
     @Resource
     private SnowflakeIdWorker snowflakeIdWorker;
@@ -575,8 +577,10 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
     public Paging searchResult(Map<String, String> params) {
         String taskId = params.get("taskId");
         Assert.hasText(taskId, "任务ID不能为空");
-        int pageNum = NumberUtil.toInt(params.get("pageNum"), 1);
-        int pageSize = NumberUtil.toInt(params.get("pageSize"), 10);
+        // Wave30：分页参数必须夹紧。此前 pageSize 可传 Integer.MAX_VALUE，一次把整张明细表
+        // （含 DBDS-REF 还原后的大字段）读进堆；OFFSET 也因 int 乘法在深分页溢出为负。
+        int pageNum = Math.max(1, NumberUtil.toInt(params.get("pageNum"), 1));
+        int pageSize = Math.min(200, Math.max(1, NumberUtil.toInt(params.get("pageSize"), 10)));
         String detailStatus = StringUtil.trimToEmpty(params.get("detailStatus"));
         return taskDetailProfile.queryResults(TaskDetailQuery.of(taskId)
                 .setPage(pageNum, pageSize)
@@ -641,6 +645,43 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
             }
         }
         return rows;
+    }
+
+    @Override
+    public void scanResultDetails(String taskId, String detailStatus, String detailId,
+                                  java.util.function.Consumer<Map<String, Object>> consumer) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.notNull(consumer, "明细消费者不能为空");
+        if (StringUtil.isNotBlank(detailId)) {
+            Object detail = getValidateResultDetail(taskId, detailId);
+            if (detail == null) {
+                throw new BizException("明细不存在");
+            }
+            if (detail instanceof Map) {
+                consumer.accept((Map<String, Object>) detail);
+            }
+            return;
+        }
+        Map<String, String> params = new HashMap<>();
+        params.put("taskId", taskId);
+        params.put("pageSize", String.valueOf(EXPORT_PAGE_SIZE));
+        params.put("detailStatus", StringUtil.trimToEmpty(detailStatus));
+        for (int pageNum = 1; pageNum <= EXPORT_SCAN_MAX_PAGES; pageNum++) {
+            params.put("pageNum", String.valueOf(pageNum));
+            Paging paging = searchResult(params);
+            Collection<?> data = paging == null ? null : paging.getData();
+            if (data == null || data.isEmpty()) {
+                break;
+            }
+            for (Object row : data) {
+                if (row instanceof Map) {
+                    consumer.accept((Map<String, Object>) row);
+                }
+            }
+            if (data.size() < EXPORT_PAGE_SIZE) {
+                break;
+            }
+        }
     }
 
     @Override

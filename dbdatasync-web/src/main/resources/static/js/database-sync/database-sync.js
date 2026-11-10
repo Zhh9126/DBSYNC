@@ -2478,6 +2478,10 @@
         $('input[name="enableCopyData"]').prop('checked', !!task.enableCopyData);
         $('input[name="overwriteData"]').prop('checked', !!task.overwriteData);
         $('input[name="enableAutoDiscover"]').prop('checked', !!task.enableAutoDiscover);
+        // Wave30：大数据量性能参数回填（存量任务缺字段时用页面默认值）
+        $('input[name="readNum"]').val(Number(task.readNum) > 0 ? task.readNum : 10000);
+        $('input[name="batchNum"]').val(Number(task.batchNum) > 0 ? task.batchNum : 1000);
+        $('input[name="threadNum"]').val(Number(task.threadNum) > 0 ? task.threadNum : 5);
         refreshSyncStrategyCheckboxState();
         bindSyncStrategyEvents();
     }

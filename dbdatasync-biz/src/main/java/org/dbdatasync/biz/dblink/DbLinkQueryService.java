@@ -60,10 +60,11 @@ public class DbLinkQueryService {
      * @throws SQLException 查询失败时抛出
      */
     public List<DbLinkInfo> listDbLinks() throws SQLException {
-        Connection conn = provider.get();
+        Connection conn = null;
         Statement st = null;
         ResultSet rs = null;
         try {
+            conn = provider.get();
             st = conn.createStatement();
             rs = st.executeQuery(SQL_LIST_DB_LINKS);
             List<DbLinkInfo> result = new ArrayList<DbLinkInfo>();
@@ -78,6 +79,9 @@ public class DbLinkQueryService {
         } finally {
             closeQuietly(rs);
             closeQuietly(st);
+            // Wave30：连接必须归还数据源。此前只关 rs/st，DBLink 查询累计 64 次后
+            // SimpleDataSource 的 activeNum 打满，连正常同步都借不到连接。
+            closeQuietly(conn);
         }
     }
 
@@ -97,11 +101,12 @@ public class DbLinkQueryService {
             throw new IllegalArgumentException("仅放行只读查询（SELECT/WITH 开头）: " + preview(sql));
         }
         int limit = maxRows > 0 ? maxRows : MAX_ROWS_DEFAULT;
-        Connection conn = provider.get();
+        Connection conn = null;
         Statement st = null;
         ResultSet rs = null;
         long start = System.nanoTime();
         try {
+            conn = provider.get();
             st = conn.createStatement();
             st.setMaxRows(limit);
             rs = st.executeQuery(sql);
@@ -131,6 +136,7 @@ public class DbLinkQueryService {
         } finally {
             closeQuietly(rs);
             closeQuietly(st);
+            closeQuietly(conn);
         }
     }
 
@@ -226,6 +232,17 @@ public class DbLinkQueryService {
         if (st != null) {
             try {
                 st.close();
+            } catch (SQLException ignore) {
+                // 静默忽略
+            }
+        }
+    }
+
+    /** 静默关闭（池化实现下即归还）连接。 */
+    private static void closeQuietly(Connection conn) {
+        if (conn != null) {
+            try {
+                conn.close();
             } catch (SQLException ignore) {
                 // 静默忽略
             }

@@ -22,7 +22,7 @@ import static org.junit.Assert.assertTrue;
  * <p>JUnit 4；照抄 Wave11CostMetricsTest / Wave10QaEdgeCaseTest 的 import 与写法。
  * 纯静态调用，不连库、不启服务、不写 Meta、不改任何生产源码。覆盖：空/null rows、
  * HEADERS 17 列、content 四形态 + 坏 JSON、details 字段级展开、CSV 转义、公式注入、
- * 完整性提示、汇总求和、tip 类型、null 字段、固定时间稳定、200 条封顶。</p>
+ * 完整性提示、汇总求和、tip 类型、null 字段、固定时间稳定、全量导出不截断。</p>
  *
  * @author DBDataSync
  * @version 2.1.4
@@ -226,7 +226,7 @@ public class Wave12CsvBuilderTest {
         assertTrue(csv.contains("完整性,可能不完整"));
         assertTrue(csv.contains("明细差异数为 5"));
         assertTrue(csv.contains("实际导出 2 条"));
-        assertTrue(csv.contains("65535"));
+        assertTrue(csv.contains("差异内容可能未落库"));
     }
 
     @Test
@@ -311,22 +311,23 @@ public class Wave12CsvBuilderTest {
     }
 
     @Test
-    public void maxItemsPerDetail_cappedAt200() {
+    public void allItemsExported_withoutCap() {
         List<Map<String, Object>> many = new ArrayList<Map<String, Object>>();
         for (int i = 0; i < 250; i++) {
             many.add(map("type", "rowData", "key", "K" + i));
         }
         Map<String, Object> row = map("id", "D-MANY", "diffTotal", 250, "content", many);
         String csv = ReconciliationCsvBuilder.build("T", Collections.singletonList(row), FIXED);
-        assertTrue(csv.contains("导出差异条目数,200\r\n"));
+        // Wave30：校验明细已完整保留，导出侧不得再按 200 条截断
+        assertTrue(csv.contains("导出差异条目数,250\r\n"));
         int dataRows = 0;
         for (String ln : lines(csv)) {
             if (ln.startsWith("D-MANY,")) {
                 dataRows++;
             }
         }
-        assertEquals(ReconciliationCsvBuilder.MAX_EXPORT_ITEMS_PER_DETAIL, dataRows);
-        assertTrue(csv.contains("可能不完整"));
+        assertEquals(250, dataRows);
+        assertTrue(csv.contains("完整性,完整\r\n"));
     }
 
     // ==================== 工具 ====================

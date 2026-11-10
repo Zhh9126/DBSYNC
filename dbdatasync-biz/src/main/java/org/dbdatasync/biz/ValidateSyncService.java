@@ -136,6 +136,19 @@ public interface ValidateSyncService {
     List<Map<String, Object>> listResultDetails(String taskId, String detailStatus, String detailId);
 
     /**
+     * Wave30：对账报告导出的流式取数（只读），逐行交给 consumer，不把全量明细堆进 List。
+     * <p>与 {@link #listResultDetails} 不同，这里没有 5000 行截断，适合百万级差异明细导出；
+     * 同一任务两次调用可得到同样的行序列（第一遍统计抬头、第二遍写数据行）。</p>
+     *
+     * @param taskId       校验任务ID
+     * @param detailStatus 状态筛选（可空）
+     * @param detailId     明细ID（可空，非空时只投递该 1 条）
+     * @param consumer     逐行消费者，不得为 null
+     */
+    void scanResultDetails(String taskId, String detailStatus, String detailId,
+                           java.util.function.Consumer<Map<String, Object>> consumer);
+
+    /**
      * 对单条明细中指定下标的差异条目执行重推（只处理该 1 条）。
      *
      * @param taskId    校验任务ID

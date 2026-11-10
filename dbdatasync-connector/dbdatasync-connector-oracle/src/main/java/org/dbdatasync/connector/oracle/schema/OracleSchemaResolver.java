@@ -100,32 +100,66 @@ public class OracleSchemaResolver extends AbstractDatabaseSchemaResolver {
         return super.serialize(value, field);
     }
 
+    /**
+     * Wave30：完整读取 LOB 字节流。
+     * <p>{@code InputStream.read(byte[])} 不保证一次读满（Oracle 驱动常按 8K/32K 分块返回），
+     * 旧实现只读一次就把剩余部分留成 0，属于静默数据损坏；(int) length 对 &gt;2GB LOB 还会溢出为负。</p>
+     * 包级可见以便离线单测。
+     */
+    static byte[] readFully(InputStream is, long length) throws java.io.IOException {
+        if (length < 0) {
+            throw new java.io.IOException("negative LOB length: " + length);
+        }
+        if (length > Integer.MAX_VALUE) {
+            throw new java.io.IOException("LOB exceeds 2GB, cannot materialize: " + length);
+        }
+        byte[] b = new byte[(int) length];
+        int off = 0;
+        while (off < b.length) {
+            int n = is.read(b, off, b.length - off);
+            if (n < 0) {
+                break;
+            }
+            off += n;
+        }
+        return off == b.length ? b : java.util.Arrays.copyOf(b, off);
+    }
+
     private byte[] getBytes(BLOB blob) {
         InputStream is = null;
-        byte[] b = null;
         try {
             is = blob.getBinaryStream();
-            b = new byte[(int) blob.length()];
-            int read = is.read(b);
-            if (-1 == read) {
-                return b;
-            }
+            return readFully(is, blob.length());
         } catch (Exception e) {
-            logger.error(e.getMessage());
+            logger.error("读取 Oracle BLOB 失败: {}", e.getMessage(), e);
         } finally {
             IOUtils.closeQuietly(is);
         }
-        return b;
+        return new byte[0];
     }
 
     private byte[] getBytes(CLOB clob) {
+        java.io.Reader reader = null;
         try {
             long length = clob.length();
-            if (length > 0) {
-                return clob.getSubString(1, (int) length).getBytes(Charset.defaultCharset());
+            if (length <= 0) {
+                return new byte[0];
             }
-        } catch (SQLException e) {
-            logger.error(e.getMessage());
+            if (length > Integer.MAX_VALUE) {
+                throw new java.io.IOException("CLOB exceeds 2GB, cannot materialize: " + length);
+            }
+            reader = clob.getCharacterStream();
+            char[] buf = new char[8192];
+            StringBuilder sb = new StringBuilder((int) length);
+            int n;
+            while ((n = reader.read(buf)) != -1) {
+                sb.append(buf, 0, n);
+            }
+            return sb.toString().getBytes(Charset.defaultCharset());
+        } catch (Exception e) {
+            logger.error("读取 Oracle CLOB 失败: {}", e.getMessage(), e);
+        } finally {
+            IOUtils.closeQuietly(reader);
         }
         return new byte[0];
     }

@@ -140,6 +140,50 @@ public class FullSplitLogicTest {
         assertEquals("SELECT MIN(id), MAX(id) FROM \"db\".\"t_user\" WHERE name = ?", minMax);
     }
 
+    // ---------- Wave30 大数据量分片边界 ----------
+
+    @Test
+    public void testSplitHugeRangeDoesNotOverflow() {
+        // max - min + 1 会超过 Long.MAX_VALUE：旧实现溢出成负数，step 变成 1 或负值导致分片全错
+        long[][] ranges = ParserComponentImpl.splitHalfOpenRange(0L, Long.MAX_VALUE, 3);
+        assertTrue(ranges.length >= 2);
+        assertEquals(0L, ranges[0][0]);
+        assertEquals(Long.MAX_VALUE, ranges[ranges.length - 1][1]);
+        for (int i = 0; i < ranges.length; i++) {
+            assertTrue("分片起点必须递增: " + i, ranges[i][0] >= 0L);
+            assertTrue("分片不得倒置: " + i, ranges[i][1] >= ranges[i][0]);
+            if (i > 0) {
+                assertEquals("相邻分片必须无缝: " + i, ranges[i - 1][1], ranges[i][0]);
+            }
+        }
+    }
+
+    @Test
+    public void testSplitSingleSliceOfHugeRangeUsesInclusiveEnd() {
+        long[][] ranges = ParserComponentImpl.splitHalfOpenRange(0L, Long.MAX_VALUE, 1);
+        assertEquals(1, ranges.length);
+        // 最后一片 end 饱和在 MAX，由 injectRangeCondition 用 <= 兜住该行
+        assertEquals(Long.MAX_VALUE, ranges[0][1]);
+    }
+
+    @Test
+    public void testInjectFirstSliceIncludesNullRows() {
+        String sql = "SELECT id FROM t_user";
+        String first = new ParserComponentImpl().injectRangeCondition(sql, "id", 1, 10, true, false);
+        assertTrue(first.contains("id IS NULL OR"));
+        assertTrue(first.contains("id < ?"));
+        String other = new ParserComponentImpl().injectRangeCondition(sql, "id", 10, 20, false, false);
+        assertFalse(other.contains("IS NULL"));
+        assertEquals("SELECT id FROM t_user WHERE (id >= ? AND id < ?)", other);
+    }
+
+    @Test
+    public void testInjectMaxValueUpperBoundIsInclusive() {
+        String sql = "SELECT id FROM t_user";
+        String injected = new ParserComponentImpl().injectRangeCondition(sql, "id", 1, Long.MAX_VALUE, false, true);
+        assertEquals("SELECT id FROM t_user WHERE (id >= ? AND id <= ?)", injected);
+    }
+
     @Test
     public void testInjectDoesNotTouchCursorTrailing() {
         // 复合主键游标：注入必须发生在首个 WHERE，cursor 复合条件保持在后

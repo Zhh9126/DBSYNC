@@ -9,8 +9,7 @@ import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.ArrayDeque;
 
 /**
  * 可跨重启恢复的慢 SQL 存储（Wave23 收口 Wave17 半成品）。
@@ -23,6 +22,9 @@ public class PersistentSlowSqlStore extends RingBufferSlowSqlStore {
 
     private final File file;
     private final int maxRecords;
+
+    /** Wave30：单条记录的 SQL 文本上限，避免几百 KB 的多值 INSERT 把落盘文件撑爆。 */
+    private static final int MAX_SQL_CHARS = 4096;
 
     public PersistentSlowSqlStore(SlowSqlThreshold threshold, File file) {
         super(threshold);
@@ -80,37 +82,77 @@ public class PersistentSlowSqlStore extends RingBufferSlowSqlStore {
         if (!file.isFile()) {
             return;
         }
-        List<String> lines = new ArrayList<String>();
+        // Wave30：只保留末尾 maxRecords 行的环形缓冲，绝不把整个文件读进 List。
+        // 旧实现在 slow-sql.log 涨到几百万行时，启动回放会直接 OOM。
+        ArrayDeque<String> tail = new ArrayDeque<String>(Math.min(maxRecords, 1024) + 1);
+        long totalLines = 0L;
         BufferedReader reader = null;
         try {
             reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8));
             String line;
             while ((line = reader.readLine()) != null) {
-                if (!line.trim().isEmpty()) {
-                    lines.add(line);
+                if (line.trim().isEmpty()) {
+                    continue;
                 }
+                totalLines++;
+                if (tail.size() >= maxRecords) {
+                    tail.removeFirst();
+                }
+                tail.addLast(line);
             }
         } catch (IOException e) {
             return;
         } finally {
             close(reader);
         }
-        int from = Math.max(0, lines.size() - maxRecords);
-        for (String line : lines.subList(from, lines.size())) {
+        for (String line : tail) {
             SlowSqlRecord record = decode(line);
             if (record != null) {
                 super.collect(record);
             }
         }
+        // 文件只追加会无限增长；超过 2 倍容量时顺手压缩为最近 N 行
+        if (totalLines > 2L * maxRecords) {
+            compact(tail);
+        }
+    }
+
+    /** 把保留的末尾行重写回文件（先写临时文件再原子替换，失败时保留原文件）。 */
+    private void compact(ArrayDeque<String> tail) {
+        File tmp = new File(file.getParentFile() == null ? file.getAbsoluteFile().getParentFile()
+                : file.getParentFile(), file.getName() + ".tmp");
+        BufferedWriter writer = null;
+        try {
+            writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(tmp, false), StandardCharsets.UTF_8));
+            for (String line : tail) {
+                writer.write(line);
+                writer.newLine();
+            }
+            writer.flush();
+        } catch (IOException e) {
+            return;
+        } finally {
+            close(writer);
+        }
+        try {
+            java.nio.file.Files.move(tmp.toPath(), file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            // 压缩失败不影响内存回放
+        }
     }
 
     private static String encode(SlowSqlRecord r) {
+        String sql = escape(r.getSql());
+        if (sql.length() > MAX_SQL_CHARS) {
+            sql = sql.substring(0, MAX_SQL_CHARS) + "...(truncated)";
+        }
         return String.valueOf(r.getCapturedAt()) + '\t'
                 + r.getExecuteMillis() + '\t'
                 + r.getRows() + '\t'
                 + (r.isThresholdExceeded() ? 1 : 0) + '\t'
                 + escape(r.getSource()) + '\t'
-                + escape(r.getSql());
+                + sql;
     }
 
     private static SlowSqlRecord decode(String line) {

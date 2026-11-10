@@ -176,6 +176,8 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
 
         int pageSize = ConfigConstant.PAGE_SIZE;
         int pageNum = 1;
+        // Wave30：任一表失败时保留全量进度，禁止清空断点（否则缺表数据且无法续传）
+        boolean allTablesOk = true;
         while (task.isRunning()) {
             Paging<TableGroup> paging = tableGroupProfile.queryTableGroup(mapping.getId(), null, pageNum, pageSize);
             if (paging == null || CollectionUtils.isEmpty(paging.getData())) {
@@ -189,10 +191,21 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
             }
 
             int threadNum = Math.max(1, mapping.getThreadNum());
-            BatchTaskUtil.executeBySlice(works, works.size(), threadNum, (slice, executor) ->
-                    BatchTaskUtil.executeWithAwait(slice, executor, work ->
-                            syncOneTable(task, mapping, work, useLegacyBreakpoint, legacyTableGroupIndex,
-                                    legacyPageIndex, legacyCursor), logger), logger);
+            // Wave30：旧实现 executeBySlice 建一个池只提交 1 个外层任务，外层又把 N 张表
+            // 提交回同一个池并阻塞等待。threadNum=1 时唯一线程被外层占死 → 必然死锁；
+            // threadNum>1 时也白白少一个工作线程。改为单池直接并发 N 张表，不嵌套提交。
+            ExecutorService tablePool = Executors.newFixedThreadPool(Math.min(threadNum, works.size()));
+            try {
+                BatchTaskUtil.executeWithAwait(works, tablePool, work ->
+                        syncOneTable(task, mapping, work, useLegacyBreakpoint, legacyTableGroupIndex,
+                                legacyPageIndex, legacyCursor), logger);
+            } catch (Exception e) {
+                allTablesOk = false;
+                logger.error("全量同步批次存在失败表，保留断点待重跑: {}", e.getMessage(), e);
+                logService.log(LogType.SystemLog.ERROR, "全量同步批次失败，断点已保留: " + e.getMessage());
+            } finally {
+                tablePool.shutdownNow();
+            }
 
             if (!task.isRunning() || page.size() < pageSize) {
                 break;
@@ -204,7 +217,7 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
         task.setTableGroupIndex(ParserEnum.TABLE_GROUP_INDEX.getDefaultValue());
         task.setPageIndex(ParserEnum.PAGE_INDEX.getDefaultValue());
         task.setCursors(null);
-        if (task.isRunning()) {
+        if (task.isRunning() && allTablesOk) {
             clearFullProgress(task);
         } else {
             flush(task);
@@ -255,6 +268,8 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
                     tableGroup.getTargetTable() != null ? tableGroup.getTargetTable().getName() : tableGroupId,
                     e.getMessage(), e);
             logService.log(LogType.SystemLog.ERROR, e.getMessage());
+            // Wave30：失败表必须让批次感知，否则会被当作成功并清空断点
+            throw new IllegalStateException("全量同步表失败: " + e.getMessage(), e);
         } finally {
             if (writeExecutor instanceof ExecutorService) {
                 ((ExecutorService) writeExecutor).shutdown();
@@ -277,7 +292,7 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
             if (StringUtil.isNotBlank(task.getTableGroupId())) {
                 TableSyncProgress progress = new TableSyncProgress();
                 progress.setPageIndex(task.getPageIndex());
-                progress.setCursor(StringUtil.getIfBlank(StringUtil.join(task.getCursors(), StringUtil.COMMA), StringUtil.EMPTY));
+                progress.setCursor(StringUtil.getIfBlank(PrimaryKeyUtil.encodeCursors(task.getCursors()), StringUtil.EMPTY));
                 progress.setDone(false);
                 FullTableProgressUtil.put(snapshot, task.getTableGroupId(), progress);
                 snapshot.put(ParserEnum.PAGE_INDEX.getCode(), String.valueOf(task.getPageIndex()));
@@ -285,7 +300,7 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
             } else {
                 snapshot.put(ParserEnum.PAGE_INDEX.getCode(), String.valueOf(task.getPageIndex()));
                 snapshot.put(ParserEnum.CURSOR.getCode(),
-                        StringUtil.getIfBlank(StringUtil.join(task.getCursors(), StringUtil.COMMA), StringUtil.EMPTY));
+                        StringUtil.getIfBlank(PrimaryKeyUtil.encodeCursors(task.getCursors()), StringUtil.EMPTY));
                 snapshot.put(ParserEnum.TABLE_GROUP_INDEX.getCode(), String.valueOf(task.getTableGroupIndex()));
             }
             profileComponent.editConfigModel(meta);

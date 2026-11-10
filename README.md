@@ -835,7 +835,21 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 44. 许可声明
+## 44. 2026-11-10 更新摘要（Wave30：迁移能力盘点与大数据量缺陷修复）
+
+详见 `reports/OPTIMIZATION_REPORT_WAVE30.md` 与规划 §28。要点：
+
+- **开关与并发真正生效**：整库迁移拆成「结构阶段串行 / 数据阶段并发」；`enableCopyData=false` 时只建表不灌数据（存量任务缺字段时保留默认全量迁移语义），`threadNum` 接入表级并发池与分片读上限；【整库迁移 → 迁移策略】新增 `readNum/batchNum/threadNum` 三项可配置并夹紧到安全区间。
+- **不丢数据 / 不卡死**：`writeBatch` 补齐线程池拒绝与等待超时兜底、结果合并加锁；`BatchTaskUtil` / `FullPuller` 失败上抛并保留断点；整库迁移异常路径必收尾、收尾重读最新 Meta 避免覆盖原子计数、表级快照正确落盘、失败表不再算完成。
+- **断点与分片正确性**：新增 `DBDS-CURSOR-V2` 带类型位点编码（复合主键含逗号 / 前导零字符串 / 时间戳 / 旧格式兼容）；分片第一片纳入 NULL 行、`Long.MAX_VALUE` 末片闭区间、超大值域 `BigInteger` 步长。
+- **大数据量内存与导出**：对账报告改两遍流式分页写出，取消单条明细 200 条与全任务 5000 行封顶；慢 SQL 启动回放只保留尾部 N 行并压缩文件；`TaskSplitUtil` 改 `subList` 消除 O(n²)；明细序列化降级改增量字节估算；限速关闭时不再逐行估算字节；结果分页 clamp + OFFSET 长整型。
+- **其它真机路径缺陷**：Oracle BLOB/CLOB 循环读满并拒绝 >2GB、DBLink 查询归还连接、`DBDS-REF` refId 改 UUID 防撞、明细队列满改限时背压 + 拒绝时同步落库、反向扫描跳过可见化并按删除数回退翻页、切流改为「真实动作成功才推进相位」。
+- **验证**：全模块 `mvn test` **595 tests / 0 failures / 0 errors**（76 份 surefire 报告）；新增 `Wave30MigrationScaleTest` / `Wave30OracleLobReadTest`，扩测 `FullSplitLogicTest`，改断言 `Wave12CsvBuilderTest`；手册升级 v2.2.0 / 基线 Wave30；离线包按新基线重打。
+- **诚实边界**：亿级真机压测（MySQL/PG/Oracle/SQL Server）、分片断点按 slice 独立持久化、明细导出完全 keyset 化、JDBC `fetchSize` 统一、DBDS-REF 块回收、共识型 HA 与编译器级 PL/SQL 改写仍待外部条件或后续立项。
+
+---
+
+## 45. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 

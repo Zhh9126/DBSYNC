@@ -115,6 +115,12 @@ public class CutoverManagerService {
         return session(taskId).getStateMachine().transition(to);
     }
 
+    /** Wave30：只校验迁移合法性、不改变状态，供「先执行真实动作再推进相位」使用。 */
+    public boolean canTransition(String taskId, CutoverPhase to) {
+        return to != null && session(taskId).getStateMachine().canTransition(
+                session(taskId).getStateMachine().current(), to);
+    }
+
     /** 当前相位 */
     public CutoverPhase current(String taskId) {
         return session(taskId).getStateMachine().current();

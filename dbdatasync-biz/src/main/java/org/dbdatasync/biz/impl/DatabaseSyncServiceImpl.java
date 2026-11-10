@@ -667,6 +667,11 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
         task.setOverwriteSchema(task.isEnableCopySchema() && StringUtil.isNotBlank(params.get("overwriteSchema")));
         task.setOverwriteData(task.isEnableCopyData() && StringUtil.isNotBlank(params.get("overwriteData")));
         task.setEnableAutoDiscover(StringUtil.isNotBlank(params.get("enableAutoDiscover")));
+        // Wave30：大数据量性能参数从页面写入并夹紧。此前三项只有模型默认值、页面无输入、
+        // 引擎也只读取默认值，调优建议形同虚设；缺字段时保留任务原值，兼容存量 task.JSON。
+        task.setReadNum(clampInt(params.get("readNum"), task.getReadNum(), 100, 100000));
+        task.setBatchNum(clampInt(params.get("batchNum"), task.getBatchNum(), 1, 10000));
+        task.setThreadNum(clampInt(params.get("threadNum"), task.getThreadNum(), 1, 32));
         // Wave11：限速 / 低峰时间窗 / 自动推进阶段（默认 0 / false / ""，存量任务缺字段回落默认值）
         task.setRecordsPerSecond(parseRate(params.get("recordsPerSecond")));
         task.setBytesPerSecond(parseRate(params.get("bytesPerSecond")));
@@ -679,6 +684,20 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
         task.setWindowStart(windowStart);
         task.setWindowEnd(windowEnd);
         task.setAutoAdvanceStage(StringUtil.isNotBlank(params.get("autoAdvanceStage")));
+    }
+
+    /** Wave30：性能参数解析并夹紧到安全区间；空白 / 异常 / 越界一律回退原值或默认值。 */
+    private int clampInt(String raw, int current, int min, int max) {
+        int fallback = current > 0 ? current : min;
+        try {
+            int value = NumberUtil.toInt(StringUtil.trimToEmpty(raw), fallback);
+            if (value < min || value > max) {
+                return fallback >= min && fallback <= max ? fallback : min;
+            }
+            return value;
+        } catch (RuntimeException e) {
+            return fallback;
+        }
     }
 
     /** 限速解析：异常 / 空白 / &lt;=0 一律归一为 0（0 = 不限速），绝不抛异常。 */

@@ -3,6 +3,10 @@ package org.dbdatasync.biz.util;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 
+import java.io.IOException;
+import java.io.StringWriter;
+import java.io.UncheckedIOException;
+import java.io.Writer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -15,9 +19,11 @@ import java.util.regex.Pattern;
  * Wave12 方向一「对账报告导出」的纯静态 CSV 构建器。
  *
  * <p>零 servlet 依赖、可直接单测：{@link #build(String, List, long)} 返回完整 CSV 文本
- * （每行 {@code \r\n} 结尾，不含 BOM），web 层只负责写 UTF-8 BOM 与字节流。
- * 差异明细是 {@code List<Map<String,Object>>}，序列化在校验明细行 {@code DATA} 列，
- * 装配后是铺平的 {@code Map<String,Object>}。</p>
+ * （每行 {@code \r\n} 结尾，不含 BOM）；大结果集请用 {@link #writeTo(Writer, String, List, long)}
+ * 直接写 HTTP 响应流，避免整份 CSV String + byte[] 双份物化。</p>
+ *
+ * <p>Wave30：移除单条明细 200 条的导出封顶（校验明细已不再截断，导出侧却仍丢数据），
+ * 并去掉一次性 {@code perRowItems} 全量副本，改为逐行归一化、逐行写出。</p>
  *
  * <p>关键防御：{@link #normalizeContent(Object)} 对根为 {@code {} 的字符串走
  * {@code JSON.parseObject} 取 {@code data}，绝不对根对象调用 {@code JSON.parseArray}
@@ -37,14 +43,11 @@ public final class ReconciliationCsvBuilder {
         "目标值", "是否主键", "修复SQL", "订正状态", "备注"
     };
 
-    /** 单条明细最多导出的差异条目数（与 ValidateSyncExecutor.MAX_CONTENT_ITEMS 对齐）。 */
-    public static final int MAX_EXPORT_ITEMS_PER_DETAIL = 200;
-
     private static final String CRLF = "\r\n";
     private static final Pattern NUMBER = Pattern.compile("-?\\d+(\\.\\d+)?");
     private static final String TIME_PATTERN = "yyyy-MM-dd HH:mm:ss";
     private static final String TIP_LINE =
-        "单条明细最多导出200条差异；校验结果DATA列有65535字节上限，可能被截断；导出条数以本CSV实际行数为准";
+        "导出包含明细中全部差异条目（不再按 200 条截断）；差异明细若因外置存储缺失无法还原，导出条数以本 CSV 实际行数为准";
 
     private ReconciliationCsvBuilder() {
     }
@@ -55,87 +58,117 @@ public final class ReconciliationCsvBuilder {
     }
 
     /**
-     * 固定时间重载，供单测断言。
-     *
-     * <p>先输出抬头元信息行与 HEADERS，再逐差异条目展开数据行，末尾追加 {@code #说明} 行。
-     * 每个差异 item 至少 1 行；{@code details} 为非空 List 时按字段逐行展开，且每行都带
-     * 全量公共字段（便于独立解析）。单条明细最多导出 {@link #MAX_EXPORT_ITEMS_PER_DETAIL} 条。</p>
+     * 固定时间重载，供单测断言。内部走同一套流式写出逻辑，避免与线上行为分叉。
      */
     public static String build(String taskId, List<Map<String, Object>> detailRows, long timeMillis) {
-        List<Map<String, Object>> rows;
-        if (detailRows == null) {
-            rows = Collections.emptyList();
-        } else {
-            rows = detailRows;
+        StringWriter out = new StringWriter();
+        try {
+            writeTo(out, taskId, detailRows, timeMillis);
+        } catch (IOException e) {
+            // StringWriter 不抛 IOException，仅满足 Appendable 契约
+            throw new IllegalStateException("构建对账报告失败", e);
         }
+        return out.toString();
+    }
 
-        long sumDiff = 0L;
-        long sumFixed = 0L;
-        int itemCount = 0;
-        boolean emptyContentWithDiff = false;
-        List<List<Map<String, Object>>> perRowItems =
-            new ArrayList<List<Map<String, Object>>>(rows.size());
+    /**
+     * 流式写出对账报告（推荐用于 Web 下载）：抬头 → 表头 → 逐差异条目展开 → 说明行。
+     * 只对每个明细的 content 临时归一化一次，用完即弃，不保存全量 items 副本。
+     *
+     * @param out        目标 Writer，调用方负责 flush，不负责 close
+     * @param taskId     任务 ID
+     * @param detailRows 明细行（含 content / diffTotal / fixedTotal 等）
+     * @param timeMillis 生成时间
+     * @throws IOException 写出失败时抛出
+     */
+    public static void writeTo(Writer out, String taskId, List<Map<String, Object>> detailRows,
+                               long timeMillis) throws IOException {
+        final List<Map<String, Object>> rows = detailRows == null
+                ? Collections.<Map<String, Object>>emptyList() : detailRows;
+        writeTo(out, taskId, (DetailSource) rows::forEach, timeMillis);
+    }
 
-        // 第一遍：统计汇总数字、判定完整性、归一化并封顶每条明细的 items
-        for (Map<String, Object> raw : rows) {
+    /**
+     * Wave30：明细来源抽象。实现必须可重复遍历（构建器需要两遍扫描：统计抬头 + 写数据行）。
+     * Web 下载侧传入「分页扫描 DB 的 lambda」，全程只保留当前页 200 行，不再
+     * 先把全任务明细塞进 List，也不再有 5000 行静默截断。
+     */
+    @FunctionalInterface
+    public interface DetailSource {
+        void forEach(java.util.function.Consumer<Map<String, Object>> sink);
+    }
+
+    /**
+     * 流式写出（推荐 Web 下载）：两遍扫描 DetailSource，逐行归一化、逐行写出。
+     *
+     * @throws IOException 写出失败时抛出
+     */
+    public static void writeTo(Writer out, String taskId, DetailSource source, long timeMillis) throws IOException {
+        final DetailSource src = source == null ? sink -> { } : source;
+        // 第一遍：只统计汇总数字，不保存任何 items 副本
+        final long[] stats = new long[4]; // 0=行数 1=差异总数 2=已订正总数 3=导出条目数
+        final boolean[] emptyContentWithDiff = new boolean[1];
+        src.forEach(raw -> {
             Map<String, Object> row = raw == null ? Collections.<String, Object>emptyMap() : raw;
             long diff = toLong(row.get("diffTotal"));
-            long fixed = toLong(row.get("fixedTotal"));
-            sumDiff += diff;
-            sumFixed += fixed;
-
-            List<Map<String, Object>> items = normalizeContent(row.get("content"));
-            if (diff > 0 && items.isEmpty()) {
-                emptyContentWithDiff = true;
+            int size = normalizeContent(row.get("content")).size();
+            stats[0]++;
+            stats[1] += diff;
+            stats[2] += toLong(row.get("fixedTotal"));
+            stats[3] += size;
+            if (diff > 0 && size == 0) {
+                emptyContentWithDiff[0] = true;
             }
-            int limit = Math.min(items.size(), MAX_EXPORT_ITEMS_PER_DETAIL);
-            itemCount += limit;
-            if (limit == items.size()) {
-                perRowItems.add(items);
-            } else {
-                perRowItems.add(new ArrayList<Map<String, Object>>(items.subList(0, limit)));
-            }
-        }
+        });
 
-        boolean incomplete = sumDiff > itemCount || emptyContentWithDiff;
+        boolean incomplete = stats[1] > stats[3] || emptyContentWithDiff[0];
         String completeness = incomplete
-            ? ("可能不完整：明细差异数为 " + sumDiff + "，实际导出 " + itemCount
-               + " 条；单条明细最多保留 200 条差异，DATA 列 65535 字节上限可能截断内容")
+            ? ("可能不完整：明细差异数为 " + stats[1] + "，实际导出 " + stats[3]
+               + " 条；差异内容可能未落库或外置存储缺失")
             : "完整";
 
-        StringBuilder sb = new StringBuilder();
-        appendRow(sb, "DBDataSync 对账报告");
-        appendRow(sb, "任务ID", taskId);
-        appendRow(sb, "生成时间", new SimpleDateFormat(TIME_PATTERN).format(new Date(timeMillis)));
-        appendRow(sb, "明细行数", Integer.valueOf(rows.size()));
-        appendRow(sb, "差异总数", Long.valueOf(sumDiff));
-        appendRow(sb, "已订正总数", Long.valueOf(sumFixed));
-        appendRow(sb, "导出差异条目数", Integer.valueOf(itemCount));
-        appendRow(sb, "完整性", completeness);
-        sb.append(CRLF);
-        Object[] headerCells = HEADERS;
-        appendRow(sb, headerCells);
+        appendRow(out, "DBDataSync 对账报告");
+        appendRow(out, "任务ID", taskId);
+        appendRow(out, "生成时间", new SimpleDateFormat(TIME_PATTERN).format(new Date(timeMillis)));
+        appendRow(out, "明细行数", Long.valueOf(stats[0]));
+        appendRow(out, "差异总数", Long.valueOf(stats[1]));
+        appendRow(out, "已订正总数", Long.valueOf(stats[2]));
+        appendRow(out, "导出差异条目数", Long.valueOf(stats[3]));
+        appendRow(out, "完整性", completeness);
+        out.append(CRLF);
+        appendRow(out, (Object[]) HEADERS);
 
-        // 第二遍：按差异条目 / 字段展开数据行
-        for (int r = 0; r < rows.size(); r++) {
-            Map<String, Object> raw = rows.get(r);
-            Map<String, Object> row = raw == null ? Collections.<String, Object>emptyMap() : raw;
-            List<Map<String, Object>> items = perRowItems.get(r);
-            for (int idx = 0; idx < items.size(); idx++) {
-                Map<String, Object> item = items.get(idx);
-                List<Map<String, Object>> details = toDetailList(item.get("details"));
-                if (details.isEmpty()) {
-                    appendDataRow(sb, row, idx, item, null);
-                } else {
-                    for (Map<String, Object> d : details) {
-                        appendDataRow(sb, row, idx, item, d);
-                    }
+        // 第二遍：逐行归一化并直接写出，不累积到内存
+        try {
+            src.forEach(raw -> {
+                try {
+                    writeDetailRow(out, raw);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        }
+
+        appendRow(out, "#说明", TIP_LINE);
+    }
+
+    /** 展开单条明细的全部差异条目（含字段级 details），不做任何条数封顶。 */
+    private static void writeDetailRow(Appendable out, Map<String, Object> raw) throws IOException {
+        Map<String, Object> row = raw == null ? Collections.<String, Object>emptyMap() : raw;
+        List<Map<String, Object>> items = normalizeContent(row.get("content"));
+        for (int idx = 0; idx < items.size(); idx++) {
+            Map<String, Object> item = items.get(idx);
+            List<Map<String, Object>> details = toDetailList(item.get("details"));
+            if (details.isEmpty()) {
+                appendDataRow(out, row, idx, item, null);
+            } else {
+                for (Map<String, Object> d : details) {
+                    appendDataRow(out, row, idx, item, d);
                 }
             }
         }
-
-        appendRow(sb, "#说明", TIP_LINE);
-        return sb.toString();
     }
 
     /**
@@ -265,21 +298,21 @@ public final class ReconciliationCsvBuilder {
         return "待处理";
     }
 
-    /** 逐单元格 escapeCell 后拼接，末尾 CRLF；调用方传原始值，此处只转义一次。 */
-    private static void appendRow(StringBuilder sb, Object... cells) {
+    /** 逐单元格 escapeCell 后写入 Appendable，末尾 CRLF；调用方传原始值，此处只转义一次。 */
+    private static void appendRow(Appendable out, Object... cells) throws IOException {
         for (int i = 0; i < cells.length; i++) {
             if (i > 0) {
-                sb.append(',');
+                out.append(',');
             }
-            sb.append(escapeCell(cells[i]));
+            out.append(escapeCell(cells[i]));
         }
-        sb.append(CRLF);
+        out.append(CRLF);
     }
 
     /** 一条数据行：前 6 列取明细行，其余取 item / detail，共 17 列。 */
-    private static void appendDataRow(StringBuilder sb, Map<String, Object> row, int itemIndex,
-                                      Map<String, Object> item, Map<String, Object> detail) {
-        appendRow(sb,
+    private static void appendDataRow(Appendable out, Map<String, Object> row, int itemIndex,
+                                      Map<String, Object> item, Map<String, Object> detail) throws IOException {
+        appendRow(out,
             row.get("id"), row.get("type"), row.get("sourceTableName"), row.get("targetTableName"),
             row.get("diffTotal"), row.get("fixedTotal"),
             Integer.valueOf(itemIndex), item.get("type"), item.get("key"), item.get("msg"),

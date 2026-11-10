@@ -213,6 +213,41 @@
                 </div>
             </div>
         </div>
+        <!-- Wave30：大数据量性能参数（此前只在模型里，页面无法配置、引擎也没读取） -->
+        <div class="col-span-2">
+            <div class="grid grid-cols-3 gap-4 rounded border border-gray-200 p-4">
+                <div class="form-item mb-0">
+                    <label class="form-label" for="dbSyncReadNum">分页读取条数</label>
+                    <div class="form-control-area">
+                        <input type="number" min="100" max="100000" step="100" name="readNum" id="dbSyncReadNum"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm"
+                               th:value="${task == null or task.readNum <= 0 ? 10000 : task.readNum}"
+                               th:disabled="${readOnly}"/>
+                        <span class="text-xs text-tertiary">单页读取上限，默认 10000</span>
+                    </div>
+                </div>
+                <div class="form-item mb-0">
+                    <label class="form-label" for="dbSyncBatchNum">单次写入条数</label>
+                    <div class="form-control-area">
+                        <input type="number" min="1" max="10000" step="1" name="batchNum" id="dbSyncBatchNum"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm"
+                               th:value="${task == null or task.batchNum <= 0 ? 1000 : task.batchNum}"
+                               th:disabled="${readOnly}"/>
+                        <span class="text-xs text-tertiary">写批拆分粒度，默认 1000</span>
+                    </div>
+                </div>
+                <div class="form-item mb-0">
+                    <label class="form-label" for="dbSyncThreadNum">表级并发线程数</label>
+                    <div class="form-control-area">
+                        <input type="number" min="1" max="32" step="1" name="threadNum" id="dbSyncThreadNum"
+                               class="border border-gray-300 rounded px-2 py-1 text-sm"
+                               th:value="${task == null or task.threadNum <= 0 ? 5 : task.threadNum}"
+                               th:disabled="${readOnly}"/>
+                        <span class="text-xs text-tertiary">数据阶段并发表数，默认 5；同时限制单表分片读上限</span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 

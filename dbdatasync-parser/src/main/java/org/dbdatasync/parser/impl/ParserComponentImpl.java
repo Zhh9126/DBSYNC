@@ -61,6 +61,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -74,6 +76,13 @@ import java.util.stream.Collectors;
 public class ParserComponentImpl implements ParserComponent {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    /**
+     * Wave30：写批子任务等待上限。旧实现 {@code latch.await()} 无超时，线程池被拒/写入卡死时
+     * 整个同步线程永久挂起；超时后未完成子批一律计入失败明细，绝不静默丢数据。
+     */
+    private static final long WRITE_BATCH_AWAIT_MINUTES =
+            Long.getLong("dbdatasync.write.awaitMinutes", 30L);
 
     @Resource
     private ConnectorFactory connectorFactory;
@@ -335,11 +344,13 @@ public class ParserComponentImpl implements ParserComponent {
         });
         for (int i = 0; i < count; i++) {
             final long[] interval = intervals[i];
+            final boolean firstSlice = i == 0;
             pool.execute(() -> {
                 // 每个分片独立子任务：独立 cursors/pageIndex，共享父任务启停
                 Task sliceTask = task.createTableTask(group.getId());
                 try {
-                    executeSlice(sliceTask, mapping, group, command, fieldMappings, splitKey, interval[0], interval[1], executor, limiter);
+                    executeSlice(sliceTask, mapping, group, command, fieldMappings, splitKey, interval[0], interval[1],
+                            firstSlice, executor, limiter);
                 } catch (Throwable e) {
                     failure.compareAndSet(null, e);
                     task.stop();
@@ -374,9 +385,11 @@ public class ParserComponentImpl implements ParserComponent {
      * </ol>
      */
     private void executeSlice(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
-                              List<FieldMapping> fieldMapping, String splitKey, long start, long end, Executor executor,
-                              MigrationRateLimiter limiter) {
+                              List<FieldMapping> fieldMapping, String splitKey, long start, long end,
+                              boolean includeNullRows, Executor executor, MigrationRateLimiter limiter) {
         final String metaId = task.getId();
+        // 最后一片 end 饱和在 Long.MAX_VALUE 时改用 <= 闭区间，否则该行会被 "< max" 排除
+        final boolean inclusiveEnd = end == Long.MAX_VALUE;
         final String sourceConnectorId = mapping.getSourceConnectorId();
         final String targetConnectorId = mapping.getTargetConnectorId();
         final String sTableName = group.getSourceTable().getName();
@@ -389,16 +402,18 @@ public class ParserComponentImpl implements ParserComponent {
         String cursorSql = command.get(ConnectorConstant.OPERTION_QUERY_CURSOR);
         boolean enableCursor = StringUtil.isNotBlank(cursorSql);
         if (enableCursor) {
-            String injected = injectRangeCondition(cursorSql, splitKey, start, end);
+            String injected = injectRangeCondition(cursorSql, splitKey, start, end, includeNullRows, inclusiveEnd);
             sliceCommand.put(ConnectorConstant.OPERTION_QUERY_CURSOR, injected);
             // QUERY（第一页非游标）与 QUERY_COUNT 一并注入，保证总览页与计数口径一致
             String querySql = command.get(ConnectorConstant.OPERTION_QUERY);
             if (StringUtil.isNotBlank(querySql)) {
-                sliceCommand.put(ConnectorConstant.OPERTION_QUERY, injectRangeCondition(querySql, splitKey, start, end));
+                sliceCommand.put(ConnectorConstant.OPERTION_QUERY,
+                        injectRangeCondition(querySql, splitKey, start, end, includeNullRows, inclusiveEnd));
             }
             String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
             if (StringUtil.isNotBlank(countSql)) {
-                sliceCommand.put(ConnectorConstant.OPERTION_QUERY_COUNT, injectRangeCondition(countSql, splitKey, start, end));
+                sliceCommand.put(ConnectorConstant.OPERTION_QUERY_COUNT,
+                        injectRangeCondition(countSql, splitKey, start, end, includeNullRows, inclusiveEnd));
             }
         }
 
@@ -447,7 +462,8 @@ public class ParserComponentImpl implements ParserComponent {
             }
 
             // 批次级限速：读取后、写入前申请本秒「记录数 + 估算字节数」配额（默认 0 时零开销、不改执行顺序）
-            limiter.acquire(source.size(), estimateBytes(source));
+            // Wave30：未启用限速时绝不能先算 estimateBytes（逐行 Map.toString，宽行下比数据本身还贵）
+            limiter.acquire(source.size(), limiter.isEnabled() ? estimateBytes(source) : 0L);
 
             // 2、映射字段
             List<Map> target = picker.pickTargetData(source);
@@ -499,8 +515,27 @@ public class ParserComponentImpl implements ParserComponent {
      * @return 注入后的 SQL
      */
     String injectRangeCondition(String sql, String splitKey, long start, long end) {
+        return injectRangeCondition(sql, splitKey, start, end, false, false);
+    }
+
+    /**
+     * Wave30：分片范围条件。
+     * <ul>
+     *     <li>{@code includeNullRows}：MIN/MAX 忽略 NULL，且 {@code >= / <} 对 NULL 求值为 UNKNOWN，
+     *         旧实现会 100% 丢掉分片键为 NULL 的行；第一片显式加 {@code IS NULL} 分支兜住。</li>
+     *     <li>{@code inclusiveEnd}：值域上界为 {@code Long.MAX_VALUE} 时不可能是 {@code max+1}，
+     *         最后一片改用闭区间 {@code <= ?}，否则该行读不到。</li>
+     * </ul>
+     * 两个分支都不增加绑定参数个数，rangePrefix 的 [start, end] 顺序不变。
+     */
+    String injectRangeCondition(String sql, String splitKey, long start, long end,
+                                boolean includeNullRows, boolean inclusiveEnd) {
         SqlIdentifierValidator.validateIdentifier(splitKey);
-        String range = "(" + splitKey + " >= ? AND " + splitKey + " < ?)";
+        String upperOp = inclusiveEnd ? " <= ?" : " < ?";
+        String range = "(" + splitKey + " >= ? AND " + splitKey + upperOp + ")";
+        if (includeNullRows) {
+            range = "(" + splitKey + " IS NULL OR (" + splitKey + " >= ? AND " + splitKey + upperOp + "))";
+        }
         String upper = sql.toUpperCase();
         int whereIdx = upper.indexOf(" WHERE ");
         if (whereIdx >= 0) {
@@ -532,24 +567,33 @@ public class ParserComponentImpl implements ParserComponent {
             return new long[0][];
         }
         int n = Math.max(1, count);
-        long total = max - min + 1;
-        long step = Math.max(1, total / n);
+        // Wave30：max-min+1 在极大值域会溢出为负，用 BigInteger 算步长；加法同样按上界饱和。
+        java.math.BigInteger span = java.math.BigInteger.valueOf(max)
+                .subtract(java.math.BigInteger.valueOf(min)).add(java.math.BigInteger.ONE);
+        java.math.BigInteger stepBig = span.divide(java.math.BigInteger.valueOf(n));
+        long step = stepBig.compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE)) > 0
+                ? Long.MAX_VALUE : Math.max(1L, stepBig.longValue());
         java.util.List<long[]> ranges = new ArrayList<>(n);
         long start = min;
         for (int i = 0; i < n && start <= max; i++) {
             long end;
             if (i == n - 1) {
+                // end == Long.MAX_VALUE 时由 injectRangeCondition 改用 <= 闭区间
                 end = max == Long.MAX_VALUE ? max : max + 1;
             } else {
-                end = start + step;
+                long raw = start + step;
+                end = raw < start ? max : raw;
                 if (end > max) {
                     end = max;
                 }
                 if (end <= start) {
-                    end = start + 1;
+                    end = start == Long.MAX_VALUE ? max : start + 1;
                 }
             }
             ranges.add(new long[]{start, end});
+            if (end <= start) {
+                break;
+            }
             start = end;
         }
         return ranges.toArray(new long[0][]);
@@ -625,7 +669,8 @@ public class ParserComponentImpl implements ParserComponent {
             }
 
             // 批次级限速：读取后、写入前申请本秒「记录数 + 估算字节数」配额（默认 0 时零开销、不改执行顺序）
-            limiter.acquire(source.size(), estimateBytes(source));
+            // Wave30：未启用限速时绝不能先算 estimateBytes（逐行 Map.toString，宽行下比数据本身还贵）
+            limiter.acquire(source.size(), limiter.isEnabled() ? estimateBytes(source) : 0L);
 
             // 2、映射字段
             List<Map> target = picker.pickTargetData(source);
@@ -700,10 +745,18 @@ public class ParserComponentImpl implements ParserComponent {
             return connectorFactory.writer(context);
         }
 
-        // 批量任务, 拆分
-        int taskSize = (total + batchSize - 1) / batchSize;
-        CountDownLatch latch = new CountDownLatch(taskSize);
-        TaskSplitUtil.split(targetList, batchSize, batch -> {
+        // Wave30：先固定子批引用，超时/提交被拒时才能把「未写出的行」准确计入失败明细
+        final List<List<Map>> batches = new ArrayList<>();
+        TaskSplitUtil.split(targetList, batchSize, batches::add);
+        final int taskSize = batches.size();
+        final CountDownLatch latch = new CountDownLatch(taskSize);
+        final AtomicBoolean[] done = new AtomicBoolean[taskSize];
+        for (int i = 0; i < taskSize; i++) {
+            done[i] = new AtomicBoolean(false);
+        }
+        for (int i = 0; i < taskSize; i++) {
+            final int idx = i;
+            final List<Map> batch = batches.get(idx);
             try {
                 PluginContext tmpContext = (PluginContext) context.clone();
                 tmpContext.setTargetList(batch);
@@ -718,37 +771,66 @@ public class ParserComponentImpl implements ParserComponent {
                     }
                     try {
                         Result w = connectorFactory.writer(tmpContext);
-                        result.addSuccessData(w.getSuccessData());
-                        result.addFailData(w.getFailData());
-                        result.getError().append(w.getError());
-                        // Wave24：逐行失败分类必须随子批结果合并，否则大事务路径分类丢失
-                        result.getRowFailures().putAll(w.getRowFailures());
+                        // Wave30：Result 内部是普通 List/StringBuffer/Map，多子批并发合并会丢数据甚至 CME
+                        synchronized (result) {
+                            result.addSuccessData(w.getSuccessData());
+                            result.addFailData(w.getFailData());
+                            result.getError().append(w.getError());
+                            // Wave24：逐行失败分类必须随子批结果合并，否则大事务路径分类丢失
+                            result.getRowFailures().putAll(w.getRowFailures());
+                        }
                     } catch (Exception e) {
                         logger.error(e.getMessage(), e);
                         // 子批整体异常时旧实现只打日志，整批既不进 successData 也不进 failData，
                         // 数据会静默丢失且无法进入失败队列。这里按失败明细兜底，保证可观测、可重推。
-                        result.addFailData(batch);
-                        result.getError().append("[BATCH_FAILED] ").append(e.getMessage())
-                                .append(" ").append(org.dbdatasync.sdk.retry.WriteFailureTag.describe(e))
-                                .append(System.lineSeparator());
+                        synchronized (result) {
+                            result.addFailData(batch);
+                            result.getError().append("[BATCH_FAILED] ").append(e.getMessage())
+                                    .append(" ").append(org.dbdatasync.sdk.retry.WriteFailureTag.describe(e))
+                                    .append(System.lineSeparator());
+                        }
                     } finally {
                         org.dbdatasync.sdk.context.TaskContextHolder.clear();
                         org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.end();
+                        done[idx].set(true);
                         latch.countDown();
                     }
                 });
-            } catch (CloneNotSupportedException e) {
-                logger.error(e.getMessage(), e);
-                result.addFailData(batch);
-                result.getError().append("[BATCH_CLONE_FAILED] ").append(e.getMessage())
-                        .append(System.lineSeparator());
+            } catch (Throwable e) {
+                // Wave30：clone 失败之外，线程池 shutdown / RejectedExecutionException 也必须 countDown，
+                // 否则 latch 永远等不到 0（旧实现只捕获 CloneNotSupportedException）。
+                logger.error("写批子任务提交失败: {}", e.getMessage(), e);
+                synchronized (result) {
+                    result.addFailData(batch);
+                    result.getError().append("[BATCH_SUBMIT_FAILED] ").append(e.getMessage())
+                            .append(System.lineSeparator());
+                }
+                done[idx].set(true);
                 latch.countDown();
             }
-        });
+        }
+        boolean completed;
         try {
-            latch.await();
+            completed = latch.await(WRITE_BATCH_AWAIT_MINUTES, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
-            logger.error(e.getMessage());
+            Thread.currentThread().interrupt();
+            completed = false;
+            logger.error("写批等待被中断");
+        }
+        if (!completed) {
+            synchronized (result) {
+                int pending = 0;
+                for (int i = 0; i < taskSize; i++) {
+                    if (!done[i].get()) {
+                        result.addFailData(batches.get(i));
+                        pending++;
+                    }
+                }
+                result.getError().append("[BATCH_AWAIT_TIMEOUT] 写批等待超时，")
+                        .append(pending).append(" 个未完成子批已计入失败明细")
+                        .append(System.lineSeparator());
+            }
+            logger.error("写批等待超时（{} 分钟），未完成子批已计入失败明细", WRITE_BATCH_AWAIT_MINUTES);
         }
         return result;
     }

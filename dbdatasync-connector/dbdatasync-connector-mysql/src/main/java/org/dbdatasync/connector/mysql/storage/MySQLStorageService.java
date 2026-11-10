@@ -114,7 +114,7 @@ public class MySQLStorageService extends AbstractStorageService {
         if (args != null && args.length > 0) {
             System.arraycopy(args, 0, pageArgs, 0, args.length);
         }
-        pageArgs[pageArgs.length - 2] = (pageNum - 1) * pageSize;
+        pageArgs[pageArgs.length - 2] = ((long) pageNum - 1L) * (long) pageSize;
         pageArgs[pageArgs.length - 1] = pageSize;
         return selectList(sql + DatabaseConstant.MYSQL_PAGE_SQL, pageArgs);
     }

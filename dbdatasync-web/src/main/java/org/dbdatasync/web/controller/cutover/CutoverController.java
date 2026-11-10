@@ -1,5 +1,6 @@
 package org.dbdatasync.web.controller.cutover;
 
+import org.dbdatasync.biz.cutover.CutoverExecutor;
 import org.dbdatasync.biz.cutover.CutoverManagerService;
 import org.dbdatasync.biz.cutover.CutoverPhase;
 import org.dbdatasync.biz.vo.RestResult;
@@ -77,12 +78,28 @@ public class CutoverController extends BaseController {
                 return RestResult.restFail("to（目标相位）不能为空");
             }
             CutoverPhase phase = CutoverPhase.valueOf(to.trim().toUpperCase(java.util.Locale.ROOT));
+            // Wave30：旧实现「先推进相位、再执行真实动作」，动作失败时状态机却已前移，
+            // 页面显示已切流但实际未切。改为先校验合法性 → 执行真实动作 → 成功才推进。
+            CutoverPhase before = cutoverManagerService.current(taskId);
+            if (!cutoverManagerService.canTransition(taskId, phase)) {
+                return RestResult.restFail("非法相位迁移：" + before + " -> " + phase);
+            }
+            CutoverExecutor.ActionResult execution = null;
+            if (autoExecuteEnabled(params)) {
+                execution = cutoverManagerService.execute(taskId, phase, params);
+                if (execution == null || !execution.isOk()) {
+                    Map<String, Object> failedView = phaseView(taskId, before);
+                    failedView.put("execution", execution);
+                    String message = execution == null ? "执行器未返回结果" : execution.getMessage();
+                    return new RestResult(false, failedView,
+                            "切流动作失败，相位保持 " + before + "：" + message, 500);
+                }
+            }
             CutoverPhase current = cutoverManagerService.transition(taskId, phase);
             Map<String, Object> view = phaseView(taskId, current);
-            // Wave24：自动切流（默认关闭）。状态机推进成功后调用真实执行器；
-            // 未接入动作处理器时执行结果会明确标记 simulated，不会冒充已切流。
-            if (autoExecuteEnabled(params)) {
-                view.put("execution", cutoverManagerService.execute(taskId, current, params));
+            // Wave24：未接入动作处理器时执行结果会明确标记 simulated，不会冒充已切流。
+            if (execution != null) {
+                view.put("execution", execution);
             }
             return RestResult.restSuccess(view);
         } catch (IllegalArgumentException e) {
