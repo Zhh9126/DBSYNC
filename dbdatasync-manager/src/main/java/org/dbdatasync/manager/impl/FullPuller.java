@@ -294,6 +294,11 @@ public final class FullPuller extends AbstractPuller implements ApplicationListe
                 progress.setPageIndex(task.getPageIndex());
                 progress.setCursor(StringUtil.getIfBlank(PrimaryKeyUtil.encodeCursors(task.getCursors()), StringUtil.EMPTY));
                 progress.setDone(false);
+                // Wave31：分片进度键（组ID#s+下标）携带分片边界，恢复时校验值域未漂移
+                TableSyncProgress prev = FullTableProgressUtil.getOrInit(snapshot, task.getTableGroupId());
+                if (StringUtil.isNotBlank(prev.getBounds())) {
+                    progress.setBounds(prev.getBounds());
+                }
                 FullTableProgressUtil.put(snapshot, task.getTableGroupId(), progress);
                 snapshot.put(ParserEnum.PAGE_INDEX.getCode(), String.valueOf(task.getPageIndex()));
                 snapshot.put(ParserEnum.CURSOR.getCode(), progress.getCursor());

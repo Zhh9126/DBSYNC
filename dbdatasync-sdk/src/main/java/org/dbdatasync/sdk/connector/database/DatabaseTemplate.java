@@ -113,8 +113,23 @@ public class DatabaseTemplate implements JdbcOperations {
     /**
      * If this variable is set to a non-negative value, it will be used for setting the
      * fetchSize property on statements used for query processing.
+     *
+     * <p>Wave31：默认 fetchSize 改为 1000（可用系统属性 {@code dbdatasync.jdbc.fetchSize}
+     * 覆盖，设为 -1 关闭）。此前默认 -1 等于从不设置，MySQL/SQL Server 驱动会整表逐行拉取、
+     * PG/Oracle 驱动按驱动默认批量，大数据量读取内存与往返都差；1000 对各 JDBC 驱动均为
+     * 安全值（不支持时驱动忽略），MySQL 流式读取仍可通过显式设为 {@link Integer#MIN_VALUE} 开启。</p>
      */
-    private int fetchSize = -1;
+    public static final int DEFAULT_FETCH_SIZE = resolveDefaultFetchSize();
+
+    /**
+     * 解析默认 fetchSize：系统属性 {@code dbdatasync.jdbc.fetchSize}（默认 1000）。
+     * 独立成方法便于测试与运行期动态解析。
+     */
+    static int resolveDefaultFetchSize() {
+        return Integer.getInteger("dbdatasync.jdbc.fetchSize", 1000);
+    }
+
+    private int fetchSize = DEFAULT_FETCH_SIZE;
 
     /**
      * If this variable is set to a non-negative value, it will be used for setting the

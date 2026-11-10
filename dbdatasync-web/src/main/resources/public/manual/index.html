@@ -5,7 +5,7 @@
     DBDataSync 操作手册（系统管理 -> 操作手册）
     纯离线静态页面：无 CDN / 外网字体 / 外链脚本，适合离线部署交付。
 
-    文档基线：Wave30（2026-11-10）。
+    文档基线：Wave31（2026-11-10）。
     维护约定：本手册随功能实时同步。新增/修改系统配置项、菜单、REST 端点或默认行为时，
     必须在同一次变更中更新本手册对应章节、第 13 章配置速查表与第 18 章变更记录，
     并执行 python tools/check_manual_sync.py；CI 的 docs-sync 任务会阻断未同步的变更。
@@ -52,7 +52,7 @@
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
         <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
-        <div class="meta">适用版本 <b>v2.2.0 及以上</b> ｜ 文档基线 <b>Wave30</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
+        <div class="meta">适用版本 <b>v2.2.1 及以上</b> ｜ 文档基线 <b>Wave31</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -297,13 +297,15 @@
                 </ol>
                 <div class="warn"><b>注意：</b>整库迁移会在目标库创建表；若目标库已存在同名表，预检测/运行时会按提示处理（遇结构冲突建议先在目标库删除旧表）。</div>
 
-                <h3 id="manual-h6-1">6.1 大数据量迁移行为与调优（Wave30）</h3>
+                <h3 id="manual-h6-1">6.1 大数据量迁移行为与调优（Wave30/31）</h3>
                 <ul>
                     <li><b>迁移策略开关真正生效</b>：迁移策略页「复制表结构」「同步数据」是两个独立阶段。关闭「同步数据」时只做建库/建表与字段映射，<b>不发起任何数据读写</b>，明细按 <code>tableSchema</code> 阶段记完成；开启时按 <code>rowData</code> 阶段记完成。历史任务配置里没有该字段时保留默认「同步数据」，升级后不会突然停灌。</li>
                     <li><b>两阶段执行</b>：结构阶段（自动建库建表、目标表元数据回读、字段映射、命令构建）<b>串行</b>，避免并发 DDL 冲突；数据阶段按任务 <code>threadNum</code>（默认 5）做<b>表级并发</b>，同参数同时限制单表分片并发读上限。单表内仍逐批串行写，避免打爆目标库。</li>
                     <li><b>失败与断点</b>：任一表失败时任务状态回落 <code>READY</code> 待重跑，<b>全量断点不会清空</b>；异常路径也会收尾，任务级 Meta 不会再永久卡在 <code>RUNNING</code>。失败表不再计入「结构阶段已完成」，进度不会虚高。</li>
                     <li><b>位点可恢复</b>：全量 / 增量游标使用 <code>DBDS-CURSOR-V2:</code> 带类型编码（值做 URL 编码），复合主键含逗号、前导零字符串（如 <code>00123</code>）、时间戳都能原样恢复；旧逗号格式仍可读取。</li>
                     <li><b>分片不漏行</b>：分片值域探测的 <code>MIN/MAX</code> 忽略 NULL，第一片显式加入 <code>IS NULL</code> 分支；上界等于 <code>Long.MAX_VALUE</code> 时末片用 <code>&lt;= ?</code> 闭区间；超大值域用 <code>BigInteger</code> 计算步长，不再溢出。</li>
+                    <li><b>分片断点隔离与续传（Wave31）</b>：分片并发读的断点按 <code>组ID#s+分片下标</code> 分键保存，各分片游标/页码<b>互不覆盖</b>；中断重跑时已完成分片直接跳过、未完成分片按各自游标续传。恢复前校验分片边界（<code>start~end</code>）：源表数据变化导致值域漂移时该分片自动从头重读，绝不按旧游标漏数据。因其它分片失败而被中止的分片不会误标完成。</li>
+                    <li><b>JDBC 读侧流式取数（Wave31）</b>：默认 fetchSize 1000（JVM 参数 <code>-Ddbdatasync.jdbc.fetchSize</code> 可调，-1 关闭）。此前从不设置，MySQL/SQL Server 大表读取会整结果集逐行拉取；设置后驱动按批取行，内存与往返开销显著下降。MySQL 流式读取可显式设为 <code>-2147483648</code>。</li>
                     <li><b>写批不卡死、不静默丢</b>：写批子任务提交被拒或等待超时（默认 30 分钟）时，未完成子批计入失败明细，可在死信/失败队列重推；批次等待上限默认 60 分钟，超时按失败处理而非当成功。</li>
                 </ul>
                 <div class="tip"><b>调优建议：</b>大表优先调 <code>readNum</code>（默认 10000）与 <code>batchNum</code>（默认 1000），多表场景再调 <code>threadNum</code>（默认 5，建议不超过目标库连接池）；跨机房或需要保护生产库时开启「每秒行数 / 字节数」限速与低峰时间窗。未开启限速时系统不再做逐行字节估算，避免宽表场景的额外 CPU 开销。</div>
@@ -338,7 +340,7 @@
                     <tr><td>慢 SQL 采集</td><td>查看 avg / max / p95 / TopN 慢 SQL，运行时调整阈值、容量与采样率；慢 SQL 记录追加式落盘，重启后回放最近 N 条</td><td><code>/slow-sql/report</code>、<code>/slow-sql/config</code></td></tr>
                     <tr><td>逻辑导入导出</td><td>RFC4180 CSV 导出/导入（引号、转义、首行表头、列数校验）；按 mysql/oracle/pg 方言生成 INSERT 脚本</td><td><code>/logical-io/exportCsv</code>、<code>/logical-io/exportInsert</code>、<code>/logical-io/importCsv</code></td></tr>
                     <tr><td>切流编排</td><td>10 相位切流状态机、影子写配对与 flipSafe 判定、回滚预案查看与状态迁移</td><td><code>/cutover/create</code>、<code>/cutover/transition</code>、<code>/cutover/state</code>、<code>/cutover/rollbackPlan</code></td></tr>
-                    <tr><td>超大内容外置</td><td>超过 65535 字节的内容外置为 <code>DBDS-REF</code> 引用串，支持存/取/删；块存储可在内存与文件持久化之间切换（文件方式跨重启可恢复）</td><td><code>/content-offload/store</code>、<code>/content-offload/resolve</code>、<code>/content-offload/storeConfig</code></td></tr>
+                    <tr><td>超大内容外置</td><td>超过 65535 字节的内容外置为 <code>DBDS-REF</code> 引用串，支持存/取/删；块存储可在内存与文件持久化之间切换（文件方式跨重启可恢复）；Wave31 起文件存储的过期引用目录按保留期（默认 30 天，<code>dbdatasync.contentOffload.retentionDays</code>）每 6 小时自动回收，防止目录无限膨胀</td><td><code>/content-offload/store</code>、<code>/content-offload/resolve</code>、<code>/content-offload/storeConfig</code></td></tr>
                     <tr><td>DBLink 查询</td><td>探测源库 <code>all_db_links</code>，执行带 <code>@dblink</code> 的只读查询（SELECT/WITH 白名单、maxRows 限行、截断标记）</td><td><code>/dblink/links</code>、<code>/dblink/query</code></td></tr>
                 </table>
                 <div class="warn"><b>边界：</b>切流编排给出的是状态权威与回滚预案。Wave26 起 <code>STOP_INCREMENT</code> / <code>RESUME_INCREMENT</code> 已接线真实驱动启停（<code>MappingService.start/stop</code>，幂等），<code>VERIFY_TARGET</code> 支持传 <code>connectorId + targetSql</code> 在目标库真实执行校验 SQL；但<b>流量切换（FLIP_TRAFFIC_TO_TARGET）等外部编排动作仍需部署方注入处理器或人工执行，系统不会自动切换生产流量</b>；SQL 兼容扫描是离线静态扫描，不等于真库执行结果；DBLink 查询为只读白名单通道。</div>
@@ -564,6 +566,8 @@
                     <tr><td><code>dbdatasync.batch.awaitMinutes</code></td><td>60</td><td>全量批次等待上限；超时按失败处理并取消未完成任务，绝不把失败批次当成功清断点</td></tr>
                     <tr><td><code>dbdatasync.migration.tableAwaitHours</code></td><td>6</td><td>整库迁移表级并发等待上限；单表大表迁移可持续数小时</td></tr>
                     <tr><td><code>dbdatasync.write.awaitMinutes</code></td><td>30</td><td>写批子任务等待上限；超时把未完成子批计入失败明细，供重推</td></tr>
+                    <tr><td><code>dbdatasync.jdbc.fetchSize</code></td><td>1000</td><td>Wave31：JDBC 读语句默认 fetchSize；设为 -1 关闭，MySQL 流式可设 -2147483648（见 6.1）</td></tr>
+                    <tr><td><code>dbdatasync.contentOffload.retentionDays</code></td><td>30</td><td>Wave31：外置内容块（DBDS-REF 文件存储）保留天数；每 6 小时自动清理过期引用目录</td></tr>
                 </table>
                 <p>任务级参数 <code>readNum</code>（默认 10000，范围 100~100000）、<code>batchNum</code>（默认 1000，范围 1~10000）、<code>threadNum</code>（默认 5，范围 1~32）在【整库迁移 → 迁移策略】页的「大数据量性能参数」中配置，保存时夹紧到安全区间；Wave30 起 <code>threadNum</code> 真正控制表级并发与分片并发读上限，详见 6.1。</p>
 
@@ -700,8 +704,8 @@
                 <h3>当前文档基线</h3>
                 <table>
                     <tr><th>项</th><th>值</th></tr>
-                    <tr><td>适用版本</td><td>v2.2.0 及以上</td></tr>
-                    <tr><td>功能基线</td><td><b>Wave30</b>（2026-11-10）</td></tr>
+                    <tr><td>适用版本</td><td>v2.2.1 及以上</td></tr>
+                    <tr><td>功能基线</td><td><b>Wave31</b>（2026-11-10）</td></tr>
                     <tr><td>手册更新日期</td><td>2026-11-10</td></tr>
                     <tr><td>手册位置</td><td><code>public/manual/index.html</code>，菜单【系统管理 → 操作手册】，路径 <code>/manual</code></td></tr>
                     <tr><td>同步校验</td><td><code>python tools/check_manual_sync.py</code>（CI 的 docs-sync 任务自动执行）</td></tr>
@@ -720,6 +724,7 @@
                     <tr><td>Wave27</td><td>2026-11-10</td><td>死信手动重放闭环：【链路健康】页死信 / 待处理记录行内新增「重放」按钮，端点 <code>POST /link-health/deadLetters/replay</code>（operator 及以上），人工重放不受自动重放退避限制且互不干扰；真库全链路 E2E 接入构建：新增 <code>tools/e2e/run_real_pipeline_e2e.sh</code>（H2 vendor 无外部依赖实跑，外部连接串经 <code>E2E_PROPS</code> 按同流水线执行），CI 新增 <code>real-pipeline-e2e</code> job，<code>build.sh</code> 集成（<code>SKIP_E2E=1</code> 可跳过）</td></tr>
                     <tr><td>Wave28</td><td>2026-11-10</td><td>Trigger CDC 扩展到 MySQL / PostgreSQL / Oracle / SQL Server（分别定位为免 binlog / 免逻辑复制 / 免归档 / 免 CDC 组件的兜底捕获路径），方言接口新增分页 SQL 适配（LIMIT / FETCH FIRST / TOP）；监听类型新增 <code>trigger</code>（与原生日志 <code>log</code> 互斥切换）；H2 / 达梦 / SQLite 连接器补齐 trigger 监听接线（Wave26 遗留的生产不可达缺口）；7 库 SQL 生成单测 26 项全过，H2/SQLite 真库回归通过</td></tr>
                     <tr><td>Wave29</td><td>2026-11-10</td><td>离线交付包重打并补齐可运行性：启动脚本默认小堆（<code>DBS_HEAP_MIN/DBS_HEAP_MAX</code> 128m/768m 可覆盖）替代固定 3g / 3.8g、去掉强制 G1 16m region 与 verbose GC、<code>startup.sh</code> 先切到安装目录保证 H2 <code>./data</code> 落位、统一 <code>LOG_HOME</code> 与 Java 8 平台守卫；新增 <code>README-OFFLINE.md</code> 与 <code>tools/package_offline.py</code>（内嵌 JRE 8、SHA256、手册基线与关键类入包校验）；交付 <code>offline-win64</code> / <code>offline-portable</code> 两类离线包，并在全新目录用包内 JRE 实启验证登录页与内置手册；第 13.1 / 17 章同步</td></tr>
+                    <tr><td>Wave31</td><td>2026-11-10</td><td>Wave30 未完成项续做与真实验证：① 分片断点隔离——分片并发读断点按 <code>组ID#s+下标</code> 分键、各分片游标/页码互不覆盖，恢复时按分片边界校验值域漂移，已完成分片跳过、未完成分片续传（见 6.1）；② JDBC 读侧默认 fetchSize 1000（<code>dbdatasync.jdbc.fetchSize</code>），大表读取不再整结果集逐行拉取；③ 外置内容块（DBDS-REF 文件存储）按保留期（<code>dbdatasync.contentOffload.retentionDays</code>，默认 30 天）每 6 小时自动回收；④ 18686 运行服务以 Wave30/31 产物重启并实测登录页/手册/链路健康/整库迁移新增页全部 200。新增回归：分片断点 5 例、过期清理 4 例、fetchSize 3 例；第 6.1 / 9 / 13.1 章同步</td></tr>
                     <tr><td>Wave30</td><td>2026-11-10</td><td>迁移链路大数据量缺陷盘点与修复：「同步数据」开关真正生效（关闭后仅结构迁移、不灌数据）、<code>threadNum</code> 接入表级并发与分片读上限并在【整库迁移 → 迁移策略】页新增 <code>readNum/batchNum/threadNum</code> 可调项；写批 latch 拒绝 / 超时兜底与结果并发合并、批量异常上抛并保留断点、游标位点结构化编码 <code>DBDS-CURSOR-V2</code>、分片 NULL 行与超大值域不漏行、整库迁移异常收尾与进度计数不再被覆盖；对账报告改流式分页导出（取消 200 条 / 5000 行截断）、反向扫描跳过可见化与删行翻页回退、切流改为「动作成功才推进相位」；Oracle BLOB/CLOB 完整读取、DBLink 连接归还、慢 SQL 有界回放、外置块 refId 改 UUID、明细队列满改限时背压；新增三项 JVM 等待参数；第 6.1 / 7 / 12.6 / 13.1 章同步</td></tr>
                 </table>
                 <h3>维护约定（强制）</h3>
@@ -729,7 +734,7 @@
                     <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
                     <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
                 </ol>
-                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.2.0+，文档基线 Wave30，2026-11-10 更新）—</p>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.2.1+，文档基线 Wave31，2026-11-10 更新）—</p>
             </section>
 
         </div>

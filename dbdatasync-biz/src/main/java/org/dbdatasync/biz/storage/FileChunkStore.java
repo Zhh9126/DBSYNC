@@ -210,4 +210,48 @@ public class FileChunkStore implements ChunkStore {
             }
         }
     }
+    /**
+     * Wave31：清理最后修改时间早于给定时间戳的引用目录（过期外置内容回收）。
+     *
+     * <p>引用目录的最后修改时间取「目录本身与其中最新 .chunk 文件」的最大 mtime；
+     * 早于 cutoff 的目录整体删除。仅遍历 rootDir 一级子目录，不递归其它内容。</p>
+     *
+     * @param cutoffMillis 截止时间戳（早于该值的引用被清理），通常为 now - 保留期
+     * @return 实际删除的引用目录数
+     */
+    public int purgeRefsOlderThan(long cutoffMillis) {
+        File[] refs = rootDir.listFiles(File::isDirectory);
+        if (refs == null) {
+            return 0;
+        }
+        int purged = 0;
+        for (File dir : refs) {
+            long lastModified = dir.lastModified();
+            File[] files = dir.listFiles(f -> f.isFile() && f.getName().endsWith(".chunk"));
+            if (files != null) {
+                for (File f : files) {
+                    lastModified = Math.max(lastModified, f.lastModified());
+                }
+            }
+            if (lastModified < cutoffMillis) {
+                try {
+                    delete(dir.getName());
+                    purged++;
+                } catch (Exception ignore) {
+                    // 单个引用清理失败不影响其余引用，留待下轮
+                }
+            }
+        }
+        return purged;
+    }
+
+    /**
+     * 当前根目录下的引用目录数（用于运维观测与测试）。
+     *
+     * @return 引用目录数；根目录不存在时返回 0
+     */
+    public int refDirCount() {
+        File[] refs = rootDir.listFiles(File::isDirectory);
+        return refs == null ? 0 : refs.length;
+    }
 }

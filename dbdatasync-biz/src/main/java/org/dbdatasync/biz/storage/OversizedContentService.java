@@ -1,5 +1,9 @@
 package org.dbdatasync.biz.storage;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,6 +24,9 @@ import org.springframework.stereotype.Component;
  */
 @Component("oversizedContentService")
 public class OversizedContentService {
+
+    private static final Logger logger = LoggerFactory.getLogger(OversizedContentService.class);
+
 
     /** 默认内联阈值：与 DBDataSync_task_detail.DATA 上限一致 */
     private volatile int maxInlineBytes = OversizedContentOffloader.INLINE_THRESHOLD_DEFAULT;
@@ -109,5 +116,41 @@ public class OversizedContentService {
     /** 当前外置块引用数（ChunkStore 接口无统计能力，返回 -1 表示未统计） */
     public int refCount() {
         return -1;
+    }
+    /**
+     * Wave31：清理过期外置内容块。
+     *
+     * <p>仅文件存储形态有持久块可清；内存存储随进程消亡，返回 0。
+     * 保留期经系统属性 {@code dbdatasync.contentOffload.retentionDays} 配置（默认 30 天）；
+     * 引用目录的最后修改时间早于保留期的整体删除，防止长期运行下外置内容目录无限膨胀。</p>
+     *
+     * @return 本轮删除的引用目录数；当前为内存存储时返回 0
+     */
+    public int purgeAgedBlocks() {
+        ChunkStore store = this.chunkStore;
+        if (!(store instanceof FileChunkStore)) {
+            return 0;
+        }
+        long retentionMillis = TimeUnit.DAYS.toMillis(
+                Long.getLong("dbdatasync.contentOffload.retentionDays", 30L));
+        long cutoff = System.currentTimeMillis() - retentionMillis;
+        int purged = ((FileChunkStore) store).purgeRefsOlderThan(cutoff);
+        if (purged > 0) {
+            logger.info("外置内容过期清理完成: 删除{}个引用目录, 保留期{}天", purged,
+                    TimeUnit.MILLISECONDS.toDays(retentionMillis));
+        }
+        return purged;
+    }
+
+    /**
+     * 每 6 小时执行一次过期外置内容清理（启动后延迟 10 分钟，错开启动高峰）。
+     */
+    @Scheduled(initialDelay = 10 * 60 * 1000L, fixedDelay = 6 * 60 * 60 * 1000L)
+    public void scheduledPurgeAgedBlocks() {
+        try {
+            purgeAgedBlocks();
+        } catch (Exception e) {
+            logger.warn("外置内容过期清理异常: {}", e.getMessage());
+        }
     }
 }

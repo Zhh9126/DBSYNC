@@ -11,17 +11,22 @@ import org.dbdatasync.common.util.SqlIdentifierValidator;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.common.util.TaskSplitUtil;
 import org.dbdatasync.connector.base.ConnectorFactory;
+import org.dbdatasync.parser.MetaProfile;
 import org.dbdatasync.parser.ParserComponent;
 import org.dbdatasync.parser.ProfileComponent;
 import org.dbdatasync.parser.event.FullRefreshEvent;
 import org.dbdatasync.parser.model.FieldMapping;
 import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.Meta;
 import org.dbdatasync.parser.model.Picker;
 import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.model.TableSyncProgress;
 import org.dbdatasync.parser.model.Task;
 import org.dbdatasync.parser.strategy.FlushStrategy;
 import org.dbdatasync.parser.util.ConnectorInstanceUtil;
 import org.dbdatasync.parser.util.ConvertUtil;
+import org.dbdatasync.parser.util.FullTableProgressUtil;
+import org.dbdatasync.parser.util.MetaLockUtil;
 import org.dbdatasync.parser.util.MigrationRateLimiter;
 import org.dbdatasync.parser.util.PickerUtil;
 import org.dbdatasync.plugin.PluginFactory;
@@ -95,6 +100,9 @@ public class ParserComponentImpl implements ParserComponent {
 
     @Resource
     private ProfileComponent profileComponent;
+
+    @Resource
+    private MetaProfile metaProfile;
 
     @Resource
     private ApplicationContext applicationContext;
@@ -328,6 +336,10 @@ public class ParserComponentImpl implements ParserComponent {
     /**
      * 并发执行全量分片读：每分片一个独立游标循环，共享父 task 启停信号。
      * 任一子分片失败即取消中止父任务并上抛首个异常，其余分片尽力退出。
+     *
+     * <p>Wave31 分片断点隔离：进度键从共享的 {@code 组ID} 改为 {@code 组ID#s+下标}，
+     * 各分片的游标/页码互不覆盖；恢复时按分片边界（bounds）校验值域未漂移后分别续传，
+     * 已完成分片直接跳过。</p>
      */
     private void runSlices(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
                            List<FieldMapping> fieldMappings, String splitKey, long[][] intervals, Executor executor,
@@ -342,15 +354,30 @@ public class ParserComponentImpl implements ParserComponent {
             t.setDaemon(true);
             return t;
         });
+        // Wave31：恢复前先把本次切分的边界写入各分片进度（值域漂移的分片重置为从头读）
+        prepareSliceProgress(task, group, intervals);
         for (int i = 0; i < count; i++) {
             final long[] interval = intervals[i];
             final boolean firstSlice = i == 0;
+            final String sliceKey = sliceProgressKey(group.getId(), i);
+            // 已完成且边界未漂移的分片直接跳过（断点续传）
+            if (FullTableProgressUtil.isDone(metaSnapshot(task.getId()), sliceKey)) {
+                logger.info("分片已完成，跳过:{} {} 区间[{}~{})", task.getId(), sliceKey, interval[0], interval[1]);
+                latch.countDown();
+                continue;
+            }
             pool.execute(() -> {
-                // 每个分片独立子任务：独立 cursors/pageIndex，共享父任务启停
-                Task sliceTask = task.createTableTask(group.getId());
+                // 每个分片独立子任务：独立 tableGroupId（进度键）+ cursors/pageIndex，共享父任务启停
+                Task sliceTask = task.createTableTask(sliceKey);
+                restoreSliceProgress(sliceTask, task.getId(), sliceKey, interval);
                 try {
                     executeSlice(sliceTask, mapping, group, command, fieldMappings, splitKey, interval[0], interval[1],
                             firstSlice, executor, limiter);
+                    // 仅在任务未被中止时标记完成：因其它分片失败而提前退出的分片，
+                    // 重跑时必须重读（宁可重复读不可误跳过）
+                    if (task.isRunning()) {
+                        markSliceDone(task.getId(), sliceKey, interval);
+                    }
                 } catch (Throwable e) {
                     failure.compareAndSet(null, e);
                     task.stop();
@@ -374,6 +401,119 @@ public class ParserComponentImpl implements ParserComponent {
         long costMs = (System.nanoTime() - t0) / 1_000_000L;
         long avgMs = count > 0 ? costMs / count : 0;
         logger.info("分片并发读完成:{} 共{}个分片, 耗时{}ms / 分片数{} / 平均{}ms每片", task.getId(), count, costMs, count, avgMs);
+    }
+
+    /**
+     * 分片进度键：{@code 组ID#s+分片下标}。与组级进度同存于 Meta.snapshot.tableProgress。
+     */
+    static String sliceProgressKey(String tableGroupId, int sliceIndex) {
+        return tableGroupId + "#s" + sliceIndex;
+    }
+
+    /**
+     * 分片边界串：{@code start~end}，用于恢复断点时校验值域未漂移。
+     */
+    static String intervalBounds(long start, long end) {
+        return start + "~" + end;
+    }
+
+    private Map<String, String> metaSnapshot(String taskId) {
+        Meta meta = metaProfile.getMeta(taskId);
+        return meta == null ? null : meta.getSnapshot();
+    }
+
+    /**
+     * 恢复单分片断点：仅当已有进度未完成、且边界与本次切分一致时才复用游标/页码；
+     * 边界漂移（源表 MIN/MAX 变化导致切分变化）一律从头读，避免按旧游标漏数据。
+     */
+    private void restoreSliceProgress(Task sliceTask, String rootTaskId, String sliceKey, long[] interval) {
+        Map<String, String> snapshot = metaSnapshot(rootTaskId);
+        if (snapshot == null) {
+            return;
+        }
+        TableSyncProgress progress = FullTableProgressUtil.getOrInit(snapshot, sliceKey);
+        if (progress.isDone()) {
+            return;
+        }
+        boolean boundsMatched = intervalBounds(interval[0], interval[1]).equals(progress.getBounds());
+        if (!boundsMatched) {
+            return;
+        }
+        if (StringUtil.isNotBlank(progress.getCursor())) {
+            sliceTask.setCursors(PrimaryKeyUtil.getLastCursors(progress.getCursor()));
+        }
+        if (progress.getPageIndex() > 1) {
+            sliceTask.setPageIndex(progress.getPageIndex());
+        }
+    }
+
+    /**
+     * 分片启动前统一准备进度：为每个分片写入/修正 bounds（值域漂移的旧进度重置）。
+     * 无 Meta（如纯内存测试环境）时静默跳过。
+     */
+    private void prepareSliceProgress(Task task, TableGroup group, long[][] intervals) {
+        Map<String, String> snapshot = metaSnapshot(task.getId());
+        if (snapshot == null) {
+            return;
+        }
+        boolean changed = false;
+        for (int i = 0; i < intervals.length; i++) {
+            String sliceKey = sliceProgressKey(group.getId(), i);
+            String bounds = intervalBounds(intervals[i][0], intervals[i][1]);
+            TableSyncProgress progress = FullTableProgressUtil.getOrInit(snapshot, sliceKey);
+            if (!bounds.equals(progress.getBounds())) {
+                TableSyncProgress fresh = new TableSyncProgress();
+                fresh.setPageIndex(1);
+                fresh.setCursor("");
+                fresh.setDone(false);
+                fresh.setBounds(bounds);
+                FullTableProgressUtil.put(snapshot, sliceKey, fresh);
+                changed = true;
+            }
+        }
+        if (changed) {
+            persistMetaSnapshot(task.getId());
+        }
+    }
+
+    /**
+     * 分片成功完成：标记该分片 done=true（保留 bounds），供续传跳过。
+     */
+    private void markSliceDone(String rootTaskId, String sliceKey, long[] interval) {
+        Map<String, String> snapshot = metaSnapshot(rootTaskId);
+        if (snapshot == null) {
+            return;
+        }
+        synchronized (MetaLockUtil.lock(rootTaskId)) {
+            try {
+                Meta meta = metaProfile.getMeta(rootTaskId);
+                if (meta == null) {
+                    return;
+                }
+                TableSyncProgress progress = new TableSyncProgress();
+                progress.setPageIndex(1);
+                progress.setCursor("");
+                progress.setDone(true);
+                progress.setBounds(intervalBounds(interval[0], interval[1]));
+                FullTableProgressUtil.put(meta.getSnapshot(), sliceKey, progress);
+                profileComponent.editConfigModel(meta);
+            } catch (Exception e) {
+                logger.warn("分片完成标记写入失败（不影响数据，重跑时该分片会重读）:{} {}", sliceKey, e.getMessage());
+            }
+        }
+    }
+
+    private void persistMetaSnapshot(String rootTaskId) {
+        try {
+            Meta meta = metaProfile.getMeta(rootTaskId);
+            if (meta != null) {
+                synchronized (MetaLockUtil.lock(rootTaskId)) {
+                    profileComponent.editConfigModel(meta);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("分片断点初始化写入失败（不影响执行）:{} {}", rootTaskId, e.getMessage());
+        }
     }
 
     /**
