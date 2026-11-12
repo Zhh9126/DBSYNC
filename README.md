@@ -1,6 +1,6 @@
 # DBDataSync 产品白皮书
 
-> 版本：2.x ｜ 文档性质：产品与技术白皮书
+> 版本：2.1.4 ｜ 内置手册基线 Wave31 ｜ 更新日期：2026-11-12 ｜ 文档性质：产品与技术白皮书
 
 ---
 
@@ -10,7 +10,7 @@
 
 DBDataSync（简称 dbs）是一款开源的**通用数据同步中间件**，以「组合驱动、任意搭配」为设计理念，支持关系型数据库、非关系型数据库、消息队列、文件、HTTP 等异构数据源之间的双向数据同步，覆盖**全量迁移、增量实时同步（CDC）、整库迁移、数据对比、数据血缘、性能监控、告警通知**等企业级数据集成场景。
 
-产品坚持开箱即用：内置 H2 持久化、Web 可视化控制台、无需额外部署中间件，下载解压即可完成第一套同步任务的搭建。
+产品坚持开箱即用：**默认内置 SQLite 元库**（`data/DBDataSync.db`，WAL 模式）+ Web 可视化控制台 + 内置离线操作手册，无需额外部署中间件；既可解压 ZIP 包直接运行，也可用离线 Docker 镜像一条 `docker run` 启动（镜像自带 JRE 8，目标机无需安装 Java）。
 
 ### 1.2 核心价值
 
@@ -19,6 +19,8 @@ DBDataSync（简称 dbs）是一款开源的**通用数据同步中间件**，�
 - **实时可控**：实时监控同步运行状态、TPS、统计结果，失败数据可查询、可重试、可订正。
 - **强一致与高吞吐兼顾**：提供同步（SYNC，单线程串行，强一致）与异步（ASYNC，多线程并发写，高吞吐）两种执行模式，按业务场景自由切换。
 - **可扩展**：SPI 连接器机制 + 转换插件热加载，业务定制零门槛。
+- **离线自足**：ZIP 包与 Docker 镜像均自带全部依赖、JDBC 驱动、前端资源与操作手册；完全断网可运行（已在 `--network none` 容器实测）。
+- **记录可追溯**：成功/全量事件明细默认落库，慢 SQL、内容外置块、结构变更、切流快照、链路健康快照统一写入运行态账本，重启与升级后仍可查。
 
 ---
 
@@ -41,7 +43,10 @@ DBDataSync（简称 dbs）是一款开源的**通用数据同步中间件**，�
 | 定时调度 | 内置任务调度器，cron / interval 定时策略，支持时间占位符（如 `$timestamp_begin/end$`） |
 | OpenAPI | 统一开放网关，API 密钥 + JWT + IP 白名单 + 时间戳防重放 + RSA 加解密 |
 | 配置导入导出 | 全量配置打包导出 / 导入热刷新，环境迁移便捷 |
-| 开箱即用 | 内置 H2 数据库，下载解压即用，默认端口 18686 |
+| 迁移评估工具组 | SQL 兼容扫描（含改写草稿）、DDL 变更辅助（复合/分区子句识别）、整库迁移性能建议与成本统计、慢 SQL 采集、逻辑导入导出、DBLink 查询 |
+| 切换与治理 | 切流编排（真实动作成功才推进相位）、链路健康、结构变更历史、超大内容外置、告警通知，均可单独使用并在平台留痕 |
+| 运行态统一账本 | `DBDataSync_runtime_ledger` 汇总慢 SQL / 外置块 / 结构变更 / 切流 / 链路健康快照，配合事件明细分表，重启不丢 |
+| 开箱即用 | 默认内置 SQLite 元库（可回退 H2 / 切换 MySQL），ZIP 解压即用或离线 Docker 镜像一条命令启动，默认端口 18686 |
 
 ---
 
@@ -70,7 +75,7 @@ DBDataSync（简称 dbs）是一款开源的**通用数据同步中间件**，�
 │              连接器层（connector，SPI 机制）                   │
 │   MySQL Oracle SQLServer PG DM Kingbase OceanBase TiDB ...  │
 ├─────────────────────────────────────────────────────────────┤
-│                存储层（storage / sdk，内置 H2）                │
+│              存储层（storage / sdk，默认 SQLite）              │
 │   config │ user │ connector │ table_group │ meta │ log │    │
 │   task │ task_detail │ lineage │ 全部 DBDataSync_ 前缀        │
 └─────────────────────────────────────────────────────────────┘
@@ -289,7 +294,7 @@ DBDataSync（简称 dbs）是一款开源的**通用数据同步中间件**，�
 |------|------|
 | 后端 | Spring Boot 2.5 + Maven 多模块工程 |
 | 前端 | Thymeleaf 服务端渲染 + Tailwind CSS + FontAwesome |
-| 存储 | 内置 H2 数据库（文件模式，`DBDataSync_` 前缀表，开箱即用） |
+| 存储 | 默认内置 SQLite（`./data/DBDataSync.db`，WAL + busy_timeout，`DBDataSync_` 前缀表）；可回退 H2 或切换 MySQL，见 `conf/application.properties` |
 | 调度 | 内置任务调度器（`ManagerFactory` / `AbstractPuller`），cron / interval 策略 |
 | 引擎 | FullPuller（全量：分页游标 + 断点续传 + 表级并发）；IncrementPuller（增量：LOG 解析 / TIMING 轮询 + 自动恢复重试）；FullIncrementPuller（全量+增量：位点捕获无缝衔接） |
 | 并发 | 执行模式双轨：SYNC 串行（强一致）/ ASYNC 并发写（高吞吐）；全量表级并发控制（threadNum） |
@@ -308,7 +313,8 @@ DBDataSync
 ├── dbdatasync-parser       # SQL/配置解析、Picker 字段选择
 ├── dbdatasync-plugin       # 插件机制（自定义同步转换）
 ├── dbdatasync-sdk          # SDK：模型定义、存储接口、SPI 扩展点
-└── dbdatasync-storage      # 存储层：内置 H2 持久化
+├── dbdatasync-storage      # 存储层：SQLite（默认）/ H2 / MySQL 元库适配
+└── docker                  # 离线 Docker 镜像构建资产（基座 + 增量应用层 + 容器启动脚本）
 ```
 
 ---
@@ -317,83 +323,123 @@ DBDataSync
 
 ### 7.1 环境要求
 
-- JDK 1.8+
-- 内存建议 2GB+（大型同步任务建议 4GB+）
-- 浏览器：Chrome / Edge / Firefox 现代版本
+| 部署方式 | 目标机要求 |
+|---|---|
+| **方式一：离线 Docker 镜像（推荐）** | Docker 20.10+，2GB+ 内存；**无需 Java、无需公网** |
+| 方式二：ZIP 发行包 | **JRE/JDK 8 是硬要求**（`-Djava.ext.dirs` 在 JDK 9+ 已移除），2GB+ 内存 |
+| 方式三：源码构建 | JDK 8 + Maven 3.6+，本地 Maven 仓库已备齐依赖（可离线构建） |
 
-### 7.2 方式一：源码打 ZIP 包（推荐，离线可重复）
+- 端口：默认 `18686`（HTTP，SSL 默认关闭）。启动前 `unset SERVER__PORT SERVER_PORT`，避免环境变量被 Spring Boot 识别为 `server.port` 而改绑随机端口。
+- 浏览器：Chrome / Edge / Firefox 现代版本。
+- 默认账号 `admin / admin`，**首次登录请立即在【系统管理 → 用户管理】修改密码**。
 
-仓库内已内置一键打包脚本与 Maven Assembly 描述符（`dbdatasync-web/src/main/assembly/assembly-zip.xml`），产物为**可直接解压运行的 ZIP 部署包**：
+### 7.2 方式一：离线 Docker 镜像（推荐）
+
+镜像内置 JRE 8、全部 Java 依赖、各数据库 JDBC 驱动、前端静态资源与内置离线操作手册；已在 `--network none` 完全断网容器中验证启动与 Web 全链路。
+
+**① 获取镜像**
+
+```bash
+# A. 可访问镜像仓库
+docker pull ghcr.io/zhh9126/dbdatasync:2.1.4-sqlite-20261112   # 也可用 :latest
+
+# B. 完全离线：把离线包拷到目标机后加载
+docker load -i DBDataSync-2.1.4-sqlite-docker-offline.tar.gz
+```
+
+**② 启动（务必挂载数据卷）**
+
+```bash
+docker run -d \
+  --name dbdatasync \
+  --restart=unless-stopped \
+  -p 18686:18686 \
+  -e TZ=Asia/Shanghai \
+  -e DBS_HEAP_MAX=1024m \
+  -v dbdatasync-data:/app/DBDataSync/data \
+  -v dbdatasync-conf:/app/DBDataSync/conf \
+  -v dbdatasync-logs:/app/DBDataSync/logs \
+  -v dbdatasync-plugins:/app/DBDataSync/plugins \
+  ghcr.io/zhh9126/dbdatasync:2.1.4-sqlite-20261112
+```
+
+> **数据安全（重要）**：镜像声明了 `data` / `conf` / `logs` / `plugins` 四个 VOLUME。不加 `-v` 时 Docker 会创建匿名卷，`docker rm` 后重新 `docker run` 数据会丢；生产环境必须使用命名卷或宿主机目录。`conf` 被空目录覆盖时，启动脚本会自动从镜像内 `/app/default-conf/` 恢复默认配置。
+> 镜像是干净发行版（空元库），**不含任何现网数据**；旧环境数据靠挂载原 `data/` 卷或执行 H2→SQLite 迁移导入。
+
+可用环境变量：`DBS_HEAP_MIN`（默认 256m）、`DBS_HEAP_MAX`（默认 1024m）、`DBS_DIRECT_MEM`（默认 256m）、`DBS_JAVA_OPTS`（追加 JVM 参数）。
+
+**③ 验证**
+
+```bash
+docker logs -f dbdatasync | grep -E 'SqliteStorageService init|sqlite storage schema ready|runtime ledger target|Tomcat started'
+curl -I http://127.0.0.1:18686/login.html      # 期望 200
+```
+
+浏览器访问 `http://<服务器IP>:18686`；内置操作手册 `http://<服务器IP>:18686/manual`（菜单【系统管理 → 操作手册】），离线可查，含第 19 章全功能逐步实操与 19.11 SQLite 元库迁移。
+
+**④ 旧版 H2 数据迁移与备份**
+
+```bash
+# 停服后，把旧 data/ 挂到容器 /app/DBDataSync/data，再执行（镜像内已预编译迁移器，无需 javac）
+docker exec -it dbdatasync bash /app/DBDataSync/tools/h2_to_sqlite.sh
+```
+
+备份必须**停服后**进行；SQLite WAL 模式下 `.db` / `.db-wal` / `.db-shm` 三文件与 `conf/application.properties` 要一起备份，不能只拷 `.db`。详见手册 19.11。
+
+**⑤ 镜像构建（可复现）**
+
+```bash
+bash docker/build-image.sh
+```
+
+采用「基座 + 增量应用层」：先构建 `dbdatasync-base:8`（本地 slim 基础镜像 + 随包 JRE 8），再 `FROM dbdatasync-base:8` 只 `COPY` 应用层，全程零联网；后续升级只重建应用薄层。构建资产见 `docker/`（Dockerfile.base / Dockerfile.app / startup-docker.sh / build-image.sh）。
+
+### 7.3 方式二：ZIP 发行包（解压即用）
+
+仓库内已内置一键打包脚本与 Maven Assembly 描述符（`dbdatasync-web/src/main/assembly/assembly-zip.xml`）：
 
 ```bash
 # Windows：仓库根目录执行（需先装好 JDK 1.8+ 与 Maven 3.6+ 并配好 PATH）
 build.cmd
-
 # Linux / macOS
 ./build.sh
 ```
 
 执行过程：
 
-1. `mvn clean package -Dmaven.test.skip=true`（全模块编译打包，约 3–6 分钟）；
+1. `./build.sh` 先跑内置手册同步校验 `tools/check_manual_sync.py`，再全模块编译打包（默认执行单测与真库全链路 E2E，约 3–6 分钟）；
 2. Web 模块 Assembly 自动打出部署包并移动到仓库根目录：**`DBDataSync-2.1.4-bin.zip`**；
-3. ZIP 目录结构（解压即用）：
+3. 目录结构（解压即用）：
 
 ```text
-DBDataSync-2.1.4-bin/
+DBDataSync-2.1.4/
 ├── bin/          # startup.bat（Windows）/ startup.sh（Linux）/ stop.sh / startup-docker.sh
 ├── lib/          # 全部依赖 jar（含各数据库 JDBC 驱动，现场无需联网）
-├── conf/         # application.properties（可改端口/存储配置）、dbdatasync.p12
-├── plugins/      # 演示转换插件
-└── data/         # 首次启动自动创建（内置 H2）
+├── conf/         # application.properties（默认 type=sqlite）、dbdatasync.p12
+├── plugins/      # 转换插件目录
+├── jre8/         # 可选：内嵌 JRE 8（Windows offline 包自带；通用包需自备）
+├── data/         # 首次启动自动创建：SQLite 元库 DBDataSync.db（含 -wal/-shm）
+└── README-OFFLINE.md
 ```
 
-> 手动等价命令（不用脚本时）：
-> ```bash
-> mvn clean package -Dmaven.test.skip=true
-> # 产物位于 dbdatasync-web/target/DBDataSync-{version}-bin.zip
-> ```
+4. 启动与访问：
+   - Windows：执行 `bin\startup.bat`（自动识别同级 `jre8`）；
+   - Linux：`bin/startup.sh` 启动、`bin/stop.sh` 停止；
+   - 浏览器访问 `http://127.0.0.1:18686`，默认账号 `admin / admin`；日志出现 `Tomcat started on port(s): 18686` 即成功；
+   - 从旧版 H2 升级：停服后执行源码仓库的 `bash tools/h2_to_sqlite.sh <安装目录>`，详见手册 19.11。
 
-> 也可将代码导入 IDE 直接开发调试；如需放入 `bin/` 同级的自检 `jre8`，把 JDK1.8 的 JRE 目录拷贝为 `DBDataSync-2.1.4-bin/jre8` 即可，`startup.bat` 会自动识别（成功打印 `Using embedded JRE8`）。
-
-4. 解压后启动与应用访问：
-   - Windows：双击/执行 `bin\startup.bat`（控制台显示启动日志；`bin\stop` 时直接关窗口或结束 java 进程）；
-   - Linux：执行 `bin/startup.sh`（后台启动，`bin/stop.sh` 停止）；
-   - 浏览器访问：http://127.0.0.1:18686 ，默认账号密码 **admin / admin**。
-
-### 7.3 方式二：Docker
-
-```shell
-docker run -d \
-  --name=DBDataSync \
-  --restart=unless-stopped \
-  -p 18686:18686 \
-  -e TZ="Asia/Shanghai" \
-  -m 5g \
-  --memory-swap=5g \
-  -v /opt/DBDataSync/data:/app/DBDataSync/data \
-  -v /opt/DBDataSync/logs:/app/DBDataSync/logs \
-  -v /opt/DBDataSync/plugins:/app/DBDataSync/plugins \
-  <镜像仓库地址>/DBDataSync:latest
-```
+> 目标机没有 Java 8 时，把对应平台 JRE 8 解压为 `DBDataSync-2.1.4/jre8/` 即可。更省事的做法是直接用 §7.2 的 Docker 镜像（自带 JRE 8）。
 
 ### 7.4 方式三：源码开发调试
 
 ```bash
-# 环境与一键编译打包见 §7.2；此处为源码开发调试步骤
-$ git clone https://github.com/Zhh9126/DBSYNC.git
-$ cd DBSYNC
-$ ./build.sh                    # 产 DBDataSync-{version}-bin.zip
+git clone https://github.com/Zhh9126/DBSYNC.git
+cd DBSYNC
+./build.sh                                  # 产出 DBDataSync-{version}-bin.zip
+mvn -f dbdatasync-web/pom.xml spring-boot:run
 ```
 
-开发环境源码启动：
-
-```bash
-$ cd DBDataSync/dbdatasync-web
-$ mvn spring-boot:run
-```
-
-> 提示：修改 `dbdatasync-*` 子模块源码后，需先 `mvn install`（建议 `clean install`）更新本地仓库再启动 Web 模块，避免加载旧 class。
+> 修改 `dbdatasync-*` 子模块源码后需先 `mvn install`（建议 `clean install`）更新本地仓库再启动 Web 模块，避免加载旧 class。交付环境请使用 ZIP 包或 Docker 镜像，不要在现场联网执行 Maven 构建。
 
 ---
 
@@ -412,9 +458,10 @@ $ mvn spring-boot:run
 
 ## 9. 版本升级说明
 
-- 旧版本（dbsyncer）升级到 DBDataSync 后，启动时自动将内置 H2 数据库中 `dbsyncer_` 前缀的系统表数据迁移至新前缀，历史同步配置、任务与日志无缝保留。
+- 旧版本（dbsyncer）升级到 DBDataSync 后，启动时自动将元库中 `dbsyncer_` 前缀的系统表数据迁移至新前缀，历史同步配置、任务与日志无缝保留。
+- **2026-11-12 起元库默认由 H2 切换为 SQLite**：旧 H2 数据不会自动进入 SQLite，必须**停服后**执行一次性迁移（`bash tools/h2_to_sqlite.sh`，容器版见 §7.2.4），否则新库为空；迁移逐表行数对账，不一致即报错。详见手册 19.11。
 - 项目代码、接口、包名已统一由 `dbsyncer` 重构为 `dbdatasync`，请勿混用新旧依赖。
-- 升级前请备份 `data` 目录（H2 数据文件），并核对系统配置（含安全密钥）。
+- 升级前备份 `data` 目录（SQLite 需 `.db` / `.db-wal` / `.db-shm` 三文件齐全；H2 为 `DBDataSync.mv.db`）与 `conf/application.properties`，并核对系统配置（含安全密钥）。
 
 ---
 
@@ -461,9 +508,10 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 ## 13. 离线部署合规说明
 
 - 前端静态资源全部本地打包于 `dbdatasync-web`（`/js/...`、`/img/...`、内置 thymeleaf 模板），**无 CDN/公网字体/公网 JS 依赖**，纯内网可运行（已做无外链扫描核验）。
-- 持久化使用内嵌 H2（`data` 目录），无外部中间件依赖；升级/迁移前备份 `data` 目录即可。
+- 持久化默认使用内嵌 SQLite（`data/DBDataSync.db`，WAL 模式），无外部中间件依赖；升级/迁移前**停服后**备份 `data/` 目录（含 `-wal` / `-shm`）。
 - 达梦/金仓/Oracle 等数据库 JDBC 驱动随连接器模块随包分发（如 `kingbase8-8.6.1`），现场无需联网拉取依赖。
-- 启动脚本 `start_app.cmd`（Windows）以本地 Maven + JDK8 运行；交付环境建议预置离线 Maven 私服或预先 `mvn install` 产出部署物。
+- 离线 Docker 镜像把 JRE 8、全部运行依赖与内置手册一并打包，`docker load` 后 `docker run` 即可运行；已在 `--network none` 断网容器验证启动与 Web 全链路。
+- 源码开发调试才需要本地 Maven + JDK 8；交付环境请用 ZIP 包或 Docker 镜像，不要在现场联网执行 Maven 构建。
 
 ## 14. 2026-10-18 更新摘要（本阶段交付）
 
@@ -863,7 +911,19 @@ JVM 参数 `-Ddbdatasync.logminer.rowdebug=true` 开启行级诊断日志（默�
 
 ---
 
-## 46. 许可声明
+## 46. 2026-11-12 更新摘要（SQLite 元库 + 全功能真机留痕 + 离线 Docker 镜像）
+
+- **元库默认切换 SQLite**：`dbdatasync.storage.type=sqlite`，数据落 `data/DBDataSync.db`（WAL + busy_timeout）；新增 `SqliteStorageService` 处理 SQLite 方言，并修复 `SQLiteConnector.getStorageService()` 缺失导致的「配置写了 sqlite、实际仍静默回落 H2」。H2 / MySQL 仍可作为可选后端；一次性迁移工具 `tools/h2_to_sqlite.sh` 实测 53 表 / 2402 行 / 0 mismatch。
+- **运行态统一账本**：新增 `DBDataSync_runtime_ledger`，把慢 SQL、超大内容外置块、结构变更、切流快照、链路健康快照统一落库；成功/全量事件明细开关默认开启；列表增加加载中/失败占位，消除「记录好像丢了」的空白页。
+- **真缺陷修复**：`/monitor/page/retry` 无参 500、`schema-history` 恒 0 与 DDL 目标库前缀错误、MongoDB 端到端 0 行（无过滤条件回退分页读）、Redis 不支持全量读取（SCAN + `redis_kv`）；Oracle 物理备库 `ORA-01033` 为环境限制，如实引导只读源或换源。
+- **全功能逐步实操留痕**：内置手册新增第 19 章（19.1–19.10）与 19.11「SQLite 元库与 H2 数据迁移」，覆盖数据同步、整库迁移、数据对比、数据血缘、SQL 兼容扫描、慢 SQL、逻辑导入导出、切流编排、超大内容外置、DBLink、链路健康、结构变更、告警通知的单独使用与平台记录；文档基线 Wave31，门禁校验 47/47 配置字段、22/22 菜单。
+- **离线 Docker 镜像**：`docker/` 新增基座 + 增量应用层构建资产；镜像 `ghcr.io/zhh9126/dbdatasync:2.1.4-sqlite-20261112`（同时 `:latest`）与可 `docker load` 的离线包。修复 RPM 版 JRE 8 的 `tzdb.dat` / `cacerts` 符号链接悬空、原 `startup-docker.sh` 后台启动导致容器立即退出两个打包缺陷。
+- **验证**：`--network none` 容器 14s 启动；登录后 `/manual`（含 19.11）、`/connector/list`、`POST /runtime-ledger/summary|list`、`POST /schema-history/list`、无参 `/monitor/page/retry` 全 200；SQLite 与 WAL 落盘、重启数据保留、空 `conf` 卷自动恢复；离线包 `gzip -t` 与 `docker load` 回拉通过；GHCR 双 tag manifest 校验通过。
+- **诚实边界**：镜像为干净发行版（空元库，不含现网数据）；Oracle 物理备库不可写需 DBA 侧开放只读或换源；异构整库迁移勾「复制表结构」的嵌套 DDL 仍属已知边界，详见手册 19.10。
+
+---
+
+## 47. 许可声明
 
 本项目为开源软件，遵循开源许可协议发布。坚持开源，让每一个用户都能轻松完成数据同步。
 
