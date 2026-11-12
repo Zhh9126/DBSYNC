@@ -3,7 +3,7 @@
 conf/*
 data
 lib
-plugins
+/plugins
 *.iml
 out
 gen
@@ -32,3 +32,11 @@ test_dst.sqlite
 *.duckdb
 *.out.txt
 *.err.txt
+# Wave27：本地演练与临时构建产物（E2E classpath、调试探针等）禁入仓库
+tmp/
+target/e2e_cp.txt
+target/e2e_classes/
+# Wave29：Python 缓存与离线包校验文件（zip 本身由 *.zip 规则忽略）
+__pycache__/
+*.pyc
+*.sha256

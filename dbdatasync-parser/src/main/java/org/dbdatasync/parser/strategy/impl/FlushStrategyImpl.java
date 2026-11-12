@@ -20,6 +20,8 @@ import org.dbdatasync.parser.model.SystemConfig;
 import org.dbdatasync.parser.strategy.FlushStrategy;
 import org.dbdatasync.parser.util.MetaLockUtil;
 import org.dbdatasync.sdk.constant.ConfigConstant;
+import org.dbdatasync.sdk.observer.ReplicationEventObservers;
+import org.dbdatasync.sdk.retry.WriteFailureTag;
 import org.dbdatasync.sdk.model.Field;
 import org.dbdatasync.sdk.model.MetaIncrement;
 import org.dbdatasync.sdk.schema.SchemaResolver;
@@ -67,10 +69,17 @@ public final class FlushStrategyImpl implements FlushStrategy {
             // 不记录全量数据，只统计成功失败总数
             refreshTotal(result);
 
+            ReplicationEventObservers.notifyRetryRecovered(result.getMetaId(), result.getAutoRetriedRows().get());
             if (!CollectionUtils.isEmpty(result.getFailData())) {
                 logger.error(result.getError().toString());
                 LogType logType = LogType.TableGroupLog.FULL_FAILED;
                 logService.log(logType, "%s:%s:%s", result.getTargetTableGroupName(), logType.getMessage(), result.getError().toString());
+                // 全量失败默认不落明细（既有开关），但必须计入死信指标，避免链路健康出现盲区
+                String cause = StringUtil.substring(result.getError().toString(), 0, 256);
+                for (int i = 0; i < result.getFailData().size(); i++) {
+                    ReplicationEventObservers.notifyDeadLetter(result.getMetaId(),
+                            WriteFailureTag.kindOf(result.getError().toString()), cause);
+                }
             }
             return;
         }
@@ -92,7 +101,18 @@ public final class FlushStrategyImpl implements FlushStrategy {
         String targetTableGroupName = result.getTargetTableGroupName();
 
         long now = Instant.now().toEpochMilli();
+        // 失败明细结构化打标：永久故障直接标死信，其余标待处理失败。
+        // 仅占用 error 文本列，不改 isSuccess 值域、不加列、不加表。
+        // Wave24：逐行失败分类优先。Wave22 的批次口径会让同批瞬时故障行被
+        // 「永久优先」误标死信，这里按 Result.rowFailures 逐行还原真实分类。
+        final String batchError = success ? error : WriteFailureTag.tag(error, 1);
         data.forEach(r-> {
+            // Result 在本类按原始类型使用，get() 需显式转型
+            org.dbdatasync.common.model.RowFailure rowFailure = success ? null
+                    : (org.dbdatasync.common.model.RowFailure) result.getRowFailures().get(String.valueOf(r));
+            final String rowError = success ? batchError : rowErrorText(error, rowFailure);
+            final String failureKind = success ? null : WriteFailureTag.kindOf(rowError);
+            final boolean deadLetter = !success && WriteFailureTag.isDeadLetter(rowError);
             Map<String, Object> row = new HashMap<>();
             row.put(ConfigConstant.CONFIG_MODEL_ID, String.valueOf(snowflakeIdWorker.nextId()));
             // 明细分表：TABLE_GROUP_ID 关联表映射；事件写入 TYPE；成功状态写入 IS_SUCCESS
@@ -100,7 +120,7 @@ public final class FlushStrategyImpl implements FlushStrategy {
             row.put(ConfigConstant.DATA_TABLE_GROUP_ID, tableGroupId);
             row.put(ConfigConstant.DETAIL_TARGET_TABLE, targetTableGroupName);
             row.put(ConfigConstant.CONFIG_MODEL_TYPE, event);
-            row.put(ConfigConstant.DATA_ERROR, error);
+            row.put(ConfigConstant.DATA_ERROR, rowError);
             row.put(ConfigConstant.CONFIG_MODEL_CREATE_TIME, now);
             row.put(ConfigConstant.CONFIG_MODEL_UPDATE_TIME, now);
             try {
@@ -114,7 +134,29 @@ public final class FlushStrategyImpl implements FlushStrategy {
                 logger.warn("可能存在Blob或inputStream大文件类型, 无法序列化。字段类型详情: {}", typeInfo, e);
             }
             storageBufferActuator.offer(new StorageRequest(shardId, row));
+            if (deadLetter) {
+                ReplicationEventObservers.notifyDeadLetter(metaId, failureKind,
+                        StringUtil.substring(rowError, 0, 256));
+            }
         });
+    }
+
+    /** 由逐行分类结果生成失败明细标签；无逐行结果时回退到批次口径。 */
+    private String rowErrorText(String batchError, org.dbdatasync.common.model.RowFailure failure) {
+        if (failure == null) {
+            return WriteFailureTag.tag(batchError, 1);
+        }
+        StringBuilder text = new StringBuilder(failure.isPermanent()
+                ? WriteFailureTag.DEAD_LETTER : WriteFailureTag.SYNC_FAIL);
+        text.append(WriteFailureTag.KIND_PREFIX).append(failure.getKind()).append(']')
+                .append(WriteFailureTag.RETRY_PREFIX).append(Math.max(0, failure.getAttempts())).append(']');
+        if (failure.getSqlState() != null) {
+            text.append("[sqlState=").append(failure.getSqlState()).append(']');
+        }
+        if (failure.getErrorCode() != 0) {
+            text.append("[errorCode=").append(failure.getErrorCode()).append(']');
+        }
+        return text.append(' ').append(failure.getMessage()).toString();
     }
 
     private byte[] toBinlogBytes(SchemaResolver schemaResolver, Map<String, Object> data, Map<String, Field> fieldMap) {
@@ -180,6 +222,12 @@ public final class FlushStrategyImpl implements FlushStrategy {
 
     private void flush(Result result, SchemaResolver schemaResolver, Map<String, Field> targetFieldMap) {
         refreshTotal(result);
+        ReplicationEventObservers.notifyRetryRecovered(result.getMetaId(), result.getAutoRetriedRows().get());
+        // Wave23：把本批写入结果回传给重放方，只有明确成功后才允许删除失败明细
+        if (StringUtil.isNotBlank(result.getReplayId())) {
+            org.dbdatasync.sdk.replay.ReplayConfirmation.mark(result.getMetaId(),
+                    result.getReplayId(), CollectionUtils.isEmpty(result.getFailData()));
+        }
 
         SystemConfig systemConfig = profileComponent.getSystemConfig();
         // 是否写失败数据

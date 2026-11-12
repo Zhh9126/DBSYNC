@@ -84,11 +84,21 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    /** 对账报告导出取数：分页大小 / 明细行上限 / 最大页数（防止无界分页与内存膨胀） */
+    private static final int EXPORT_PAGE_SIZE = 200;
+    private static final int MAX_EXPORT_DETAIL_ROWS = 5000;
+    private static final int EXPORT_MAX_PAGES = MAX_EXPORT_DETAIL_ROWS / EXPORT_PAGE_SIZE;
+    /** Wave30：流式导出的安全上限（200 行/页 × 100 万页 = 2 亿行），防止异常分页死循环。 */
+    private static final int EXPORT_SCAN_MAX_PAGES = 1_000_000;
+
     @Resource
     private SnowflakeIdWorker snowflakeIdWorker;
 
     @Resource
     private TaskService<ValidateSyncTask> taskService;
+
+    @Resource
+    private org.dbdatasync.sdk.spi.TaskService<org.dbdatasync.sdk.model.DatabaseSyncTask> databaseSyncTaskService;
 
     @Resource
     private ValidateSyncDetailService validateSyncDetailService;
@@ -145,6 +155,27 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         checkTask(task, params);
         // 默认检查行数据
         task.setEnableRowData(true);
+        // 对比模式: full(默认全量逐行)/sample(抽样, 大表快速健康检查)
+        String compareMode = params.get("compareMode");
+        if (StringUtil.isNotBlank(compareMode)) {
+            task.setCompareMode(compareMode.trim().toLowerCase());
+        }
+        int sampleStep = NumberUtil.toInt(params.get("sampleStep"), 10);
+        if (sampleStep >= 1) {
+            task.setSampleStep(sampleStep);
+        }
+        // 分片并发校验数: full 模式单列主键时按主键值域分片并发(对标 Wave4 全量分片读); 非法回退 0=串行
+        String fullSplitCount = params.get("fullSplitCount");
+        if (StringUtil.isNotBlank(fullSplitCount) && fullSplitCount.matches("\\d+")) {
+            task.setFullSplitCount(fullSplitCount);
+        } else {
+            task.setFullSplitCount("0");
+        }
+        // 关联整库迁移任务: 按库映射直接复制其表组, 用于迁移/同步完成后的数据一致性对比
+        String databaseSyncTaskId = params.get("databaseSyncTaskId");
+        if (StringUtil.isNotBlank(databaseSyncTaskId)) {
+            return addFromDatabaseSyncTask(task, params, databaseSyncTaskId);
+        }
         // 关联同步任务
         String mappingId = params.get("mappingId");
         if (StringUtil.isNotBlank(mappingId)) {
@@ -546,8 +577,10 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
     public Paging searchResult(Map<String, String> params) {
         String taskId = params.get("taskId");
         Assert.hasText(taskId, "任务ID不能为空");
-        int pageNum = NumberUtil.toInt(params.get("pageNum"), 1);
-        int pageSize = NumberUtil.toInt(params.get("pageSize"), 10);
+        // Wave30：分页参数必须夹紧。此前 pageSize 可传 Integer.MAX_VALUE，一次把整张明细表
+        // （含 DBDS-REF 还原后的大字段）读进堆；OFFSET 也因 int 乘法在深分页溢出为负。
+        int pageNum = Math.max(1, NumberUtil.toInt(params.get("pageNum"), 1));
+        int pageSize = Math.min(200, Math.max(1, NumberUtil.toInt(params.get("pageSize"), 10)));
         String detailStatus = StringUtil.trimToEmpty(params.get("detailStatus"));
         return taskDetailProfile.queryResults(TaskDetailQuery.of(taskId)
                 .setPage(pageNum, pageSize)
@@ -567,6 +600,102 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         Assert.hasText(taskId, "任务ID不能为空");
         Assert.hasText(detailId, "明细ID不能为空");
         return validateSyncDetailService.manualRevise(taskId, detailId);
+    }
+
+    @Override
+    public List<Map<String, Object>> listResultDetails(String taskId, String detailStatus, String detailId) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (StringUtil.isNotBlank(detailId)) {
+            Object detail = getValidateResultDetail(taskId, detailId);
+            if (detail == null) {
+                throw new BizException("明细不存在");
+            }
+            if (detail instanceof Map) {
+                rows.add((Map<String, Object>) detail);
+            }
+            return rows;
+        }
+
+        Map<String, String> params = new HashMap<>();
+        params.put("taskId", taskId);
+        params.put("pageSize", String.valueOf(EXPORT_PAGE_SIZE));
+        params.put("detailStatus", StringUtil.trimToEmpty(detailStatus));
+        for (int pageNum = 1; pageNum <= EXPORT_MAX_PAGES; pageNum++) {
+            params.put("pageNum", String.valueOf(pageNum));
+            Paging paging = searchResult(params);
+            Collection<?> data = paging == null ? null : paging.getData();
+            if (data == null || data.isEmpty()) {
+                break;
+            }
+            for (Object row : data) {
+                if (row instanceof Map) {
+                    rows.add((Map<String, Object>) row);
+                    if (rows.size() >= MAX_EXPORT_DETAIL_ROWS) {
+                        break;
+                    }
+                }
+            }
+            if (rows.size() >= MAX_EXPORT_DETAIL_ROWS) {
+                logger.warn("对账报告导出行数达到上限 {}，后续明细未导出: taskId={}", MAX_EXPORT_DETAIL_ROWS, taskId);
+                break;
+            }
+            if (data.size() < EXPORT_PAGE_SIZE) {
+                break;
+            }
+        }
+        return rows;
+    }
+
+    @Override
+    public void scanResultDetails(String taskId, String detailStatus, String detailId,
+                                  java.util.function.Consumer<Map<String, Object>> consumer) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.notNull(consumer, "明细消费者不能为空");
+        if (StringUtil.isNotBlank(detailId)) {
+            Object detail = getValidateResultDetail(taskId, detailId);
+            if (detail == null) {
+                throw new BizException("明细不存在");
+            }
+            if (detail instanceof Map) {
+                consumer.accept((Map<String, Object>) detail);
+            }
+            return;
+        }
+        Map<String, String> params = new HashMap<>();
+        params.put("taskId", taskId);
+        params.put("pageSize", String.valueOf(EXPORT_PAGE_SIZE));
+        params.put("detailStatus", StringUtil.trimToEmpty(detailStatus));
+        for (int pageNum = 1; pageNum <= EXPORT_SCAN_MAX_PAGES; pageNum++) {
+            params.put("pageNum", String.valueOf(pageNum));
+            Paging paging = searchResult(params);
+            Collection<?> data = paging == null ? null : paging.getData();
+            if (data == null || data.isEmpty()) {
+                break;
+            }
+            for (Object row : data) {
+                if (row instanceof Map) {
+                    consumer.accept((Map<String, Object>) row);
+                }
+            }
+            if (data.size() < EXPORT_PAGE_SIZE) {
+                break;
+            }
+        }
+    }
+
+    @Override
+    public Object reviseDiffItem(String taskId, String detailId, int itemIndex) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.hasText(detailId, "明细ID不能为空");
+        return validateSyncDetailService.reviseDiffItem(taskId, detailId, itemIndex);
+    }
+
+    @Override
+    public Map<String, Object> reviseDiffItems(String taskId, String detailId, List<Integer> itemIndexes) {
+        Assert.hasText(taskId, "任务ID不能为空");
+        Assert.hasText(detailId, "明细ID不能为空");
+        return validateSyncDetailService.reviseDiffItems(taskId, detailId, itemIndexes);
     }
 
     @Override
@@ -773,6 +902,25 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
         task.setReadNum(NumberUtil.toInt(params.get("readNum"), task.getReadNum()));
         task.setBatchNum(NumberUtil.toInt(params.get("batchNum"), task.getBatchNum()));
         task.setThreadNum(NumberUtil.toInt(params.get("threadNum"), task.getThreadNum()));
+        // 分片并发校验数: 仅接受数字, 否则保持原值(存量任务兼容)
+        String fullSplitCount = params.get("fullSplitCount");
+        if (StringUtil.isNotBlank(fullSplitCount)) {
+            if (fullSplitCount.matches("\\d+")) {
+                task.setFullSplitCount(fullSplitCount);
+            } else {
+                task.setFullSplitCount("0");
+            }
+        }
+        // 对比模式白名单：full/sample/health/checksum，非法回退 full（存量零影响）
+        String compareMode = params.get("compareMode");
+        if (StringUtil.isNotBlank(compareMode)) {
+            String cm = compareMode.trim().toLowerCase(Locale.ROOT);
+            if ("full".equals(cm) || "sample".equals(cm) || "health".equals(cm) || "checksum".equals(cm)) {
+                task.setCompareMode(cm);
+            } else {
+                task.setCompareMode("full");
+            }
+        }
     }
 
     private void log(LogType log, ValidateSyncTask task, TableGroup tableGroup) {
@@ -784,6 +932,66 @@ public class ValidateSyncServiceImpl implements ValidateSyncService {
             String t = tableGroup.getTargetTable().getName();
             logService.log(log, "%s订正校验任务%s(%s)%s:[%s] >> [%s]", log.getMessage(), name, type.getMessage(), log.getName(), s, t);
         }
+    }
+
+    /**
+     * 从整库迁移任务创建数据对比任务(迁移/同步完成后的数据一致性校验入口)。
+     * <p>整库迁移运行时使用 stub Mapping 不落独立驱动, 故直接按库映射 index 复制其表组。</p>
+     *
+     * @param task               已通过 checkTask 的空任务
+     * @param params             databaseSyncTaskId + mappingIndex(默认0) + name
+     * @param databaseSyncTaskId 整库迁移任务 ID
+     * @return 对比任务 ID
+     */
+    private String addFromDatabaseSyncTask(ValidateSyncTask task, Map<String, String> params, String databaseSyncTaskId) {
+        org.dbdatasync.sdk.model.DatabaseSyncTask dsTask = databaseSyncTaskService.get(databaseSyncTaskId);
+        org.springframework.util.Assert.notNull(dsTask, "整库迁移任务不存在");
+        java.util.List<org.dbdatasync.sdk.model.DatabaseMapping> mappings =
+                org.dbdatasync.parser.util.DatabaseSyncMappingUtil.sortByIndex(dsTask.getDatabaseMappings());
+        org.springframework.util.Assert.notEmpty(mappings, "整库迁移任务缺少库映射");
+        int index = org.dbdatasync.common.util.NumberUtil.toInt(params.get("mappingIndex"), 0);
+        org.springframework.util.Assert.isTrue(index >= 0 && index < mappings.size(), "库映射下标越界");
+        org.dbdatasync.sdk.model.DatabaseMapping dm = mappings.get(index);
+
+        task.setSourceConnectorId(dm.getSourceConnectorId());
+        task.setSourceDatabase(dm.getSourceDatabase());
+        task.setSourceSchema(dm.getSourceSchema());
+        task.setTargetConnectorId(dm.getTargetConnectorId());
+        task.setTargetDatabase(dm.getTargetDatabase());
+        task.setTargetSchema(dm.getTargetSchema());
+        task.setReadNum(dsTask.getReadNum());
+        task.setBatchNum(dsTask.getBatchNum());
+        task.setThreadNum(dsTask.getThreadNum());
+
+        String id = taskService.add(task);
+        // 复制整库迁移任务名下的表组(其 taskId 即整库任务 ID)
+        final String sourceTableNamePattern = null;
+        final java.util.List<TableGroup> copied = new java.util.ArrayList<>();
+        tableGroupProfile.pageScanTableGroups(databaseSyncTaskId, ConfigConstant.PAGE_SIZE, groups -> {
+            if (org.dbdatasync.common.util.CollectionUtils.isEmpty(groups)) {
+                return;
+            }
+            for (TableGroup group : groups) {
+                if (group == null) {
+                    continue;
+                }
+                // 只复制当前库映射的表组(源/目标连接器匹配)
+                if (!StringUtil.equals(group.getSourceConnectorId(), dm.getSourceConnectorId())
+                        || !StringUtil.equals(group.getTargetConnectorId(), dm.getTargetConnectorId())) {
+                    continue;
+                }
+                TableGroup newTable = deepCopy(group);
+                newTable.setId(String.valueOf(snowflakeIdWorker.nextId()));
+                newTable.setTaskId(id);
+                tableGroupProfile.addTableGroup(newTable);
+                copied.add(newTable);
+            }
+        });
+        org.springframework.util.Assert.notEmpty(copied, "该任务尚未生成同步映射, 无法发起数据对比");
+        taskProfile.createRunDetailTable(id);
+        validateSyncDetailService.syncTaskTableMetaDetails(id);
+        preloadTemplate.reConnect(task);
+        return id;
     }
 
     private void mergeTaskColumn(ValidateSyncTask task) {

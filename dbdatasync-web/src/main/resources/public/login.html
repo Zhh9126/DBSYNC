@@ -3,260 +3,284 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>数据同步工具 - 登录</title>
+    <title>DBDataSync · 企业级实时数据同步平台</title>
 
+    <link type="text/css" rel="stylesheet" th:href="@{/plugins/css/font-awesome.min.css}"/>
+    <link type="text/css" rel="stylesheet" th:href="@{/css/theme/variables.css}"/>
+    <link type="text/css" rel="stylesheet" th:href="@{/css/theme/dark.css}"/>
     <link type="text/css" rel="stylesheet" th:href="@{/css/login.css}"/>
+    <link type="text/css" rel="stylesheet" th:href="@{/css/login-datax.css}"/>
+    <script>(function(){try{var t=localStorage.getItem('dbdatasync-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
 </head>
-<body class="font-inter bg-gray-50 min-h-screen flex items-center justify-center p-4">
-<!-- 背景粒子特效画布：固定铺满屏幕，位于内容层之下 -->
-<canvas id="bgParticles" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:0;pointer-events:none;"></canvas>
-<!-- 登录卡片容器 -->
-<div class="w-full max-w-6xl grid md:grid-cols-2 shadow-2xl rounded-2xl overflow-hidden" style="position:relative;z-index:10;">
+<body class="login-body">
+<div class="login-shell">
 
-    <!-- 左侧品牌展示区 -->
-    <div class="md:flex bg-gradient-primary p-12 flex-col justify-between text-white">
-        <div>
-            <div class="flex items-center space-x-3 mb-8">
-                <div class="w-10 h-10 rounded-lg bg-white/20 flex items-center justify-center">
-                    <i class="svg-database"></i>
-                </div>
-                <h1 id="appName" class="text-2xl font-bold tracking-tight">数据同步工具</h1>
-            </div>
-
-            <h2 class="text-responsive-2xl font-bold mb-4 text-shadow">一站式数据集成与同步平台</h2>
-            <p class="text-white/80 mb-8 max-w-md">全量迁移 · 实时增量 CDC · 整库迁移 · 订正校验，组合驱动、任意搭配</p>
+    <!-- ==================== 左栏：品牌与核心能力 ==================== -->
+    <section class="brand-pane">
+        <!-- 科技感背景层 -->
+        <div class="pane-bg" aria-hidden="true">
+            <div class="pane-grid"></div>
+            <div class="pane-orb pane-orb-a"></div>
+            <div class="pane-orb pane-orb-b"></div>
+            <div class="pane-orb pane-orb-c"></div>
+            <div class="pane-beam"></div>
+            <div class="pane-noise"></div>
         </div>
 
-        <!-- 特性列表 -->
-        <div class="space-y-5">
-            <div class="flex items-start space-x-4">
-                <div class="mt-1 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-                    <i class="svg-database"></i>
+        <div class="pane-inner">
+            <!-- 品牌头 -->
+            <header class="pane-head">
+                <div class="brand-mark">
+                    <svg viewBox="0 0 40 40" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="markGrad" x1="0" y1="0" x2="1" y2="1">
+                                <stop offset="0%" stop-color="#60A5FA"/>
+                                <stop offset="100%" stop-color="#22D3EE"/>
+                            </linearGradient>
+                        </defs>
+                        <ellipse cx="20" cy="10" rx="13" ry="5" fill="none" stroke="url(#markGrad)" stroke-width="2.2"/>
+                        <path d="M7 10v9c0 2.8 5.8 5 13 5s13-2.2 13-5v-9" fill="none" stroke="url(#markGrad)" stroke-width="2.2"/>
+                        <path d="M7 19v9c0 2.8 5.8 5 13 5s13-2.2 13-5v-9" fill="none" stroke="url(#markGrad)" stroke-width="2.2" opacity=".7"/>
+                        <circle cx="20" cy="28" r="2.4" fill="#67E8F9"/>
+                    </svg>
                 </div>
-                <div>
-                    <h3 class="font-semibold mt-1">多源异构互联</h3>
-                    <p class="text-sm text-white/70">20+ 开箱即用连接器：关系库 / NoSQL / 消息队列 / 文件，库到库、库到队列自由拓扑</p>
+                <div class="brand-word">
+                    <strong>DBDataSync</strong>
+                    <span>ENTERPRISE DATA INTEGRATION PLATFORM</span>
+                </div>
+                <div class="brand-status"><i></i> SYSTEM ONLINE</div>
+            </header>
+
+            <!-- 主标题 -->
+            <div class="pane-intro">
+                <div class="pane-eyebrow"><span></span> REAL-TIME DATA SYNC · 企业级数据同步平台</div>
+                <h1>让每一条数据<br><em>实时、准确、可控</em>地流动</h1>
+                <p>从异构数据源接入到实时增量捕获、一致性校验与全链路可观测，<br>一套平台管好每一条数据链路。</p>
+            </div>
+
+            <!-- 数据流转可视化 -->
+            <div class="flow-board">
+                <div class="flow-bar">
+                    <span class="flow-bar-title"><i class="fa fa-sitemap"></i> 实时数据链路拓扑</span>
+                    <span class="flow-bar-live"><i></i> LIVE · CDC PIPELINE</span>
+                </div>
+                <svg class="flow-svg" viewBox="0 0 760 186" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="edgeGrad" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0%" stop-color="#22D3EE" stop-opacity=".12"/>
+                            <stop offset="48%" stop-color="#60A5FA" stop-opacity=".85"/>
+                            <stop offset="100%" stop-color="#38BDF8" stop-opacity=".18"/>
+                        </linearGradient>
+                        <radialGradient id="coreHalo">
+                            <stop offset="0%" stop-color="#38BDF8" stop-opacity=".55"/>
+                            <stop offset="70%" stop-color="#2563EB" stop-opacity=".16"/>
+                            <stop offset="100%" stop-color="#2563EB" stop-opacity="0"/>
+                        </radialGradient>
+                        <linearGradient id="coreFill" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#1D4ED8"/>
+                            <stop offset="100%" stop-color="#0891B2"/>
+                        </linearGradient>
+                    </defs>
+
+                    <!-- 连线 -->
+                    <g fill="none" stroke="url(#edgeGrad)" stroke-width="1.5">
+                        <path d="M138 36 C 248 36, 268 92, 326 92"/>
+                        <path d="M138 92 L 326 92"/>
+                        <path d="M138 148 C 248 148, 268 92, 326 92"/>
+                        <path d="M434 92 C 500 92, 516 36, 620 36"/>
+                        <path d="M434 92 L 620 92"/>
+                        <path d="M434 92 C 500 92, 516 148, 620 148"/>
+                    </g>
+                    <g fill="none" stroke="#7DD3FC" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 13" class="flow-dashes">
+                        <path d="M138 36 C 248 36, 268 92, 326 92"/>
+                        <path d="M138 92 L 326 92"/>
+                        <path d="M138 148 C 248 148, 268 92, 326 92"/>
+                        <path d="M434 92 C 500 92, 516 36, 620 36"/>
+                        <path d="M434 92 L 620 92"/>
+                        <path d="M434 92 C 500 92, 516 148, 620 148"/>
+                    </g>
+
+                    <!-- 源端节点 -->
+                    <g class="flow-node">
+                        <rect x="18" y="18" width="120" height="36" rx="7"/>
+                        <text x="34" y="41" class="node-name">MySQL</text>
+                        <circle cx="126" cy="36" r="3" class="node-dot"/>
+                    </g>
+                    <g class="flow-node">
+                        <rect x="18" y="74" width="120" height="36" rx="7"/>
+                        <text x="34" y="97" class="node-name">Oracle</text>
+                        <circle cx="126" cy="92" r="3" class="node-dot"/>
+                    </g>
+                    <g class="flow-node">
+                        <rect x="18" y="130" width="120" height="36" rx="7"/>
+                        <text x="34" y="153" class="node-name">PostgreSQL</text>
+                        <circle cx="126" cy="148" r="3" class="node-dot"/>
+                    </g>
+
+                    <!-- 目标端节点 -->
+                    <g class="flow-node flow-node-out">
+                        <rect x="620" y="18" width="120" height="36" rx="7"/>
+                        <circle cx="632" cy="36" r="3" class="node-dot"/>
+                        <text x="642" y="41" class="node-name">达梦 DM8</text>
+                    </g>
+                    <g class="flow-node flow-node-out">
+                        <rect x="620" y="74" width="120" height="36" rx="7"/>
+                        <circle cx="632" cy="92" r="3" class="node-dot"/>
+                        <text x="642" y="97" class="node-name">ClickHouse</text>
+                    </g>
+                    <g class="flow-node flow-node-out">
+                        <rect x="620" y="130" width="120" height="36" rx="7"/>
+                        <circle cx="632" cy="148" r="3" class="node-dot"/>
+                        <text x="642" y="153" class="node-name">Kafka / ES</text>
+                    </g>
+
+                    <!-- 引擎核心 -->
+                    <circle cx="380" cy="92" r="76" fill="url(#coreHalo)" class="core-halo"/>
+                    <circle cx="380" cy="92" r="58" fill="none" stroke="#60A5FA" stroke-opacity=".35" stroke-width="1" stroke-dasharray="5 7" class="core-orbit"/>
+                    <circle cx="380" cy="92" r="44" fill="url(#coreFill)" stroke="#93C5FD" stroke-opacity=".65" stroke-width="1.4"/>
+                    <text x="380" y="90" text-anchor="middle" class="core-title">CDC</text>
+                    <text x="380" y="107" text-anchor="middle" class="core-sub">SYNC ENGINE</text>
+                    <text x="380" y="168" text-anchor="middle" class="core-caption">全量 / 增量 · 校验 · 可观测</text>
+                </svg>
+            </div>
+
+            <!-- 核心能力 -->
+            <div class="feature-caption"><span>CORE CAPABILITIES</span> 核心能力 <i></i></div>
+            <div class="feature-grid">
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-database"></i></div>
+                    <div class="feat-txt"><h3>多源异构连接</h3><p>20+ 数据源统一纳管，关系型、国产库、大数据与消息队列即配即用</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-bolt"></i></div>
+                    <div class="feat-txt"><h3>实时增量 CDC</h3><p>解析 binlog / WAL / LogMiner，秒级捕获变更，位点断点续传不丢数据</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-clone"></i></div>
+                    <div class="feat-txt"><h3>全量迁移与并发</h3><p>分片并行、批量写入与类型转换，整库迁移高效稳定，进度实时可见</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-check-square-o"></i></div>
+                    <div class="feat-txt"><h3>数据校验与订正</h3><p>一致性比对、差异明细与一键订正，同步结果可核对、可追溯</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-heartbeat"></i></div>
+                    <div class="feat-txt"><h3>链路健康监控</h3><p>停滞时长、失败率、死信与重试挽回一屏掌握，支持 Prometheus 导出</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-shield"></i></div>
+                    <div class="feat-txt"><h3>告警与自愈</h3><p>瞬时失败指数退避自动重试，永久失败入死信，多渠道告警带冷却去重</p></div>
                 </div>
             </div>
 
-            <div class="flex items-start space-x-4">
-                <div class="mt-1 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-                    <i class="svg-bolt"></i>
+            <!-- 底部指标 -->
+            <footer class="pane-foot">
+                <div class="pane-stats">
+                    <div><b>20+</b><span>数据源</span></div>
+                    <div><b>秒级</b><span>增量延迟</span></div>
+                    <div><b>7×24</b><span>稳定运行</span></div>
+                    <div><b>全链路</b><span>可观测</span></div>
                 </div>
-                <div>
-                    <h3 class="font-semibold mt-1">全量 + 增量一体</h3>
-                    <p class="text-sm text-white/70">binlog / CDC / 日志实时捕获，先全量后增量无缝衔接，端到端秒级延迟</p>
-                </div>
-            </div>
-
-            <div class="flex items-start space-x-4">
-                <div class="mt-1 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-                    <i class="svg-cogs"></i>
-                </div>
-                <div>
-                    <h3 class="font-semibold mt-1">整库迁移产品化</h3>
-                    <p class="text-sm text-white/70">自动建库建表、一键接续增量、一键全库映射、新表自动发现</p>
-                </div>
-            </div>
-
-            <div class="flex items-start space-x-4">
-                <div class="mt-1 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-                    <i class="svg-shield"></i>
-                </div>
-                <div>
-                    <h3 class="font-semibold mt-1">可观测、可订正、可扩展</h3>
-                    <p class="text-sm text-white/70">性能监控 / 血缘 / 多渠道告警，差异自动订正，SPI 插件热加载</p>
-                </div>
-            </div>
+                <div class="pane-copy">© 2026 DBDataSync · 企业级实时数据同步平台 <em>v2.1.4</em></div>
+            </footer>
         </div>
-    </div>
+    </section>
 
-    <!-- 右侧登录表单区 -->
-    <div class="bg-white p-8 md:p-12 flex flex-col h-full w-full-50 right-0 absolute">
-        <div class="mt-6 md:mt-12">
-            <h2 class="text-responsive-xl font-bold text-dark mb-2">欢迎回来</h2>
-            <p class="text-gray-500 mb-8">请输入您的账号信息登录系统</p>
+    <!-- ==================== 右栏：登录 ==================== -->
+    <section class="auth-pane">
+        <div class="auth-bg" aria-hidden="true"></div>
 
-            <!-- 登录表单 -->
-            <form id="loginForm" class="space-y-6">
-                <!-- 用户名输入 -->
-                <div class="space-y-2">
-                    <label for="username" class="block text-sm font-medium text-gray-700">用户名</label>
-                    <div class="relative">
-                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <i class="svg-user"></i>
+        <div class="auth-topline">
+            <span><i class="fa fa-lock"></i> SECURE ACCESS</span>
+            <button id="themeToggleBtn" class="theme-toggle" type="button" title="切换深色/浅色主题">
+                <i class="fa fa-moon-o"></i><i class="fa fa-sun-o"></i>
+            </button>
+        </div>
+
+        <div class="login-wrap">
+            <!-- 移动端品牌（窄屏时显示） -->
+            <div class="mobile-brand">
+                <div class="mobile-brand-mark"><i class="fa fa-database"></i></div>
+                <div><strong>DBDataSync</strong><span>企业级实时数据同步平台</span></div>
+            </div>
+
+            <div class="login-card">
+                <div class="login-brand">
+                    <div class="brand-logo"><i class="svg-database"></i></div>
+                    <h1 class="brand-title">欢迎回来</h1>
+                    <p class="brand-sub">登录 <span id="appName">数据同步工具</span> 控制台</p>
+                </div>
+
+                <div class="login-form-area">
+                    <form id="loginForm" class="login-form" autocomplete="off">
+                        <div class="form-item">
+                            <label for="username" class="field-label">用户名</label>
+                            <div class="field-inner">
+                                <i class="svg-user field-icon"></i>
+                                <input type="text" id="username" name="username" class="field-input"
+                                       placeholder="请输入用户名" required>
+                            </div>
+                            <div id="usernameError" class="field-error hidden">
+                                <i class="svg-exclamation-circle"></i>
+                                <span>用户名不能为空</span>
+                            </div>
                         </div>
-                        <input type="text" id="username" name="username"
-                               class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50 focus:border-primary transition-custom outline-none"
-                               placeholder="请输入用户名" required>
-                    </div>
-                    <div id="usernameError" class="hidden text-danger text-sm mt-1">
-                        <div class="flex">
+
+                        <div class="form-item">
+                            <label for="password" class="field-label">密码</label>
+                            <div class="field-inner">
+                                <i class="svg-lock field-icon"></i>
+                                <input type="password" id="password" name="password" class="field-input"
+                                       placeholder="请输入密码" required>
+                                <button type="button" id="togglePassword" class="field-eye" tabindex="-1" title="显示/隐藏密码">
+                                    <i class="svg-eye-slash"></i>
+                                </button>
+                            </div>
+                            <div id="passwordError" class="field-error hidden">
+                                <i class="svg-exclamation-circle"></i>
+                                <span>密码不能为空</span>
+                            </div>
+                        </div>
+
+                        <div id="loginError" class="form-error hidden">
                             <i class="svg-exclamation-circle"></i>
-                            <span>用户名不能为空</span>
+                            <span id="errorMessage">登录失败，请检查用户名或密码</span>
                         </div>
-                    </div>
-                </div>
 
-                <!-- 密码输入 -->
-                <div class="space-y-2">
-                    <div class="flex justify-between">
-                        <label for="password" class="block text-sm font-medium text-gray-700">密码</label>
-                    </div>
-                    <div class="relative">
-                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <i class="svg-lock"></i>
-                        </div>
-                        <input type="password" id="password" name="password"
-                               class="block w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50 focus:border-primary transition-custom outline-none"
-                               placeholder="请输入密码" required>
-                        <button type="button" id="togglePassword"
-                                class="absolute inset-y-0 right-0 pr-3 flex mr-1 mt-1 mb-1 items-center rounded-lg">
-                            <i class="svg-eye-slash"></i>
+                        <button type="submit" id="loginButton" class="btn-submit">
+                            <span>登 录</span>
+                            <i class="svg-sign-in"></i>
                         </button>
-                    </div>
-                    <div id="passwordError" class="hidden text-danger text-sm mt-1">
-                        <div class="flex">
-                            <i class="svg-exclamation-circle"></i>
-                            <span>密码不能为空</span>
-                        </div>
-                    </div>
+
+                        <button type="button" id="loadingButton" class="btn-submit btn-loading hidden" disabled>
+                            <i class="rotate-loading"></i>
+                            <span>登录中...</span>
+                        </button>
+                    </form>
                 </div>
 
-                <!-- 错误提示 -->
-                <div id="loginError" class="hidden bg-danger/10 text-danger p-3 rounded-lg text-sm flex items-center">
-                    <div class="flex">
-                        <i class="svg-exclamation-circle"></i>
-                        <span id="errorMessage">登录失败，请检查用户名或密码</span>
-                    </div>
+                <div class="auth-hint"><i class="fa fa-shield"></i> 请使用管理员分配的账号登录，操作全程留痕</div>
+
+                <div class="login-capabilities">
+                    <span><i class="fa fa-database"></i>异构数据源</span>
+                    <span><i class="fa fa-refresh"></i>实时增量</span>
+                    <span><i class="fa fa-line-chart"></i>链路监控</span>
                 </div>
 
-                <!-- 登录按钮 -->
-                <button type="submit" id="loginButton"
-                        class="w-full bg-primary/80 hover:bg-primary/90 text-white font-medium py-3 px-4 rounded-lg transition-custom flex items-center justify-center space-x-2 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2">
-                    <span>登录</span>
-                    <i class="svg-sign-in"></i>
-                </button>
-
-                <!-- 加载状态按钮 -->
-                <button type="button" id="loadingButton"
-                        class="hidden w-full bg-primary/80 text-white font-medium py-3 px-4 rounded-lg transition-custom flex items-center justify-center space-x-2 cursor-not-allowed">
-                    <i class="rotate-loading"></i>
-                    <span>登录中...</span>
-                </button>
-            </form>
+                <div class="login-footer">
+                    <span>DBDataSync · 数据同步平台</span><span>v2.1.4</span>
+                </div>
+            </div>
         </div>
 
-    </div>
+        <div class="auth-bottomline">
+            <span><i></i> 服务运行正常</span>
+            <span>数据集成 · 实时同步 · 一致性校验</span>
+        </div>
+    </section>
 </div>
 
 <script>
-    // 背景粒子特效（轻量、与现有蓝色系风格一致）
-    (function () {
-        const canvas = document.getElementById('bgParticles');
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-
-        let dpr = Math.max(1, window.devicePixelRatio || 1);
-        let width = 0, height = 0;
-        const particles = [];
-        const PARTICLE_COUNT_BASE = 0.00012; // 越小越少：按像素面积计算数量，避免在小屏过密
-        const MAX_ALPHA = 0.45; // 最高不透明度，保持低调不抢眼
-        const COLORS = [
-            'rgba(59,130,246,ALPHA)',   // 蓝色（接近 primary）
-            'rgba(37,99,235,ALPHA)',    // 深蓝
-            'rgba(99,102,241,ALPHA)',   // 靛紫
-            'rgba(56,189,248,ALPHA)'    // 青蓝
-        ];
-
-        function resize() {
-            width = canvas.clientWidth = window.innerWidth;
-            height = canvas.clientHeight = window.innerHeight;
-            canvas.width = Math.round(width * dpr);
-            canvas.height = Math.round(height * dpr);
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-            // 依据面积动态调整粒子数量
-            const target = Math.min(180, Math.max(60, Math.floor(width * height * PARTICLE_COUNT_BASE)));
-            if (particles.length > target) {
-                particles.length = target;
-            } else {
-                while (particles.length < target) particles.push(createParticle());
-            }
-        }
-
-        function rand(min, max) { return Math.random() * (max - min) + min; }
-        function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-
-        function createParticle() {
-            const speed = rand(0.08, 0.35);
-            const angle = rand(0, Math.PI * 2);
-            const radius = rand(0.6, 1.8);
-            const alpha = rand(0.08, MAX_ALPHA);
-            const color = pick(COLORS).replace('ALPHA', alpha.toFixed(3));
-            return {
-                x: rand(0, width),
-                y: rand(0, height),
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
-                r: radius,
-                a: alpha,
-                color
-            };
-        }
-
-        function step() {
-            ctx.clearRect(0, 0, width, height);
-
-            // 轻微的渐隐，形成拖尾层次（非常轻，不突兀）
-            ctx.fillStyle = 'rgba(255,255,255,0.03)';
-            ctx.fillRect(0, 0, width, height);
-
-            for (let i = 0; i < particles.length; i++) {
-                const p = particles[i];
-                p.x += p.vx;
-                p.y += p.vy;
-
-                // 边界回环
-                if (p.x < -10) p.x = width + 10; else if (p.x > width + 10) p.x = -10;
-                if (p.y < -10) p.y = height + 10; else if (p.y > height + 10) p.y = -10;
-
-                // 绘制柔和发光点
-                const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 6);
-                grad.addColorStop(0, p.color);
-                grad.addColorStop(1, 'rgba(255,255,255,0)');
-                ctx.fillStyle = grad;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.r * 6, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
-            // 邻近连线（仅近距离，极细，提升科技感）
-            ctx.lineWidth = 0.6;
-            for (let i = 0; i < particles.length; i++) {
-                for (let j = i + 1; j < particles.length; j++) {
-                    const a = particles[i], b = particles[j];
-                    const dx = a.x - b.x, dy = a.y - b.y;
-                    const dist2 = dx * dx + dy * dy;
-                    const maxDist = 120; // 连线最大距离
-                    if (dist2 < maxDist * maxDist) {
-                        const t = 1 - Math.sqrt(dist2) / maxDist;
-                        ctx.strokeStyle = `rgba(99,102,241,${0.12 * t})`;
-                        ctx.beginPath();
-                        ctx.moveTo(a.x, a.y);
-                        ctx.lineTo(b.x, b.y);
-                        ctx.stroke();
-                    }
-                }
-            }
-
-            requestAnimationFrame(step);
-        }
-
-        window.addEventListener('resize', resize);
-        resize();
-        requestAnimationFrame(step);
-    })();
     // 获取项目地址
     const $location = (window.location + '').split('/');
     const $path = document.location.pathname;
@@ -281,15 +305,12 @@
     togglePassword.addEventListener('click', () => {
         const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
         passwordInput.setAttribute('type', type);
-
-        // 切换图标
         togglePassword.querySelector('i').classList.toggle('svg-eye');
         togglePassword.querySelector('i').classList.toggle('svg-eye-slash');
     });
 
     // 初始化加载版权信息
     window.addEventListener('load', () => {
-        // 发送GET请求
         fetch($basePath + '/index/version.json').then(response => {
             if (!response.ok) throw new Error(`HTTP错误: ${response.status}`);
             return response.json();
@@ -297,23 +318,18 @@
             if (response.success === true) {
                 document.getElementById('appName').textContent = response.data.appName;
             }
-        }).catch(error => {
-            throw new Error(`请求错误: ${error.message}`);
-        });
+        }).catch(() => { /* 静态预览或离线场景忽略，保留默认产品名 */ });
     });
 
     function validateItem($input, $error){
-        // 隐藏登录错误提示
         loginError.classList.add('hidden');
         if (!$input.value.trim()) {
             $error.classList.remove('hidden');
-            $input.classList.add('border-danger');
-            $input.classList.remove('border-gray-300', 'focus:border-primary');
+            $input.classList.add('is-invalid');
             return false;
         }
         $error.classList.add('hidden');
-        $input.classList.remove('border-danger');
-        $input.classList.add('border-gray-300', 'focus:border-primary');
+        $input.classList.remove('is-invalid');
         return true;
     }
     // 表单验证
@@ -328,16 +344,13 @@
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
 
-        // 表单验证
         if (!validateForm()) {
             return;
         }
 
-        // 显示加载状态，隐藏登录按钮
         loginButton.classList.add('hidden');
         loadingButton.classList.remove('hidden');
 
-        // 获取表单数据
         const username = usernameInput.value.trim();
         const password = passwordInput.value.trim();
 
@@ -349,36 +362,30 @@
             const response = await fetch($basePath + '/login', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded', // 显式声明表单格式
+                    'Content-Type': 'application/x-www-form-urlencoded',
                 },
                 body: formData,
             });
 
-            // 处理响应
             const result = await response.json();
             if (response.ok) {
-                // 登录成功，跳转到首页或其他页面
                 window.location.href = $basePath;
             } else {
-                // 登录失败，显示错误信息
                 throw new Error(result.message || '登录失败，请检查用户名或密码');
             }
         } catch (error) {
-            // 显示错误信息
             errorMessage.textContent = error.message;
             loginError.classList.remove('hidden');
-
-            // 添加错误抖动动画
             loginError.classList.add('animate-shake');
             setTimeout(() => {
                 loginError.classList.remove('animate-shake');
             }, 500);
         } finally {
-            // 恢复按钮状态
             loginButton.classList.remove('hidden');
             loadingButton.classList.add('hidden');
         }
     });
 </script>
+<script type="text/javascript" th:src="@{/js/theme-toggle.js}"></script>
 </body>
 </html>

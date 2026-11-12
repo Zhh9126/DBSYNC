@@ -138,19 +138,20 @@ public class ExpiringCacheTest {
     public void testAutoCleanup() throws InterruptedException {
         logger.info("=== 测试自动清理过期条目 ===");
 
-        // 放入多个缓存项，过期时间不同
+        // 放入多个缓存项：仅 key1 在下面的等待窗口（约750ms）内过期，
+        // key2/key3 的过期时间必须显著大于等待窗口，否则 get() 的惰性过期清理会误清它们。
         cache.put("key1", "value1", 100L);
-        cache.put("key2", "value2", 200L);
-        cache.put("key3", "value3", 300L);
+        cache.put("key2", "value2", 2000L);
+        cache.put("key3", "value3", 3000L);
 
         Assert.assertEquals("初始大小应为3", 3, cache.size());
 
         // 等待第一个过期
         Thread.sleep(150);
-        // 等待清理任务执行（清理间隔500ms，但可能还没执行，手动触发一次）
+        // 等待清理任务执行（清理间隔500ms）
         Thread.sleep(600);
 
-        // 第一个应该被清理了
+        // key1 已过期（get 惰性移除），key2/key3 未过期应仍可获取
         Assert.assertNull("key1应已被清理", cache.get("key1"));
         Assert.assertNotNull("key2应还存在", cache.get("key2"));
         Assert.assertNotNull("key3应还存在", cache.get("key3"));

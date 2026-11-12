@@ -141,6 +141,50 @@ public interface Database {
                                  List<String> targetColumnNames);
 
     /**
+     * 生成列定义中的类型片段(目标方言), 输入为源端字段定义。
+     * 用于跨源 DDL 翻译与同构订正。
+     */
+    String formatPhysicalType(Field sourceDefinition);
+
+    /**
+     * 批量构建 ADD COLUMN 语句(跨源 DDL 同步使用)。
+     * 默认 MySQL/PostgreSQL/Kingbase 兼容语法; Oracle/SqlServer 等方言自行覆盖。
+     *
+     * @param targetInstance  目标连接实例
+     * @param targetTableName 目标表名(不含库名前缀)
+     * @param qualifiedName   带库名前缀的限定表名(方言自行决定用哪个)
+     * @param fields          新增列的源端字段定义(经 formatPhysicalType 翻译为目标方言类型)
+     * @return 可执行 DDL; 无法翻译时返回空串
+     */
+    default String buildAddColumnsSql(DatabaseConnectorInstance targetInstance, String targetTableName,
+                                      String qualifiedName, List<Field> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return "";
+        }
+        StringBuilder sql = new StringBuilder("ALTER TABLE ").append(qualifiedName);
+        for (Field field : fields) {
+            sql.append(" ADD COLUMN ").append(buildWithQuotation(field.getName()))
+                    .append(" ").append(formatPhysicalType(field));
+        }
+        return sql.toString();
+    }
+
+    /**
+     * 批量构建 DROP COLUMN 语句(跨源 DDL 同步使用)。
+     */
+    default String buildDropColumnsSql(DatabaseConnectorInstance targetInstance, String targetTableName,
+                                        String qualifiedName, List<String> columnNames) {
+        if (columnNames == null || columnNames.isEmpty()) {
+            return "";
+        }
+        StringBuilder sql = new StringBuilder("ALTER TABLE ").append(qualifiedName);
+        for (String name : columnNames) {
+            sql.append(" DROP COLUMN ").append(buildWithQuotation(name));
+        }
+        return sql.toString();
+    }
+
+    /**
      * 健康检查
      *
      * @return

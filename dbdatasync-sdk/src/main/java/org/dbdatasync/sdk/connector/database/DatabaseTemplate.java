@@ -6,6 +6,7 @@ package org.dbdatasync.sdk.connector.database;
 import org.dbdatasync.sdk.SdkException;
 import org.dbdatasync.sdk.connector.database.SqlLogMasker;
 import org.dbdatasync.sdk.connector.database.ds.SimpleConnection;
+import org.dbdatasync.sdk.observer.DatabaseExecuteObservers;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,8 +113,23 @@ public class DatabaseTemplate implements JdbcOperations {
     /**
      * If this variable is set to a non-negative value, it will be used for setting the
      * fetchSize property on statements used for query processing.
+     *
+     * <p>Wave31：默认 fetchSize 改为 1000（可用系统属性 {@code dbdatasync.jdbc.fetchSize}
+     * 覆盖，设为 -1 关闭）。此前默认 -1 等于从不设置，MySQL/SQL Server 驱动会整表逐行拉取、
+     * PG/Oracle 驱动按驱动默认批量，大数据量读取内存与往返都差；1000 对各 JDBC 驱动均为
+     * 安全值（不支持时驱动忽略），MySQL 流式读取仍可通过显式设为 {@link Integer#MIN_VALUE} 开启。</p>
      */
-    private int fetchSize = -1;
+    public static final int DEFAULT_FETCH_SIZE = resolveDefaultFetchSize();
+
+    /**
+     * 解析默认 fetchSize：系统属性 {@code dbdatasync.jdbc.fetchSize}（默认 1000）。
+     * 独立成方法便于测试与运行期动态解析。
+     */
+    static int resolveDefaultFetchSize() {
+        return Integer.getInteger("dbdatasync.jdbc.fetchSize", 1000);
+    }
+
+    private int fetchSize = DEFAULT_FETCH_SIZE;
 
     /**
      * If this variable is set to a non-negative value, it will be used for setting the
@@ -325,11 +341,13 @@ public class DatabaseTemplate implements JdbcOperations {
         Assert.notNull(action, "Callback object must not be null");
 
         Statement stmt = null;
+        long startNanos = System.nanoTime();
         try {
             stmt = connection.createStatement();
             applyStatementSettings(stmt);
             T result = action.doInStatement(stmt);
             handleWarnings(stmt);
+            notifyExecuted(getSql(action), stmt, startNanos);
             return result;
         } catch (SQLException ex) {
             // Release Connection early, to avoid potential connection pool deadlock
@@ -567,17 +585,49 @@ public class DatabaseTemplate implements JdbcOperations {
     // Methods dealing with prepared statements
     // -------------------------------------------------------------------------
 
+    /**
+     * 通知数据库执行观察者一次 SQL 执行成功（空实现先行判断，零观察者时零开销）。
+     *
+     * @param sql           SQL 文本
+     * @param statement     执行语句（用于提取行数）
+     * @param startNanos    执行开始纳秒时间戳
+     */
+    private void notifyExecuted(@Nullable String sql, Statement statement, long startNanos) {
+        if (DatabaseExecuteObservers.size() == 0) {
+            return;
+        }
+        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+        long rows = 0;
+        if (statement != null) {
+            try {
+                rows = statement.getUpdateCount();
+            } catch (SQLException e) {
+                // 行数取不到不阻塞通知
+            }
+        }
+        // source 取底层连接驱动类名（低依赖来源标识，上层观察者可由此拼接任务上下文）
+        String source = connection != null ? connection.getClass().getSimpleName() : "unknown";
+        // Wave24：把任务级上下文带进观察事件，慢 SQL 记录可以按任务聚合/过滤
+        String taskId = org.dbdatasync.sdk.context.TaskContextHolder.currentTaskId();
+        if (taskId != null) {
+            source = source + "|task=" + taskId;
+        }
+        DatabaseExecuteObservers.notifyExecuted(sql, source, elapsedMillis, rows);
+    }
+
     @Nullable private <T> T execute(PreparedStatementCreator psc, PreparedStatementCallback<T> action, boolean closeResources) throws DataAccessException {
 
         Assert.notNull(psc, "PreparedStatementCreator must not be null");
         Assert.notNull(action, "Callback object must not be null");
 
         PreparedStatement ps = null;
+        long startNanos = System.nanoTime();
         try {
             ps = psc.createPreparedStatement(connection);
             applyStatementSettings(ps);
             T result = action.doInPreparedStatement(ps);
             handleWarnings(ps);
+            notifyExecuted(getSql(psc), ps, startNanos);
             return result;
         } catch (SQLException ex) {
             // Release Connection early, to avoid potential connection pool deadlock

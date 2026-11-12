@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<div th:fragment="schemaHistory">
+<div class="ui-page">
+
+    <!-- 页面标题 -->
+    <div class="ui-page-head">
+        <div>
+            <h1 class="ui-page-title">结构变更（Schema History）</h1>
+            <p class="ui-page-desc">表级 DDL 的登记、人工确认与目标端应用记录；DDL 待确认时可自动挂起同表 DML，确认应用后按原顺序重放（Wave24/25）。</p>
+        </div>
+        <div class="hero-actions">
+            <button type="button" class="btn btn-outline" id="shRefreshBtn"><i class="fa fa-refresh"></i> 立即刷新</button>
+        </div>
+    </div>
+
+    <!-- 汇总指标 -->
+    <section class="kpi-grid" id="shKpiGrid">
+        <div class="kpi-card kpi-accent-blue">
+            <div class="kpi-top"><span class="kpi-label">DDL 总数</span><span class="kpi-icon"><i class="fa fa-database"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="shTotal">--</span><span class="kpi-unit">条</span></div>
+            <div class="kpi-foot">登记到 schema history 的全部记录</div>
+        </div>
+        <div class="kpi-card kpi-accent-amber">
+            <div class="kpi-top"><span class="kpi-label">待人工确认</span><span class="kpi-icon"><i class="fa fa-hand-paper-o"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="shPending">--</span><span class="kpi-unit">条</span></div>
+            <div class="kpi-foot" id="shPendingFoot">高风险类型（DROP/TRUNCATE/RENAME 等）</div>
+        </div>
+        <div class="kpi-card kpi-accent-green">
+            <div class="kpi-top"><span class="kpi-label">已应用</span><span class="kpi-icon"><i class="fa fa-check"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="shApplied">--</span><span class="kpi-unit">条</span></div>
+            <div class="kpi-foot" id="shConfirmedFoot">确认 -- · 需目标端 SQL --</div>
+        </div>
+        <div class="kpi-card kpi-accent-red">
+            <div class="kpi-top"><span class="kpi-label">被阻塞的表</span><span class="kpi-icon"><i class="fa fa-ban"></i></span></div>
+            <div class="kpi-main"><span class="kpi-value" id="shBlocked">--</span><span class="kpi-unit">张</span></div>
+            <div class="kpi-foot" id="shBlockedFoot">DDL 待确认时同表 DML 挂起</div>
+        </div>
+    </section>
+
+    <!-- 明细清单 -->
+    <section class="panel-card" style="margin-top:18px">
+        <div class="panel-head">
+            <div>
+                <h3 class="panel-title">DDL 明细</h3>
+                <div class="panel-sub">状态含义：NEEDS_TARGET_SQL 需提供目标端 SQL 后确认；CONFIRMED 已确认待应用；APPLIED 已写目标端；FAILED 应用失败。确认动作走 <code>/schema-history/confirm</code>，应急解除阻塞走 <code>/schema-history/unblock</code>。</div>
+            </div>
+        </div>
+        <div class="panel-body lh-table-wrap">
+            <table class="table lh-table">
+                <thead>
+                <tr>
+                    <th>序号 / ID</th>
+                    <th>时间</th>
+                    <th>任务</th>
+                    <th>表</th>
+                    <th>DDL 类型</th>
+                    <th>源端 SQL</th>
+                    <th>目标端 SQL</th>
+                    <th>状态</th>
+                    <th style="width:170px;">操作</th>
+                </tr>
+                </thead>
+                <tbody id="shRows">
+                <tr><td colspan="9" class="empty-state">读取中…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- 确认对话框 -->
+    <div class="modal fade" id="shConfirmModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h4 class="modal-title">确认并应用 DDL</h4>
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-item">
+                        <label class="form-label">目标端 SQL（跨方言表级 DDL 必填，留空则按源端语句原样应用）</label>
+                        <textarea id="shTargetSql" class="form-input" rows="4"
+                                  style="font-family:Consolas,Menlo,monospace;font-size:13px;"
+                                  placeholder="例如：ALTER TABLE t1 ADD COLUMN c2 INT"></textarea>
+                    </div>
+                    <div class="form-item mt-3">
+                        <label class="form-label">操作人（可选）</label>
+                        <input id="shOperator" class="form-input" type="text" placeholder="admin">
+                    </div>
+                    <div class="warn mt-3" id="shConfirmWarn">
+                        <b>注意：</b>确认后系统会立即向目标端执行该 DDL；DROP / TRUNCATE 类操作不可逆，请核对目标端 SQL。
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="shConfirmBtn"><i class="fa fa-check"></i> 确认并应用</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    #shKpiGrid { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+    @media (max-width:1000px) { #shKpiGrid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:560px) { #shKpiGrid { grid-template-columns:1fr; } }
+    .lh-table { min-width:1080px; font-size:12.5px; }
+    .lh-table th { white-space:nowrap; }
+    .lh-chip { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600; line-height:1.7; }
+    .lh-healthy { background:rgba(16,185,129,.14); color:#059669; }
+    .lh-warn { background:rgba(245,158,11,.16); color:#b45309; }
+    .lh-critical { background:rgba(239,68,68,.16); color:#dc2626; }
+    .lh-idle { background:rgba(100,116,139,.16); color:#64748b; }
+    .lh-mono { font-family:Consolas,Monaco,monospace; font-size:11px; color:var(--text-secondary); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    [data-theme="dark"] .lh-healthy { color:#6ee7b7; }
+    [data-theme="dark"] .lh-warn { color:#fcd34d; }
+    [data-theme="dark"] .lh-critical { color:#fca5a5; }
+    [data-theme="dark"] .lh-idle { color:#cbd5e1; }
+</style>
+
+<script>
+(function () {
+    'use strict';
+
+    var pendingId = null;
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
+    function fmtTime(ms) {
+        if (!ms) return '--';
+        try { return new Date(Number(ms)).toLocaleString('zh-CN', {hour12:false}); } catch (e) { return '--'; }
+    }
+
+    function statusChip(status) {
+        var s = String(status || '').toUpperCase();
+        if (s === 'APPLIED') return '<span class="lh-chip lh-healthy">已应用</span>';
+        if (s === 'CONFIRMED') return '<span class="lh-chip lh-warn">已确认待应用</span>';
+        if (s === 'NEEDS_TARGET_SQL') return '<span class="lh-chip lh-critical">需目标端SQL</span>';
+        if (s === 'FAILED') return '<span class="lh-chip lh-critical">应用失败</span>';
+        return '<span class="lh-chip lh-idle">' + esc(status || '待确认') + '</span>';
+    }
+
+    function loadSummary() {
+        doPoster('/schema-history/summary', {}, function (response) {
+            var s = response && response.success === true ? response.data : null;
+            if (!s) { return; }
+            $('#shTotal').text(s.total == null ? '--' : s.total);
+            $('#shPending').text((s.pending || 0) + (s.needsTargetSql ? ' + ' + s.needsTargetSql + ' 需SQL' : ''));
+            $('#shApplied').text(s.applied == null ? '--' : s.applied);
+            $('#shConfirmedFoot').text('确认 ' + (s.confirmed || 0) + ' · 需目标端 SQL ' + (s.needsTargetSql || 0));
+            $('#shBlocked').text((s.blockedTables || []).length);
+            $('#shBlockedFoot').text('挂起 DML 会按序重放');
+        });
+    }
+
+    function loadList() {
+        doPoster('/schema-history/list', {}, function (response) {
+            var $body = $('#shRows');
+            if (!response || response.success !== true) {
+                $body.html('<tr><td colspan="9" class="empty-state">schema history 加载失败</td></tr>');
+                return;
+            }
+            var rows = response.data || [];
+            if (!rows.length) {
+                $body.html('<tr><td colspan="9" class="empty-state">暂无结构变更记录；表级 DDL 触发后自动登记到这里</td></tr>');
+                return;
+            }
+            $body.html(rows.map(function (v) {
+                var canConfirm = v.status !== 'APPLIED' && v.status !== 'CONFIRMED';
+                var canUnblock = v.status === 'NEEDS_TARGET_SQL' || v.status === 'FAILED';
+                return '<tr>'
+                    + '<td class="lh-mono">' + esc(v.id || v.seq || '--') + '</td>'
+                    + '<td class="lh-mono">' + fmtTime(v.eventTime || v.createTime) + '</td>'
+                    + '<td>' + esc(v.metaId || v.taskId || '--') + '</td>'
+                    + '<td><strong>' + esc(v.tableName || v.table || '--') + '</strong></td>'
+                    + '<td>' + esc(v.ddlType || v.type || '--') + '</td>'
+                    + '<td><div class="lh-mono" title="' + esc(v.sourceSql || v.sql || '') + '">' + esc(v.sourceSql || v.sql || '--') + '</div></td>'
+                    + '<td><div class="lh-mono" title="' + esc(v.targetSql || '') + '">' + esc(v.targetSql || '—') + '</div></td>'
+                    + '<td>' + statusChip(v.status) + '</td>'
+                    + '<td>'
+                    + (canConfirm ? '<button type="button" class="btn btn-outline" style="padding:3px 10px;font-size:12px;" data-confirm-id="' + esc(v.id || '') + '"><i class="fa fa-check"></i> 确认</button> ' : '')
+                    + (canUnblock ? '<button type="button" class="btn btn-outline" style="padding:3px 10px;font-size:12px;" data-unblock-table="' + esc(v.tableName || v.table || '') + '"><i class="fa fa-unlock"></i> 解除阻塞</button>' : '')
+                    + (!canConfirm && !canUnblock ? '<span class="lh-mono">无</span>' : '')
+                    + '</td>'
+                    + '</tr>';
+            }).join(''));
+        });
+    }
+
+    function refreshAll() {
+        loadSummary();
+        loadList();
+    }
+
+    $('#shRefreshBtn').off('click').on('click', refreshAll);
+
+    $(document).off('click', '[data-confirm-id]').on('click', '[data-confirm-id]', function () {
+        pendingId = $(this).attr('data-confirm-id');
+        $('#shTargetSql').val('');
+        $('#shOperator').val('');
+        $('#shConfirmModal').modal('show');
+    });
+
+    $('#shConfirmBtn').off('click').on('click', function () {
+        if (!pendingId) { return; }
+        doPoster('/schema-history/confirm', {
+            id: pendingId,
+            targetSql: $('#shTargetSql').val().trim(),
+            operator: $('#shOperator').val().trim()
+        }, function (response) {
+            $('#shConfirmModal').modal('hide');
+            if (window.bootGrowl) {
+                bootGrowl(response && response.success === true ? 'DDL 已确认并应用，同表挂起 DML 将按序重放'
+                        : (response && response.message) || '确认失败',
+                        response && response.success === true ? 'success' : 'danger');
+            }
+            refreshAll();
+        });
+    });
+
+    $(document).off('click', '[data-unblock-table]').on('click', '[data-unblock-table]', function () {
+        var table = $(this).attr('data-unblock-table');
+        if (!table || !window.confirm('确认解除表「' + table + '」的 DML 阻塞？DDL 不会被执行，请谨慎使用。')) { return; }
+        doPoster('/schema-history/unblock', {table: table}, function (response) {
+            if (window.bootGrowl) {
+                bootGrowl(response && response.success === true ? '已解除阻塞' : (response && response.message) || '解除失败',
+                        response && response.success === true ? 'success' : 'danger');
+            }
+            refreshAll();
+        });
+    });
+
+    refreshAll();
+})();
+</script>
+</div>
+</html>

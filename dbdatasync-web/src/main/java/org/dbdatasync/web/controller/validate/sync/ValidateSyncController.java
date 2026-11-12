@@ -5,6 +5,7 @@ package org.dbdatasync.web.controller.validate.sync;
 
 import org.dbdatasync.biz.TableGroupService;
 import org.dbdatasync.biz.ValidateSyncService;
+import org.dbdatasync.biz.util.ReconciliationCsvBuilder;
 import org.dbdatasync.biz.vo.RestResult;
 import org.dbdatasync.biz.vo.ValidateSyncTaskVO;
 import org.dbdatasync.common.util.StringUtil;
@@ -23,6 +24,18 @@ import org.springframework.web.bind.annotation.ResponseBody;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -323,6 +336,107 @@ public class ValidateSyncController extends BaseController {
             logger.error(e.getLocalizedMessage(), e);
             return RestResult.restFail(e.getMessage());
         }
+    }
+
+    /**
+     * 导出对账报告 CSV（只读，不修改任何数据）。
+     */
+    @GetMapping("/exportReport")
+    public void exportReport(@RequestParam("taskId") String taskId,
+                             @RequestParam(value = "detailStatus", required = false) String detailStatus,
+                             @RequestParam(value = "detailId", required = false) String detailId,
+                             HttpServletResponse response) throws IOException {
+        try {
+            // Wave30：两遍分页扫描取数，不再一次性装载全量明细 List，也不再有 5000 行静默截断
+            ReconciliationCsvBuilder.DetailSource source = sink ->
+                    validateSyncService.scanResultDetails(taskId, detailStatus, detailId, sink);
+            String fileName = "对账报告_" + taskId + "_"
+                    + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")) + ".csv";
+            writeCsvResponse(response, fileName, taskId, source);
+        } catch (Exception e) {
+            logger.error("导出对账报告失败, taskId=" + taskId, e);
+            // 响应尚未提交时改写为纯文本，避免浏览器把错误页当成 CSV 下载；已写出则只记日志。
+            if (!response.isCommitted()) {
+                response.setContentType("text/plain;charset=UTF-8");
+                response.setCharacterEncoding("UTF-8");
+                String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                OutputStream os = response.getOutputStream();
+                os.write(("导出失败：" + message).getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            }
+        }
+    }
+
+    /**
+     * 差异条目单条重推。
+     */
+    @PostMapping("/reviseDiffItem")
+    @ResponseBody
+    public RestResult reviseDiffItem(@RequestParam("taskId") String taskId,
+                                     @RequestParam("id") String detailId,
+                                     @RequestParam("itemIndex") int itemIndex) {
+        try {
+            return RestResult.restSuccess(validateSyncService.reviseDiffItem(taskId, detailId, itemIndex));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 差异条目批量重推（单个明细内多条目勾选）。
+     */
+    @PostMapping("/reviseDiffItems")
+    @ResponseBody
+    public RestResult reviseDiffItems(@RequestParam("taskId") String taskId,
+                                     @RequestParam("id") String detailId,
+                                     @RequestParam("itemIndexes") String itemIndexes) {
+        try {
+            return RestResult.restSuccess(validateSyncService.reviseDiffItems(taskId, detailId, parseIndexes(itemIndexes)));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 将逗号分隔的差异序号解析为下标列表；空白跳过，非数字抛可读异常。
+     */
+    private List<Integer> parseIndexes(String raw) {
+        List<Integer> indexes = new ArrayList<>();
+        if (raw == null || raw.trim().isEmpty()) {
+            return indexes;
+        }
+        String[] tokens = raw.split(",");
+        for (String token : tokens) {
+            String t = token.trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            try {
+                indexes.add(Integer.parseInt(t));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("差异序号格式非法：" + t);
+            }
+        }
+        return indexes;
+    }
+
+    /**
+     * 写 CSV 下载流：响应头 + UTF-8 BOM + 流式写出（不再二次拼接/转义，不再整块 getBytes）。
+     */
+    private void writeCsvResponse(HttpServletResponse response, String fileName, String taskId,
+                                  ReconciliationCsvBuilder.DetailSource source) throws IOException {
+        response.setContentType("application/octet-stream;charset=UTF-8");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Content-Disposition", "attachment;filename=" + URLEncoder.encode(fileName, "UTF-8"));
+        OutputStream os = response.getOutputStream();
+        os.write(0xEF);
+        os.write(0xBB);
+        os.write(0xBF);
+        Writer writer = new BufferedWriter(new OutputStreamWriter(os, StandardCharsets.UTF_8));
+        ReconciliationCsvBuilder.writeTo(writer, taskId, source, System.currentTimeMillis());
+        writer.flush();
     }
 
 }

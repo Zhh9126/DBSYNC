@@ -109,6 +109,42 @@
                         <span class="text-muted">注：异步模式仅在批次大小（batchNum）&lt; 单批读取数（readNum）时并发拆分生效。</span>
                     </div>
                 </div>
+                <div id="mapping_fullSplit" class="mt-3">
+                    <div class="text-md text-gray-700 font-weight-bold">
+                        <i class="fa fa-tasks text-primary"></i> 全量分片并发读
+                        <span class="badge badge-info text-xs align-middle">对标 DataX splitPk</span>
+                    </div>
+                    <div class="row mt-2">
+                        <div class="col-md-5">
+                            <label class="text-xs text-gray-500 mb-1">分片键（源表列，建议整型主键/索引列）</label>
+                            <input type="text" class="form-control form-control-sm" id="fullSplitKey"
+                                   placeholder="如 id，留空表示不启用分片" />
+                        </div>
+                        <div class="col-md-2">
+                            <label class="text-xs text-gray-500 mb-1">切分方式</label>
+                            <select class="form-control form-control-sm" id="fullSplitMode">
+                                <option value="value">值域均分</option>
+                                <option value="sample">采样均分</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="text-xs text-gray-500 mb-1">分片数（&gt;1 启用并发）</label>
+                            <input type="number" class="form-control form-control-sm" id="fullSplitCount" min="2" max="1024"
+                                   placeholder="如 4" />
+                        </div>
+                        <div class="col-md-2">
+                            <label class="text-xs text-gray-500 mb-1">采样点数（可选）</label>
+                            <input type="number" class="form-control form-control-sm" id="fullSplitSampleCap" min="2" max="4096"
+                                   placeholder="默认 64" />
+                        </div>
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">
+                        <i class="fa fa-info-circle text-primary"></i> 全量同步时按分片键切分为多个区间并发读取（游标分页保持稳定）。
+                        值域均分：按 MIN/MAX 等宽切，适合单调连续数值键；采样均分：按行位置采样断点切，按行均匀、抗倾斜，适合 uuid / 字符串 / 日期 / 倾斜数值键。<br/>
+                        分片数超过执行线程数时自动收敛；采样探测失败自动降级值域均分；分片键非法或值域探测失败时自动降级为串行。<br/>
+                        <span class="text-muted">适用大数据量整表搬迁场景，可显著缩短全量同步耗时。</span>
+                    </div>
+                </div>
                 <input type="hidden" name="params" id="mappingParams" th:value="${paramsJson}" />
             </div>
 

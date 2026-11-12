@@ -413,7 +413,7 @@ public class H2StorageService extends AbstractStorageService {
         }
         sql.append(DatabaseConstant.SQLITE_PAGE_SQL);
         args.add(query.getPageSize());
-        args.add((query.getPageNum() - 1) * query.getPageSize());
+        args.add(((long) query.getPageNum() - 1L) * (long) query.getPageSize());
         return sql.toString();
     }
 

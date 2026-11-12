@@ -161,4 +161,40 @@ public class ConfigConstant {
      */
     public static final int PAGE_SIZE= 1000;
 
+    /**
+     * 全量分片并发读配置键（放 Mapping.params）
+     * <ul>
+     *     <li>{@value #FULL_SPLIT_KEY}：分片键列名（须为源表真实列，建议整型主键/索引列）</li>
+     *     <li>{@value #FULL_SPLIT_COUNT}：分片数（&gt;1 才启用并发，1 = 退化为串行）</li>
+     * </ul>
+     * 未配置时走原串行全量同步，存量任务零影响。
+     */
+    public static final String FULL_SPLIT_KEY = "fullSplitKey";
+    public static final String FULL_SPLIT_COUNT = "fullSplitCount";
+    /**
+     * 全量分片切分方式（放 Mapping.params，仅 Wave32 之后生效）
+     * <ul>
+     *     <li>{@code value}：值域算术均分（默认，Wave4 行为，存量任务零影响）——按 MIN/MAX 等宽切，适合单调连续数值键；</li>
+     *     <li>{@code sample}：采样均分——按 {@code ORDER BY 分片键 LIMIT n,1} 采样断点切，按行均分，
+     *         适合 uuid / 字符串 / 日期 / 倾斜数值键（断点原值参数化绑定，不走 long 转换）。</li>
+     * </ul>
+     * 未配置或非法值回退 value 模式。
+     */
+    public static final String FULL_SPLIT_MODE = "fullSplitMode";
+    /**
+     * 采样均分采样点数上限（放 Mapping.params，仅 sample 模式生效；默认 64，需 &gt;1 否则按 64）
+     * <p>每增加一个采样点 = 1 次 {@code ORDER BY 分片键 LIMIT n,1} 索引点查。</p>
+     */
+    public static final String FULL_SPLIT_SAMPLE_CAP = "fullSplitSampleCap";
+
+    /**
+     * 迁移限速配置键（放 Mapping.params，仅当值 &gt; 0 时写入，0/未配置 = 不限速，存量任务零影响）
+     * <ul>
+     *     <li>{@value #RATE_RECORDS_PER_SECOND}：每秒最多迁移行数</li>
+     *     <li>{@value #RATE_BYTES_PER_SECOND}：每秒最多迁移字节数</li>
+     * </ul>
+     */
+    public static final String RATE_RECORDS_PER_SECOND = "rateRecordsPerSecond";
+    public static final String RATE_BYTES_PER_SECOND = "rateBytesPerSecond";
+
 }

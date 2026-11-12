@@ -7,6 +7,7 @@ import net.sf.jsqlparser.statement.alter.Alter;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.mysql.cdc.MySQLListener;
+import org.dbdatasync.connector.mysql.cdc.trigger.MySQLTriggerLogListener;
 import org.dbdatasync.connector.mysql.constant.MySQLConstant;
 import org.dbdatasync.connector.mysql.schema.MySQLSchemaResolver;
 import org.dbdatasync.connector.mysql.storage.MySQLStorageService;
@@ -77,6 +78,11 @@ public class MySQLConnector extends AbstractDatabaseConnector {
 
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new MySQLListener();
+        }
+
+        // Wave28：Trigger CDC 兜底捕获（免 binlog；云托管账号无 REPLICATION 权限等场景）
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new MySQLTriggerLogListener();
         }
         return null;
     }
@@ -363,8 +369,17 @@ public class MySQLConnector extends AbstractDatabaseConnector {
             String regex = "(?i)(ALTER\\s+TABLE\\s+)(?:`[^`]+`\\.)?(?:`)?" + java.util.regex.Pattern.quote(tableName) + "(?:`)?";
 
             // 替换为：捕获组1 + 新库名 + . + 表名
-            String replacement = "$1" + catalog + "." + tableName;
-            return sql.replaceFirst(regex, replacement);
+            String replacement = "$1" + java.util.regex.Matcher.quoteReplacement(catalog + "." + tableName);
+            String rewritten = sql.replaceFirst(regex, replacement);
+            if (!rewritten.equals(sql)) {
+                return rewritten;
+            }
+            // Wave32：DDLParserImpl 把目标表名加上反引号后，旧正则对 `table` 形态
+            // 匹配不上，replaceFirst 会静默返回原 SQL，导致 SQL 残留源库名前缀
+            // （ALTER TABLE dbsync_all_src.`t_order` ... → bad SQL grammar）。
+            // 兜底用宽松匹配强制剥掉 ALTER TABLE 后的 <库名.><表名> 再拼目标库。
+            String loose = "(?i)(ALTER\\s+TABLE\\s+)(?:(?:`[^`]+`|[A-Za-z0-9_$]+)\\s*\\.\\s*)?(?:`[^`]+`|[A-Za-z0-9_$]+)";
+            return sql.replaceFirst(loose, replacement);
         }
         return sql;
     }

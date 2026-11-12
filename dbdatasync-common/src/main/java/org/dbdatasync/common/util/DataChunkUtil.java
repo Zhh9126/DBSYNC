@@ -57,25 +57,39 @@ public class DataChunkUtil {
 
         byte[] dataBytes = data.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         int totalSize = dataBytes.length;
-        int totalChunks = (int) Math.ceil((double) totalSize / chunkSize);
 
         List<DataChunk> chunks = new ArrayList<>();
         String chunkId = generateChunkId();
 
-        for (int i = 0; i < totalChunks; i++) {
-            int start = i * chunkSize;
+        // 按字节切分时必须落在 UTF-8 字符边界上: 若切点位于多字节字符(中文/emoji)中间,
+        // 将其起始 continuation 字节(0b10xxxxxx)让渡给下一分片, 否则 String 解码产生 U+FFFD 且不可逆
+        int start = 0;
+        while (start < totalSize) {
             int end = Math.min(start + chunkSize, totalSize);
+            // 回退到字符边界: continuation byte 不能作为分片起点
+            while (end > start && end < totalSize && (dataBytes[end] & 0xC0) == 0x80) {
+                end--;
+            }
+            if (end <= start) {
+                // 理论不可达(单字符最长6字节 << MIN_CHUNK_SIZE), 防御性兜底
+                end = Math.min(start + chunkSize, totalSize);
+            }
             byte[] chunkBytes = new byte[end - start];
             System.arraycopy(dataBytes, start, chunkBytes, 0, end - start);
 
             DataChunk chunk = new DataChunk();
             chunk.setChunkId(chunkId);
-            chunk.setChunkIndex(i);
-            chunk.setTotalChunks(totalChunks);
+            chunk.setChunkIndex(chunks.size());
+            chunk.setTotalChunks(0);
             chunk.setData(new String(chunkBytes, java.nio.charset.StandardCharsets.UTF_8));
             chunk.setSize(chunkBytes.length);
-
             chunks.add(chunk);
+
+            start = end;
+        }
+        final int totalChunks = chunks.size();
+        for (DataChunk chunk : chunks) {
+            chunk.setTotalChunks(totalChunks);
         }
 
         logger.info("数据分片完成，总大小: {}KB, 分片数: {}, 分片大小: {}KB", totalSize / 1024, totalChunks, chunkSize / 1024);

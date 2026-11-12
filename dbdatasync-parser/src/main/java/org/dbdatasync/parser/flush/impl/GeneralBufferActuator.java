@@ -36,6 +36,9 @@ import org.dbdatasync.plugin.enums.ProcessEnum;
 import org.dbdatasync.plugin.impl.IncrementPluginContext;
 import org.dbdatasync.sdk.config.DDLConfig;
 import org.dbdatasync.sdk.connector.ConnectorInstance;
+import org.dbdatasync.sdk.connector.database.Database;
+import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
+import org.dbdatasync.sdk.model.ValidateSyncTask;
 import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
 import org.dbdatasync.sdk.enums.ChangedEventTypeEnum;
 import org.dbdatasync.sdk.model.ChangedOffset;
@@ -150,6 +153,16 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
 
     @Override
     public void pull(WriterResponse response) {
+        // Wave24：HA fencing 栅栏。旧节点租约被接管后 token 失效，禁止继续写入造成双写
+        String fenceMetaId = response.getChangedOffset() == null ? null
+                : response.getChangedOffset().getMetaId();
+        if (!org.dbdatasync.sdk.spi.FencingTokens.isValid(fenceMetaId)) {
+            logger.error("fencing token 已失效（租约被接管/过期），拒绝陈旧节点写入: metaId={}", fenceMetaId);
+            org.dbdatasync.sdk.observer.ReplicationEventObservers.notifyDeadLetter(fenceMetaId,
+                    "PERMANENT", "HA fencing token 失效，本节点写入被拒绝");
+            response.getDataList().clear();
+            return;
+        }
         Meta meta = metaProfile.getMeta(response.getChangedOffset().getMetaId());
         if (meta == null) {
             return;
@@ -171,9 +184,24 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
                 pickers.forEach(picker->distributeTableGroup(response, mapping, picker, picker.getSourceFields(), false));
                 break;
             case ROW:
-                pickers.forEach(picker->distributeTableGroup(response, mapping, picker, picker.getTableGroup().getSourceTable().getColumn(), true));
-                if (shouldPublishOffsetRefresh()) {
-                    publishOffsetRefresh(response.getChangedOffset());
+                // Wave24：登记本轮待提交位点，由目标库事务内的位点表写入消费（强一致收敛）
+                if (org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.isEnabled()
+                        && response.getChangedOffset() != null) {
+                    ChangedOffset off = response.getChangedOffset();
+                    org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.begin(
+                            new org.dbdatasync.sdk.checkpoint.CheckpointRecord(
+                                    off.getMetaId(), off.getNextFileName(), String.valueOf(off.getPosition()),
+                                    off.getSeq(), off.getEventTime(), off.getEventTimeSource(),
+                                    off.getIdempotencyKey()));
+                }
+                try {
+                    pickers.forEach(picker->distributeTableGroup(response, mapping, picker, picker.getTableGroup().getSourceTable().getColumn(), true));
+                    if (shouldPublishOffsetRefresh()) {
+                        // 文件 checkpoint 仍双写，作为恢复兼容与运维备份；权威位点为目标库表
+                        publishOffsetRefresh(response.getChangedOffset());
+                    }
+                } finally {
+                    org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.end();
                 }
                 break;
             default:
@@ -194,6 +222,20 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
      */
     protected void publishOffsetRefresh(ChangedOffset changedOffset) {
         if (changedOffset != null) {
+            // Wave23：数据写入成功后，先原子提交「位点 + 幂等键」，再刷新 listener 位点
+            org.dbdatasync.sdk.checkpoint.TransactionalCheckpoint cp =
+                    org.dbdatasync.sdk.checkpoint.Checkpoints.coordinator();
+            if (cp != null) {
+                try {
+                    cp.commit(new org.dbdatasync.sdk.checkpoint.CheckpointRecord(
+                            changedOffset.getMetaId(), changedOffset.getNextFileName(),
+                            String.valueOf(changedOffset.getPosition()), changedOffset.getSeq(),
+                            changedOffset.getEventTime(), changedOffset.getEventTimeSource(),
+                            changedOffset.getIdempotencyKey()));
+                } catch (Exception e) {
+                    logger.warn("commit transactional checkpoint failed: {}", e.getMessage());
+                }
+            }
             applicationContext.publishEvent(new RefreshOffsetEvent(applicationContext, changedOffset));
         }
     }
@@ -215,6 +257,36 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
     }
 
     private void distributeTableGroup(WriterResponse response, Mapping mapping, TableGroupPicker tableGroupPicker, List<Field> sourceFields, boolean enableFilter) {
+        // Wave24：DDL-DML 顺序一致性守卫。表级 DDL 未确认/未应用时，同表后续 DML
+        // 复制到独立快照后挂起，确认应用后按原顺序重放，避免按旧 schema 写入。
+        if (enableDdlDmlOrderGuard() && org.dbdatasync.parser.ddl.DdlSyncOrchestrator.current()
+                .isTableBlocked(response.getTableName())) {
+            WriterResponse snapshot = new WriterResponse();
+            snapshot.setTypeEnum(response.getTypeEnum());
+            snapshot.setChangedOffset(response.getChangedOffset());
+            snapshot.setTableName(response.getTableName());
+            snapshot.setEvent(response.getEvent());
+            snapshot.setSql(response.getSql());
+            snapshot.setTraceId(response.getTraceId());
+            List<List<Object>> rowsCopy = new ArrayList<>(response.getDataList());
+            for (List<Object> row : rowsCopy) {
+                snapshot.addData(row);
+            }
+            boolean accepted = org.dbdatasync.parser.ddl.DdlSyncOrchestrator.current().suspendDml(
+                    response.getTableName(),
+                    () -> distributeTableGroup(snapshot, mapping, tableGroupPicker, sourceFields, enableFilter));
+            if (accepted) {
+                logger.warn("表 {} 存在未确认 DDL，挂起 {} 条 DML 等待确认后按序重放",
+                        response.getTableName(), rowsCopy.size());
+            } else {
+                logger.error("表 {} 挂起队列已满，本批 {} 条 DML 未能写入（需尽快确认 DDL）",
+                        response.getTableName(), rowsCopy.size());
+                org.dbdatasync.sdk.observer.ReplicationEventObservers.notifyDeadLetter(
+                        mapping.getMetaId(), "PERMANENT",
+                        "DDL 未确认且挂起队列已满，表 " + response.getTableName() + " 的 DML 被拒绝");
+            }
+            return;
+        }
         // 1、映射字段
         ConnectorConfig sourceConfig = getConnectorConfig(mapping.getSourceConnectorId());
         ConnectorService sourceConnector = connectorFactory.getConnectorService(sourceConfig.getConnectorType());
@@ -252,19 +324,56 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
         pluginFactory.process(context, ProcessEnum.CONVERT);
 
         // 4、批量执行同步
-        Result result = parserComponent.writeBatch(context, getExecutor());
+        // Wave24：设置任务级上下文（线程池子任务由 ParserComponentImpl 显式透传），
+        // 并在同一观测点采集大事务批写耗时/行数分布。
+        Meta taskMeta = metaProfile.getMeta(mapping.getMetaId());
+        String taskId = taskMeta != null ? taskMeta.getTaskId() : mapping.getId();
+        org.dbdatasync.sdk.context.TaskContextHolder.set(taskId);
+        long batchStartNanos = System.nanoTime();
+        Result result;
+        try {
+            result = parserComponent.writeBatch(context, getExecutor());
+        } finally {
+            org.dbdatasync.sdk.context.TaskContextHolder.clear();
+            org.dbdatasync.sdk.profile.BatchWriteProfiler.instance().record(targetDataList.size(),
+                    (System.nanoTime() - batchStartNanos) / 1_000_000L);
+        }
 
         // 5、持久化同步结果
         result.setTableGroupId(tableGroup.getId());
         result.setTargetTableGroupName(context.getTargetTable().getName());
         result.setMetaId(mapping.getMetaId());
         result.setEvent(response.getEvent());
+        if (response.getChangedOffset() != null) {
+            result.setReplayId(response.getChangedOffset().getReplayId());
+        }
         ConnectorConfig targetConfig = getConnectorConfig(mapping.getTargetConnectorId());
         ConnectorService targetConnectorService = connectorFactory.getConnectorService(targetConfig);
         flushStrategy.flushIncrementData(result, targetConnectorService.getSchemaResolver(), tableGroupPicker.getTargetFieldMap());
 
         // 6、执行后置处理
         pluginFactory.process(context, ProcessEnum.AFTER);
+    }
+
+    /** Wave24：DDL-DML 顺序守卫开关（默认开启，配置不可读时保守开启） */
+    private boolean enableDdlDmlOrderGuard() {
+        try {
+            org.dbdatasync.parser.model.SystemConfig sc = profileComponent.getSystemConfig();
+            return sc == null || sc.isEnableDdlDmlOrderGuard();
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    /** Wave24：schema history 落盘目录 */
+    private String schemaHistoryDir() {
+        try {
+            org.dbdatasync.parser.model.SystemConfig sc = profileComponent.getSystemConfig();
+            return sc == null || StringUtil.isBlank(sc.getSchemaHistoryDir())
+                    ? "data/schema-history" : sc.getSchemaHistoryDir();
+        } catch (Exception e) {
+            return "data/schema-history";
+        }
     }
 
     private void setRsaConfig(IncrementPluginContext context) {
@@ -279,6 +388,18 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
      */
     private void parseDDl(WriterResponse response, Mapping mapping, TableGroup tableGroup) {
         try {
+            // DDL 风险分级策略: off=完全关闭; add_only=仅新增字段自动同步(改类型/删列/改名需人工确认);
+            // all=全部 ALTER 自动同步(默认, 保持历史行为)
+            String policy = "all";
+            try {
+                org.dbdatasync.parser.model.SystemConfig sc = profileComponent.getSystemConfig();
+                policy = sc == null || StringUtil.isBlank(sc.getDdlSyncPolicy()) ? "all" : sc.getDdlSyncPolicy().trim().toLowerCase();
+            } catch (Exception ignored) {
+            }
+            if ("off".equals(policy)) {
+                logger.info("DDL 同步策略为 off, 跳过 DDL: {}", response.getSql());
+                return;
+            }
             ConnectorConfig sConnConfig = getConnectorConfig(mapping.getSourceConnectorId());
             ConnectorConfig tConnConfig = getConnectorConfig(mapping.getTargetConnectorId());
             String sConnType = sConnConfig.getConnectorType();
@@ -287,8 +408,60 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             ConnectorInstance tConnectorInstance = connectorFactory.connect(instanceId);
             ConnectorService connectorService = connectorFactory.getConnectorService(tConnType);
             DDLConfig targetDDLConfig = ddlParser.parse(tConnectorInstance, connectorService, tableGroup, response.getSql());
-            // 1.生成目标表执行SQL(暂支持同源)
-            if (mapping.getListener().isEnableDDL() && StringUtil.equals(sConnType, tConnType)) {
+            // Wave24：表级 DDL 入 schema history，并按开关自动同步；高风险类型仍须人工确认
+            org.dbdatasync.sdk.enums.DDLOperationEnum tableLevel =
+                    org.dbdatasync.parser.ddl.DDLStatementClassifier.classifyTableLevel(response.getSql());
+            if (tableLevel != null) {
+                org.dbdatasync.parser.ddl.SchemaHistory.current().configure(schemaHistoryDir());
+                boolean autoSync = profileComponent.getSystemConfig() != null
+                        && profileComponent.getSystemConfig().isEnableDdlAutoSync();
+                final ConnectorInstance ddlInstance = tConnectorInstance;
+                org.dbdatasync.parser.ddl.DdlSyncOrchestrator.DdlExecutor executor = (targetSql, operation) -> {
+                    DDLConfig cfg = new DDLConfig();
+                    cfg.setSql(targetSql);
+                    Result ddlResult = connectorFactory.writerDDL(ddlInstance, cfg);
+                    if (ddlResult.getError().length() > 0 || CollectionUtils.isEmpty(ddlResult.getSuccessData())) {
+                        throw new IllegalStateException("目标端 DDL 执行失败: " + ddlResult.getError());
+                    }
+                    return "writerDDL applied";
+                };
+                long eventTime = response.getChangedOffset() == null ? 0L
+                        : response.getChangedOffset().getEventTime();
+                org.dbdatasync.parser.ddl.SchemaHistory.Entry entry =
+                        org.dbdatasync.parser.ddl.DdlSyncOrchestrator.current().record(
+                                mapping.getMetaId(), response.getTableName(), tableLevel,
+                                response.getSql(), null, eventTime, autoSync,
+                                StringUtil.equals(sConnType, tConnType), executor);
+                logger.warn("表级 DDL 已登记 schema history: id={}, status={}, operation={}, sql={}",
+                        entry.getId(), entry.getStatus(), tableLevel, response.getSql());
+            } else {
+                // Wave32：列级 ALTER（ADD/MODIFY COLUMN）此前完全不入账，
+                // 导致结构变更页恒 0；这里按「已处理」登记，不阻塞该表 DML。
+                org.dbdatasync.parser.ddl.SchemaHistory.current().configure(schemaHistoryDir());
+                long columnEventTime = response.getChangedOffset() == null ? 0L
+                        : response.getChangedOffset().getEventTime();
+                org.dbdatasync.parser.ddl.SchemaHistory.current().recordEvent(
+                        mapping.getMetaId(), response.getTableName(), "ALTER_COLUMN",
+                        response.getSql(),
+                        targetDDLConfig == null ? "" : targetDDLConfig.getSql(),
+                        columnEventTime,
+                        org.dbdatasync.parser.ddl.SchemaHistory.STATUS_APPLIED,
+                        "列级 DDL 已登记（目标端按 ddlSyncPolicy 处理）");
+            }
+            if ("add_only".equals(policy) && targetDDLConfig.getDdlOperationEnum() != null
+                    && targetDDLConfig.getDdlOperationEnum() != org.dbdatasync.sdk.enums.DDLOperationEnum.ALTER_ADD) {
+                logger.warn("DDL 风险策略为 add_only, 拦截非新增字段变更({}), 请人工确认后在目标端执行: {}",
+                        targetDDLConfig.getDdlOperationEnum(), response.getSql());
+                return;
+            }
+            // 1.生成目标表执行SQL: 同源直接回放; 跨源按目标方言重建(列类型经 formatPhysicalType 翻译)
+            if (!StringUtil.equals(sConnType, tConnType)) {
+                // 跨源: 源端 DDL 已生效, 先刷新源表列定义, 再用源列定义翻译成目标方言 DDL
+                updateTableColumn(mapping, ConnectorInstanceUtil.SOURCE_SUFFIX, tableGroup.getSourceTable());
+                String crossTypeSql = buildCrossTypeDdl(tConnectorInstance, connectorService, tableGroup, targetDDLConfig);
+                targetDDLConfig.setSql(crossTypeSql);
+            }
+            if (mapping.getListener().isEnableDDL() && StringUtil.isNotBlank(targetDDLConfig.getSql())) {
                 Result result = connectorFactory.writerDDL(tConnectorInstance, targetDDLConfig);
                 // 2.持久化增量事件数据
                 result.setTableGroupId(tableGroup.getId());
@@ -317,6 +490,106 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             }
         } catch (Exception e) {
             logger.error(e.getMessage(), e);
+            // Wave32：DDL 执行失败也要如实入账，不能只打日志让账本一片空白。
+            try {
+                org.dbdatasync.parser.ddl.SchemaHistory.current().configure(schemaHistoryDir());
+                org.dbdatasync.parser.ddl.SchemaHistory.current().recordEvent(
+                        mapping == null ? "" : mapping.getMetaId(),
+                        response == null ? "" : response.getTableName(),
+                        "DDL_ERROR",
+                        response == null ? "" : response.getSql(),
+                        "", 0L,
+                        org.dbdatasync.parser.ddl.SchemaHistory.STATUS_FAILED,
+                        "目标端 DDL 执行失败: " + e.getMessage());
+            } catch (Exception ignored) {
+                logger.warn("persist failed schema history entry error: {}", ignored.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 跨源 DDL 重建: 源端 ALTER 已生效, 依据源表最新列定义 + 目标连接器方言能力,
+     * 生成目标端等价 DDL(列类型经目标方言 formatPhysicalType 翻译)。
+     * 仅支持目标为数据库类连接器; 不支持的操作(如跨源重命名)返回空串跳过执行。
+     */
+    private String buildCrossTypeDdl(ConnectorInstance tConnectorInstance, ConnectorService connectorService,
+                                     TableGroup tableGroup, DDLConfig ddlConfig) {
+        if (ddlConfig == null || ddlConfig.getDdlOperationEnum() == null) {
+            return StringUtil.EMPTY;
+        }
+        if (!(connectorService instanceof Database)) {
+            return StringUtil.EMPTY;
+        }
+        Database database = (Database) connectorService;
+        String tableName = tableGroup.getTargetTable().getName();
+        // 限定名: PG/金仓系按 schema 前缀, MySQL 系按 catalog(库) 前缀
+        String schema = ((DatabaseConnectorInstance) tConnectorInstance).getSchema();
+        String catalog = ((DatabaseConnectorInstance) tConnectorInstance).getCatalog();
+        String namePart = StringUtil.isNotBlank(schema) ? schema
+                : (StringUtil.isNotBlank(catalog) ? catalog : StringUtil.EMPTY);
+        String qualifiedName = StringUtil.isNotBlank(namePart)
+                ? namePart + "." + database.buildWithQuotation(tableName)
+                : database.buildWithQuotation(tableName);
+
+        switch (ddlConfig.getDdlOperationEnum()) {
+            case ALTER_ADD: {
+                List<Field> addFields = new ArrayList<>();
+                for (Field column : tableGroup.getSourceTable().getColumn()) {
+                    if (column != null && ddlConfig.getAddedFieldNames().contains(column.getName())) {
+                        addFields.add(column);
+                    }
+                }
+                return database.buildAddColumnsSql((DatabaseConnectorInstance) tConnectorInstance, tableName,
+                        qualifiedName, addFields);
+            }
+            case ALTER_MODIFY: {
+                List<Field> modifyFields = new ArrayList<>();
+                List<String> modifyNames = new ArrayList<>();
+                for (Field column : tableGroup.getSourceTable().getColumn()) {
+                    if (column != null && ddlConfig.getModifiedFieldNames().contains(column.getName())) {
+                        modifyFields.add(column);
+                        modifyNames.add(column.getName());
+                    }
+                }
+                if (modifyFields.isEmpty()) {
+                    return StringUtil.EMPTY;
+                }
+                ValidateSyncTask pseudoTask = new ValidateSyncTask();
+                pseudoTask.setTargetDatabase(catalog);
+                return database.buildModifyColumnsSql((DatabaseConnectorInstance) tConnectorInstance, pseudoTask,
+                        tableName, modifyFields, modifyNames);
+            }
+            case ALTER_DROP:
+                return database.buildDropColumnsSql((DatabaseConnectorInstance) tConnectorInstance, tableName,
+                        qualifiedName, ddlConfig.getDroppedFieldNames());
+            case ALTER_CHANGE: {
+                // 跨源改名: 源端 RENAME 已生效, changedFieldNames 为 旧名->新名;
+                // 生成目标方言 ALTER TABLE t RENAME COLUMN old TO new(MySQL 8+/PG/Kingbase/Oracle 语法一致)
+                java.util.List<String> renames = new ArrayList<>();
+                for (java.util.Map.Entry<String, String> e : ddlConfig.getChangedFieldNames().entrySet()) {
+                    String newName = e.getValue();
+                    boolean exists = false;
+                    for (Field column : tableGroup.getSourceTable().getColumn()) {
+                        if (column != null && StringUtil.equals(column.getName(), newName)) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (exists) {
+                        renames.add("ALTER TABLE " + qualifiedName + " RENAME COLUMN "
+                                + database.buildWithQuotation(e.getKey()) + " TO " + database.buildWithQuotation(newName));
+                    }
+                }
+                if (renames.isEmpty()) {
+                    return StringUtil.EMPTY;
+                }
+                if (renames.size() > 1) {
+                    logger.warn("跨源 DDL 批量改名仅执行第一条, 其余请人工处理: {}", renames);
+                }
+                return renames.get(0);
+            }
+            default:
+                return StringUtil.EMPTY;
         }
     }
 

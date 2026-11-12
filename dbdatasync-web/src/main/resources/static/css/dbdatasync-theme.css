@@ -5,6 +5,7 @@
 
 /* ========== 导入设计系统 ========== */
 @import url('./theme/variables.css');
+@import url('./theme/dark.css');
 @import url('./theme/colors.css');
 @import url('./theme/utilities.css');
 
@@ -26,6 +27,9 @@
 @import url('./components/radio.css');
 @import url('./components/checkbox.css');
 @import url('./components/picker.css');
+
+/* DataX Web 视觉升级层（必须最后加载） */
+@import url('./datax-theme.css');
 
 /* 解决 Chrome "Slow network detected" */
 @font-face {

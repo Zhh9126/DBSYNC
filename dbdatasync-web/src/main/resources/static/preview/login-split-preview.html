@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>[预览] DBDataSync · 企业级实时数据同步平台</title>
+
+    <link type="text/css" rel="stylesheet" href="../plugins/css/font-awesome.min.css"/>
+    <link type="text/css" rel="stylesheet" href="../css/theme/variables.css"/>
+    <link type="text/css" rel="stylesheet" href="../css/theme/dark.css"/>
+    <link type="text/css" rel="stylesheet" href="../css/login.css"/>
+    <link type="text/css" rel="stylesheet" href="../css/login-datax.css"/>
+    <script>(function(){try{var t=localStorage.getItem('dbdatasync-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
+<script>
+/* 预览专用：hash 控制主题 + 离线 fetch 兜底 + 主题按钮演示 */
+(function () {
+    function apply() {
+        var dark = location.hash === '#dark';
+        if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+        else document.documentElement.removeAttribute('data-theme');
+    }
+    apply();
+    window.addEventListener('hashchange', apply);
+    window.addEventListener('DOMContentLoaded', function () {
+        apply();
+        var btn = document.getElementById('themeToggleBtn');
+        if (btn) btn.addEventListener('click', function () {
+            location.hash = location.hash === '#dark' ? '' : '#dark';
+            apply();
+        });
+    });
+    window.fetch = function () {
+        return Promise.resolve({ ok: true, json: function () {
+            return Promise.resolve({ success: true, data: { appName: '数据同步工具' } });
+        }});
+    };
+})();
+</script>
+</head>
+<body class="login-body">
+<div class="login-shell">
+
+    <!-- ==================== 左栏：品牌与核心能力 ==================== -->
+    <section class="brand-pane">
+        <!-- 科技感背景层 -->
+        <div class="pane-bg" aria-hidden="true">
+            <div class="pane-grid"></div>
+            <div class="pane-orb pane-orb-a"></div>
+            <div class="pane-orb pane-orb-b"></div>
+            <div class="pane-orb pane-orb-c"></div>
+            <div class="pane-beam"></div>
+            <div class="pane-noise"></div>
+        </div>
+
+        <div class="pane-inner">
+            <!-- 品牌头 -->
+            <header class="pane-head">
+                <div class="brand-mark">
+                    <svg viewBox="0 0 40 40" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="markGrad" x1="0" y1="0" x2="1" y2="1">
+                                <stop offset="0%" stop-color="#60A5FA"/>
+                                <stop offset="100%" stop-color="#22D3EE"/>
+                            </linearGradient>
+                        </defs>
+                        <ellipse cx="20" cy="10" rx="13" ry="5" fill="none" stroke="url(#markGrad)" stroke-width="2.2"/>
+                        <path d="M7 10v9c0 2.8 5.8 5 13 5s13-2.2 13-5v-9" fill="none" stroke="url(#markGrad)" stroke-width="2.2"/>
+                        <path d="M7 19v9c0 2.8 5.8 5 13 5s13-2.2 13-5v-9" fill="none" stroke="url(#markGrad)" stroke-width="2.2" opacity=".7"/>
+                        <circle cx="20" cy="28" r="2.4" fill="#67E8F9"/>
+                    </svg>
+                </div>
+                <div class="brand-word">
+                    <strong>DBDataSync</strong>
+                    <span>ENTERPRISE DATA INTEGRATION PLATFORM</span>
+                </div>
+                <div class="brand-status"><i></i> SYSTEM ONLINE</div>
+            </header>
+
+            <!-- 主标题 -->
+            <div class="pane-intro">
+                <div class="pane-eyebrow"><span></span> REAL-TIME DATA SYNC · 企业级数据同步平台</div>
+                <h1>让每一条数据<br><em>实时、准确、可控</em>地流动</h1>
+                <p>从异构数据源接入到实时增量捕获、一致性校验与全链路可观测，<br>一套平台管好每一条数据链路。</p>
+            </div>
+
+            <!-- 数据流转可视化 -->
+            <div class="flow-board">
+                <div class="flow-bar">
+                    <span class="flow-bar-title"><i class="fa fa-sitemap"></i> 实时数据链路拓扑</span>
+                    <span class="flow-bar-live"><i></i> LIVE · CDC PIPELINE</span>
+                </div>
+                <svg class="flow-svg" viewBox="0 0 760 186" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="edgeGrad" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0%" stop-color="#22D3EE" stop-opacity=".12"/>
+                            <stop offset="48%" stop-color="#60A5FA" stop-opacity=".85"/>
+                            <stop offset="100%" stop-color="#38BDF8" stop-opacity=".18"/>
+                        </linearGradient>
+                        <radialGradient id="coreHalo">
+                            <stop offset="0%" stop-color="#38BDF8" stop-opacity=".55"/>
+                            <stop offset="70%" stop-color="#2563EB" stop-opacity=".16"/>
+                            <stop offset="100%" stop-color="#2563EB" stop-opacity="0"/>
+                        </radialGradient>
+                        <linearGradient id="coreFill" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#1D4ED8"/>
+                            <stop offset="100%" stop-color="#0891B2"/>
+                        </linearGradient>
+                    </defs>
+
+                    <!-- 连线 -->
+                    <g fill="none" stroke="url(#edgeGrad)" stroke-width="1.5">
+                        <path d="M138 36 C 248 36, 268 92, 326 92"/>
+                        <path d="M138 92 L 326 92"/>
+                        <path d="M138 148 C 248 148, 268 92, 326 92"/>
+                        <path d="M434 92 C 500 92, 516 36, 620 36"/>
+                        <path d="M434 92 L 620 92"/>
+                        <path d="M434 92 C 500 92, 516 148, 620 148"/>
+                    </g>
+                    <g fill="none" stroke="#7DD3FC" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 13" class="flow-dashes">
+                        <path d="M138 36 C 248 36, 268 92, 326 92"/>
+                        <path d="M138 92 L 326 92"/>
+                        <path d="M138 148 C 248 148, 268 92, 326 92"/>
+                        <path d="M434 92 C 500 92, 516 36, 620 36"/>
+                        <path d="M434 92 L 620 92"/>
+                        <path d="M434 92 C 500 92, 516 148, 620 148"/>
+                    </g>
+
+                    <!-- 源端节点 -->
+                    <g class="flow-node">
+                        <rect x="18" y="18" width="120" height="36" rx="7"/>
+                        <text x="34" y="41" class="node-name">MySQL</text>
+                        <circle cx="126" cy="36" r="3" class="node-dot"/>
+                    </g>
+                    <g class="flow-node">
+                        <rect x="18" y="74" width="120" height="36" rx="7"/>
+                        <text x="34" y="97" class="node-name">Oracle</text>
+                        <circle cx="126" cy="92" r="3" class="node-dot"/>
+                    </g>
+                    <g class="flow-node">
+                        <rect x="18" y="130" width="120" height="36" rx="7"/>
+                        <text x="34" y="153" class="node-name">PostgreSQL</text>
+                        <circle cx="126" cy="148" r="3" class="node-dot"/>
+                    </g>
+
+                    <!-- 目标端节点 -->
+                    <g class="flow-node flow-node-out">
+                        <rect x="620" y="18" width="120" height="36" rx="7"/>
+                        <circle cx="632" cy="36" r="3" class="node-dot"/>
+                        <text x="642" y="41" class="node-name">达梦 DM8</text>
+                    </g>
+                    <g class="flow-node flow-node-out">
+                        <rect x="620" y="74" width="120" height="36" rx="7"/>
+                        <circle cx="632" cy="92" r="3" class="node-dot"/>
+                        <text x="642" y="97" class="node-name">ClickHouse</text>
+                    </g>
+                    <g class="flow-node flow-node-out">
+                        <rect x="620" y="130" width="120" height="36" rx="7"/>
+                        <circle cx="632" cy="148" r="3" class="node-dot"/>
+                        <text x="642" y="153" class="node-name">Kafka / ES</text>
+                    </g>
+
+                    <!-- 引擎核心 -->
+                    <circle cx="380" cy="92" r="76" fill="url(#coreHalo)" class="core-halo"/>
+                    <circle cx="380" cy="92" r="58" fill="none" stroke="#60A5FA" stroke-opacity=".35" stroke-width="1" stroke-dasharray="5 7" class="core-orbit"/>
+                    <circle cx="380" cy="92" r="44" fill="url(#coreFill)" stroke="#93C5FD" stroke-opacity=".65" stroke-width="1.4"/>
+                    <text x="380" y="90" text-anchor="middle" class="core-title">CDC</text>
+                    <text x="380" y="107" text-anchor="middle" class="core-sub">SYNC ENGINE</text>
+                    <text x="380" y="168" text-anchor="middle" class="core-caption">全量 / 增量 · 校验 · 可观测</text>
+                </svg>
+            </div>
+
+            <!-- 核心能力 -->
+            <div class="feature-caption"><span>CORE CAPABILITIES</span> 核心能力 <i></i></div>
+            <div class="feature-grid">
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-database"></i></div>
+                    <div class="feat-txt"><h3>多源异构连接</h3><p>20+ 数据源统一纳管，关系型、国产库、大数据与消息队列即配即用</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-bolt"></i></div>
+                    <div class="feat-txt"><h3>实时增量 CDC</h3><p>解析 binlog / WAL / LogMiner，秒级捕获变更，位点断点续传不丢数据</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-clone"></i></div>
+                    <div class="feat-txt"><h3>全量迁移与并发</h3><p>分片并行、批量写入与类型转换，整库迁移高效稳定，进度实时可见</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-check-square-o"></i></div>
+                    <div class="feat-txt"><h3>数据校验与订正</h3><p>一致性比对、差异明细与一键订正，同步结果可核对、可追溯</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-heartbeat"></i></div>
+                    <div class="feat-txt"><h3>链路健康监控</h3><p>停滞时长、失败率、死信与重试挽回一屏掌握，支持 Prometheus 导出</p></div>
+                </div>
+                <div class="feat">
+                    <div class="feat-ico"><i class="fa fa-shield"></i></div>
+                    <div class="feat-txt"><h3>告警与自愈</h3><p>瞬时失败指数退避自动重试，永久失败入死信，多渠道告警带冷却去重</p></div>
+                </div>
+            </div>
+
+            <!-- 底部指标 -->
+            <footer class="pane-foot">
+                <div class="pane-stats">
+                    <div><b>20+</b><span>数据源</span></div>
+                    <div><b>秒级</b><span>增量延迟</span></div>
+                    <div><b>7×24</b><span>稳定运行</span></div>
+                    <div><b>全链路</b><span>可观测</span></div>
+                </div>
+                <div class="pane-copy">© 2026 DBDataSync · 企业级实时数据同步平台 <em>v2.1.4</em></div>
+            </footer>
+        </div>
+    </section>
+
+    <!-- ==================== 右栏：登录 ==================== -->
+    <section class="auth-pane">
+        <div class="auth-bg" aria-hidden="true"></div>
+
+        <div class="auth-topline">
+            <span><i class="fa fa-lock"></i> SECURE ACCESS</span>
+            <button id="themeToggleBtn" class="theme-toggle" type="button" title="切换深色/浅色主题">
+                <i class="fa fa-moon-o"></i><i class="fa fa-sun-o"></i>
+            </button>
+        </div>
+
+        <div class="login-wrap">
+            <!-- 移动端品牌（窄屏时显示） -->
+            <div class="mobile-brand">
+                <div class="mobile-brand-mark"><i class="fa fa-database"></i></div>
+                <div><strong>DBDataSync</strong><span>企业级实时数据同步平台</span></div>
+            </div>
+
+            <div class="login-card">
+                <div class="login-brand">
+                    <div class="brand-logo"><i class="svg-database"></i></div>
+                    <h1 class="brand-title">欢迎回来</h1>
+                    <p class="brand-sub">登录 <span id="appName">数据同步工具</span> 控制台</p>
+                </div>
+
+                <div class="login-form-area">
+                    <form id="loginForm" class="login-form" autocomplete="off">
+                        <div class="form-item">
+                            <label for="username" class="field-label">用户名</label>
+                            <div class="field-inner">
+                                <i class="svg-user field-icon"></i>
+                                <input type="text" id="username" name="username" class="field-input"
+                                       placeholder="请输入用户名" required>
+                            </div>
+                            <div id="usernameError" class="field-error hidden">
+                                <i class="svg-exclamation-circle"></i>
+                                <span>用户名不能为空</span>
+                            </div>
+                        </div>
+
+                        <div class="form-item">
+                            <label for="password" class="field-label">密码</label>
+                            <div class="field-inner">
+                                <i class="svg-lock field-icon"></i>
+                                <input type="password" id="password" name="password" class="field-input"
+                                       placeholder="请输入密码" required>
+                                <button type="button" id="togglePassword" class="field-eye" tabindex="-1" title="显示/隐藏密码">
+                                    <i class="svg-eye-slash"></i>
+                                </button>
+                            </div>
+                            <div id="passwordError" class="field-error hidden">
+                                <i class="svg-exclamation-circle"></i>
+                                <span>密码不能为空</span>
+                            </div>
+                        </div>
+
+                        <div id="loginError" class="form-error hidden">
+                            <i class="svg-exclamation-circle"></i>
+                            <span id="errorMessage">登录失败，请检查用户名或密码</span>
+                        </div>
+
+                        <button type="submit" id="loginButton" class="btn-submit">
+                            <span>登 录</span>
+                            <i class="svg-sign-in"></i>
+                        </button>
+
+                        <button type="button" id="loadingButton" class="btn-submit btn-loading hidden" disabled>
+                            <i class="rotate-loading"></i>
+                            <span>登录中...</span>
+                        </button>
+                    </form>
+                </div>
+
+                <div class="auth-hint"><i class="fa fa-shield"></i> 请使用管理员分配的账号登录，操作全程留痕</div>
+
+                <div class="login-capabilities">
+                    <span><i class="fa fa-database"></i>异构数据源</span>
+                    <span><i class="fa fa-refresh"></i>实时增量</span>
+                    <span><i class="fa fa-line-chart"></i>链路监控</span>
+                </div>
+
+                <div class="login-footer">
+                    <span>DBDataSync · 数据同步平台</span><span>v2.1.4</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="auth-bottomline">
+            <span><i></i> 服务运行正常</span>
+            <span>数据集成 · 实时同步 · 一致性校验</span>
+        </div>
+    </section>
+</div>
+
+<script>
+    // 获取项目地址
+    const $location = (window.location + '').split('/');
+    const $path = document.location.pathname;
+    const $basePath = $location[0] + '//' + $location[2] + $path.substr(0, $path.substr(1).indexOf("/") + 1);
+    const loginForm = document.getElementById('loginForm');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const togglePassword = document.getElementById('togglePassword');
+    const loginButton = document.getElementById('loginButton');
+    const loadingButton = document.getElementById('loadingButton');
+    const usernameError = document.getElementById('usernameError');
+    const passwordError = document.getElementById('passwordError');
+    const loginError = document.getElementById('loginError');
+    const errorMessage = document.getElementById('errorMessage');
+    // token过期，跳转默认页面
+    const navbar = document.querySelector("div.sidebar-item");
+    if (navbar !== null) {
+        window.location.href = $basePath;
+    }
+
+    // 切换密码可见性
+    togglePassword.addEventListener('click', () => {
+        const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+        passwordInput.setAttribute('type', type);
+        togglePassword.querySelector('i').classList.toggle('svg-eye');
+        togglePassword.querySelector('i').classList.toggle('svg-eye-slash');
+    });
+
+    // 初始化加载版权信息
+    window.addEventListener('load', () => {
+        fetch($basePath + '/index/version.json').then(response => {
+            if (!response.ok) throw new Error(`HTTP错误: ${response.status}`);
+            return response.json();
+        }).then(response => {
+            if (response.success === true) {
+                document.getElementById('appName').textContent = response.data.appName;
+            }
+        }).catch(() => { /* 静态预览或离线场景忽略，保留默认产品名 */ });
+    });
+
+    function validateItem($input, $error){
+        loginError.classList.add('hidden');
+        if (!$input.value.trim()) {
+            $error.classList.remove('hidden');
+            $input.classList.add('is-invalid');
+            return false;
+        }
+        $error.classList.add('hidden');
+        $input.classList.remove('is-invalid');
+        return true;
+    }
+    // 表单验证
+    function validateForm() {
+        return validateItem(usernameInput, usernameError) && validateItem(passwordInput, passwordError);
+    }
+    // 输入框变化时重新验证
+    usernameInput.addEventListener('input', () => validateItem(usernameInput, usernameError));
+    passwordInput.addEventListener('input', () => validateItem(passwordInput, passwordError));
+
+    // 登录表单提交处理
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        if (!validateForm()) {
+            return;
+        }
+
+        loginButton.classList.add('hidden');
+        loadingButton.classList.remove('hidden');
+
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value.trim();
+
+        const formData = new URLSearchParams();
+        formData.append('username', username);
+        formData.append('password', password);
+
+        try {
+            const response = await fetch($basePath + '/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: formData,
+            });
+
+            const result = await response.json();
+            if (response.ok) {
+                window.location.href = $basePath;
+            } else {
+                throw new Error(result.message || '登录失败，请检查用户名或密码');
+            }
+        } catch (error) {
+            errorMessage.textContent = error.message;
+            loginError.classList.remove('hidden');
+            loginError.classList.add('animate-shake');
+            setTimeout(() => {
+                loginError.classList.remove('animate-shake');
+            }, 500);
+        } finally {
+            loginButton.classList.remove('hidden');
+            loadingButton.classList.add('hidden');
+        }
+    });
+</script>
+
+</body>
+</html>

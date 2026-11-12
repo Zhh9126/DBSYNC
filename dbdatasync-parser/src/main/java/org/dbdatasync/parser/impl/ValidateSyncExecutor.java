@@ -15,6 +15,7 @@ import org.dbdatasync.parser.TaskProfile;
 import org.dbdatasync.parser.model.Connector;
 import org.dbdatasync.parser.model.Meta;
 import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.util.RowFingerprintUtil;
 import org.dbdatasync.parser.model.TaskDetailQuery;
 import org.dbdatasync.sdk.constant.ConfigConstant;
 import org.dbdatasync.sdk.connector.ConnectorInstance;
@@ -48,9 +49,15 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 订正校验任务执行引擎：连接源/目标库，执行表结构、行数据、索引比对，
@@ -63,8 +70,11 @@ public class ValidateSyncExecutor {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
-    /** 差异明细最大保留条数，防止明细分表 DATA 过大 */
-    private static final int MAX_CONTENT_ITEMS = 200;
+    /**
+     * Wave24：解除固定 200 条截断。差异明细改为全量写入；超过 DATA 列 65535 字节时
+     * 由 {@code TaskDetailUtil.serializeContent} 整体外置为 DBDS-REF 引用（完整保留），
+     * 无外置存储时按字节预算逐条降级，仍然保证 JSON 可解析、条数有明确提示。
+     */
 
     /** 单次手动订正最大条数（与前端"手动订正(最多100条)"文案对齐） */
     private static final int MAX_REPAIR_ITEMS = 100;
@@ -83,6 +93,12 @@ public class ValidateSyncExecutor {
 
     /** 明细类型：索引 */
     public static final String CHECK_TYPE_INDEX = "index";
+
+    /** 快速体检模式（count+min/max 秒级粗检）：compareMode=health */
+    public static final String COMPARE_MODE_HEALTH = "health";
+
+    /** 字段级指纹比对模式（分块 MD5 摘要，纯计算定位，不订正）：compareMode=checksum */
+    public static final String COMPARE_MODE_CHECKSUM = "checksum";
 
     private static final java.util.regex.Pattern DATETIME_PATTERN =
             java.util.regex.Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?");
@@ -227,6 +243,16 @@ public class ValidateSyncExecutor {
                             reversePkCols, rowContent, autoDelete, taskId);
                     rowDiff += reverse[0];
                     rowFixed += reverse[1];
+                } else if (task.isEnableReverseScan()) {
+                    // Wave30：超过阈值时旧实现静默跳过，对账结论会被误判为一致；必须留可见提示
+                    logger.warn("校验任务 [{}] 目标表 [{}] 共 {} 行，超过反向扫描上限 {}，本轮未检测目标多余行",
+                            taskId, targetTable, targetTotal, MAX_REVERSE_SCAN_ROWS);
+                    Map<String, Object> skipped = rowDataItem(sourceTable, targetTable,
+                            "已跳过反向扫描：目标表 " + targetTotal + " 行超过 " + MAX_REVERSE_SCAN_ROWS
+                                    + " 行上限，未检测目标多余行，本轮结论不完整",
+                            "targetRows=" + targetTotal,
+                            Collections.<Map<String, Object>>emptyList(), Collections.<String>emptyList());
+                    addItem(rowContent, skipped);
                 }
             } else {
                 sourceTotal = countRows(source, sourceTable);
@@ -342,11 +368,40 @@ public class ValidateSyncExecutor {
 
     /**
      * 行数据比对（分页读取 + 主键映射）。返回 [sourceTotal, targetTotal, diff, fixed]。
+     * <p>校验模式（compareMode）：
+     * <ul>
+     *   <li>full：默认，逐行精确比对；单列主键且配置 fullSplitCount&gt;1 时按主键值域分片并发，否则串行；</li>
+     *   <li>sample：抽样比对（每 sampleStep 页取 1 页），大表快速健康检查，禁用自动订正；</li>
+     *   <li>health：快速体检（count + min/max），秒级粗检，不订正。</li>
+     * </ul>
      */
     private long[] checkRowData(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
                                 String sourceTable, String targetTable,
                                 List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
                                 List<Map<String, Object>> content, boolean autoSync, String taskId) throws Exception {
+        String mode = fullCompareMode(task.getCompareMode());
+        boolean sampleMode = "sample".equalsIgnoreCase(mode);
+        boolean healthMode = COMPARE_MODE_HEALTH.equalsIgnoreCase(mode);
+        boolean checksumMode = COMPARE_MODE_CHECKSUM.equalsIgnoreCase(mode);
+        boolean sliceMode = !sampleMode && !healthMode && !checksumMode
+                && sliceable(pkCols == null ? 0 : pkCols.size(), task.getFullSplitCount());
+
+        // 快速体检：count + min/max，秒级粗检，无行级定位不订正
+        if (healthMode) {
+            return healthCheck(task, source, target, sourceTable, targetTable,
+                    pkCols, content, autoSync);
+        }
+        // 字段级指纹比对：分块 MD5 摘要，纯定位不订正
+        if (checksumMode) {
+            return checksumCheck(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, taskId);
+        }
+        // 分片并发：单列主键值域切分 + 多线程逐行比对
+        if (sliceMode) {
+            return checkRowDataSliced(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, autoSync, taskId);
+        }
+
         long sourceTotal = countRows(source, sourceTable);
         long targetTotal = countRows(target, targetTable);
         long diff = 0L;
@@ -360,6 +415,14 @@ public class ValidateSyncExecutor {
 
         List<String> commonCols = commonColumnNames(sourceCols, targetCols);
         List<String> pkNames = columnNames(pkCols);
+        // 对比模式: sample=抽样(按 sampleStep 跳页读, 大表快速健康检查), 抽样模式禁用自动订正
+        int sampleStep = Math.max(1, task.getSampleStep());
+        if (sampleMode) {
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "抽样对比模式(每 " + sampleStep + " 页取 1 页), 差异定位请改用全量模式", "", null,
+                    Collections.emptyList()));
+            autoSync = false;
+        }
         int pageSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
         int offset = 0;
         while (true) {
@@ -382,7 +445,9 @@ public class ValidateSyncExecutor {
                 if (tgtRow == null) {
                     diff++;
                     List<Map<String, Object>> details = buildDetails(srcRow, null, commonCols, pkNames);
-                    addItem(content, rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames));
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标缺失", targetTable, key, details, pkNames, srcRow, null, commonCols));
+                    addItem(content, item);
                     if (autoSync && repairInsert(target, targetTable, commonCols, srcRow)) {
                         fixed++;
                         markRepaired(content, key, "目标缺失");
@@ -392,7 +457,310 @@ public class ValidateSyncExecutor {
                 List<Map<String, Object>> differs = compareRows(srcRow, tgtRow, commonCols, pkNames);
                 if (!differs.isEmpty()) {
                     diff++;
-                    addItem(content, rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames));
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames);
+                    item.put("repairSql", buildRepairSql("数据不一致", targetTable, key, differs, pkNames, srcRow, tgtRow, commonCols));
+                    addItem(content, item);
+                    if (autoSync && repairUpdate(target, targetTable, pkNames, key, differs)) {
+                        fixed++;
+                        markRepaired(content, key, "数据不一致");
+                    }
+                }
+            }
+            offset += srcPage.size() * (sampleMode ? sampleStep : 1);
+            if (srcPage.size() < pageSize) {
+                break;
+            }
+        }
+        return new long[]{sourceTotal, targetTotal, diff, fixed};
+    }
+
+    /**
+     * 规范化校验模式：空白/非法值回退为 full（存量任务兼容）。包级可见以便单元测试。
+     */
+    static String fullCompareMode(String mode) {
+        if (StringUtil.isBlank(mode)) {
+            return "full";
+        }
+        if ("full".equalsIgnoreCase(mode) || "sample".equalsIgnoreCase(mode)
+                || COMPARE_MODE_HEALTH.equalsIgnoreCase(mode)
+                || COMPARE_MODE_CHECKSUM.equalsIgnoreCase(mode)) {
+            return mode.toLowerCase(Locale.ROOT);
+        }
+        return "full";
+    }
+
+    /**
+     * 分片并发适用性判定：仅当单列主键且任务配置了 fullSplitCount&gt;1 时启用（存量任务零影响）。包级可见以便单元测试。
+     */
+    static boolean sliceable(int pkSize, String fullSplitCount) {
+        if (pkSize != 1) {
+            return false;
+        }
+        return fullSplitCount != null && fullSplitCount.matches("\\d+") && Integer.parseInt(fullSplitCount) > 1;
+    }
+
+    /**
+     * 快速体检：源/目标各执行 COUNT + MIN/MAX（单列主键时），秒级粗检，不订正。
+     * <p>体检通过 = 行数一致（count 相等）且（无主键或主键 min/max 一致）；不一致产出差异明细表项。</p>
+     */
+    private long[] healthCheck(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
+                               String sourceTable, String targetTable, List<Field> pkCols,
+                               List<Map<String, Object>> content, boolean autoSync) {
+        long sCount = countRows(source, sourceTable);
+        long tCount = countRows(target, targetTable);
+        Object[] sRange = pkCols == null || pkCols.size() != 1 ? null
+                : queryRange(source, sourceTable, pkCols.get(0).getName());
+        Object[] tRange = pkCols == null || pkCols.size() != 1 ? null
+                : queryRange(target, targetTable, pkCols.get(0).getName());
+        long diff = 0L;
+        // 行数不一致
+        if (sCount != tCount) {
+            diff++;
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "行数不一致，source: " + sCount + ", target: " + tCount, "", null, null));
+        }
+        // 主键值域不一致
+        if (sRange != null && tRange != null && !sameRange(sRange, tRange)) {
+            diff++;
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "主键值域不一致，source: " + rangeText(sRange) + ", target: " + rangeText(tRange), "", null, null));
+        }
+        if (diff == 0) {
+            addItem(content, rowDataItem(sourceTable, targetTable,
+                    "快速体检通过（行数 + 主键值域一致）", "", null, null));
+        }
+        logger.info("快速体检 [{} -> {}]: source={}, target={}, range={}~{}, diff={}",
+                sourceTable, targetTable, sCount, tCount,
+                sRange == null ? "-" : rangeText(sRange), tRange == null ? "-" : rangeText(tRange), diff);
+        return new long[]{sCount, tCount, diff, 0L};
+    }
+
+    /**
+     * 字段级指纹比对（compareMode=checksum）：分块对源/目标行做 MD5 摘要，块摘要不一致即判定该块存在差异。
+     * <p>纯计算定位、不订正（fixed 恒 0）；仅输出「哪一块不一致」并给出块主键范围与摘要前缀，
+     * 字段级下钻需切到 full 模式。块大小复用 {@code readNum}（受 MAX_PAGE_SIZE 上限约束）。</p>
+     *
+     * @return {@code [sourceTotal, targetTotal, diff, fixed]}（fixed 恒 0）
+     */
+    private long[] checksumCheck(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
+                                String sourceTable, String targetTable,
+                                List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
+                                List<Map<String, Object>> content, String taskId) throws Exception {
+        long sourceTotal = countRows(source, sourceTable);
+        long targetTotal = countRows(target, targetTable);
+        long diff = 0L;
+        long fixed = 0L; // checksum 模式纯定位，不订正
+
+        // 无主键：无法定位行，跳过行数据校验
+        if (CollectionUtils.isEmpty(pkCols)) {
+            addItem(content, rowDataItem(sourceTable, targetTable, "无主键字段，跳过行数据校验", "", null,
+                    Collections.emptyList()));
+            return new long[]{sourceTotal, targetTotal, diff, fixed};
+        }
+
+        List<String> commonCols = commonColumnNames(sourceCols, targetCols);
+        List<String> pkNames = columnNames(pkCols);
+        // 块大小复用 readNum（默认 10000），上下夹紧到 [100, MAX_PAGE_SIZE]
+        int blockSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
+        int offset = 0;
+        while (true) {
+            if (isStopping(taskId)) {
+                break;
+            }
+            List<Map<String, Object>> srcPage = pageRows(source, sourceTable, pkNames, commonCols, blockSize, offset);
+            if (CollectionUtils.isEmpty(srcPage)) {
+                break;
+            }
+            List<String> keys = new ArrayList<>(srcPage.size());
+            for (Map<String, Object> row : srcPage) {
+                keys.add(buildKey(row, pkNames));
+            }
+            Map<String, Map<String, Object>> tgtPage = fetchByKeys(target, targetTable, pkNames, commonCols, keys, target);
+
+            // 仅收集命中的目标行，保持与 keys 一致的顺序
+            List<Map<String, Object>> tgtRows = new ArrayList<>();
+            for (String k : keys) {
+                Map<String, Object> t = tgtPage.get(k);
+                if (t != null) {
+                    tgtRows.add(t);
+                }
+            }
+
+            String srcBlock = RowFingerprintUtil.blockDigest(srcPage, commonCols, pkNames);
+            String tgtBlock = RowFingerprintUtil.blockDigest(tgtRows, commonCols, pkNames);
+            if (!srcBlock.equals(tgtBlock)) {
+                diff++;
+                String keyRange = keys.get(0) + "~" + keys.get(keys.size() - 1);
+                String msg = "校验和(块)不一致, 块主键范围[" + keyRange + "], 源摘要="
+                        + srcBlock.substring(0, Math.min(16, srcBlock.length()))
+                        + ", 目标摘要=" + tgtBlock.substring(0, Math.min(16, tgtBlock.length()))
+                        + "（仅定位差异块，请改用全量模式查看字段级差异）";
+                Map<String, Object> item = rowDataItem(sourceTable, targetTable, msg, keyRange,
+                        Collections.emptyList(), pkNames);
+                item.put("repairSql", "");
+                addItem(content, item);
+            }
+            offset += srcPage.size();
+            if (srcPage.size() < blockSize) {
+                break;
+            }
+        }
+        logger.info("字段级指纹比对 [{} -> {}]: source={}, target={}, diff={}",
+                sourceTable, targetTable, sourceTotal, targetTotal, diff);
+        return new long[]{sourceTotal, targetTotal, diff, fixed};
+    }
+
+    private Object[] queryRange(DatabaseConnectorInstance db, String table, String pkName) {
+        String sql = "SELECT MIN(" + quote(db, pkName) + ") AS mn, MAX(" + quote(db, pkName) + ") AS mx FROM "
+                + quote(db, table);
+        return db.execute(t -> t.query(sql, rs -> {
+            if (!rs.next() || rs.getObject(1) == null) {
+                return null;
+            }
+            return new Object[]{normalize(rs.getObject(1)), normalize(rs.getObject(2))};
+        }));
+    }
+
+    private boolean sameRange(Object[] a, Object[] b) {
+        return a != null && b != null && String.valueOf(a[0]).equals(String.valueOf(b[0]))
+                && String.valueOf(a[1]).equals(String.valueOf(b[1]));
+    }
+
+    private String rangeText(Object[] r) {
+        return r == null ? "-" : "[" + r[0] + ", " + r[1] + "]";
+    }
+
+    /**
+     * 分片并发逐行比对：单列主键按 MIN/MAX 值域切分为左闭右开区间，
+     * 每个分片独立范围条件 + 独立 OFFSET 游标，多线程并发比对源/目标，共享任务启停信号。
+     * <p>目标端按主键 IN 批量取（天然落在分片主键区间，无重叠遗漏）。</p>
+     * <p>任一子分片失败即取消父任务并上抛首个异常，其余分片尽力退出。</p>
+     */
+    private long[] checkRowDataSliced(ValidateSyncTask task, DatabaseConnectorInstance source,
+                                      DatabaseConnectorInstance target, String sourceTable, String targetTable,
+                                      List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
+                                      List<Map<String, Object>> content, boolean autoSync, String taskId) throws Exception {
+        String pkName = pkCols.get(0).getName();
+        int sliceCount = Integer.parseInt(task.getFullSplitCount());
+        // 1、探测源端主键值域
+        Object[] range = queryRange(source, sourceTable, pkName);
+        if (range == null || range[0] == null || range[1] == null) {
+            logger.warn("分片校验值域探测失败/空表，降级串行:{} 表[{}]", taskId, sourceTable);
+            return checkRowDataSerial(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, autoSync, taskId);
+        }
+        Long min = toLong(range[0]);
+        Long max = toLong(range[1]);
+        // 2、值域切分（复用 Wave4 splitHalfOpenRange：左闭右开，最后一片闭到 max）
+        long[][] intervals = sliceRanges(min, max, sliceCount);
+        if (intervals.length <= 1) {
+            logger.info("分片校验值域不足2片，降级串行:{} 表[{}]", taskId, sourceTable);
+            return checkRowDataSerial(task, source, target, sourceTable, targetTable,
+                    sourceCols, targetCols, pkCols, content, autoSync, taskId);
+        }
+        logger.info("分片并发校验:{} 表[{}] 主键[{}] 值域[{}~{}] 分片数[{}]", taskId, sourceTable,
+                pkName, range[0], range[1], intervals.length);
+
+        List<String> commonCols = commonColumnNames(sourceCols, targetCols);
+        List<String> pkNames = columnNames(pkCols);
+        int pageSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
+        // 对源行内容缓冲区与差异计数的并发聚合
+        List<Map<String, Object>> sliceContent = Collections.synchronizedList(content);
+        AtomicLong totalDiff = new AtomicLong(0L);
+        AtomicLong totalFixed = new AtomicLong(0L);
+
+        final int count = intervals.length;
+        final int poolSize = Math.min(count, task.getThreadNum() > 0 ? task.getThreadNum() : count);
+        final CountDownLatch latch = new CountDownLatch(count);
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
+            Thread t = new Thread(r, "vs-slice-" + taskId + "-" + r.hashCode());
+            t.setDaemon(true);
+            return t;
+        });
+        for (int i = 0; i < count; i++) {
+            final long[] interval = intervals[i];
+            pool.execute(() -> {
+                try {
+                    long[] counters = compareSlice(task, source, target, sourceTable, targetTable,
+                            pkName, interval[0], interval[1], commonCols, pkNames, pageSize,
+                            sliceContent, taskId);
+                    totalDiff.addAndGet(counters[0]);
+                    totalFixed.addAndGet(counters[1]);
+                } catch (Throwable e) {
+                    failure.compareAndSet(null, e);
+                    requestStop(taskId);
+                    logger.error(String.format("分片校验失败[%s] 区间[%d, %d):%s", taskId, interval[0], interval[1]), e);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        pool.shutdown();
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            requestStop(taskId);
+        }
+        if (failure.get() != null) {
+            Throwable e = failure.get();
+            if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            }
+            throw new RuntimeException(e);
+        }
+        logger.info("分片并发校验完成:{} 表[{}] 共{}个分片", taskId, sourceTable, count);
+        return new long[]{0L, 0L, totalDiff.get(), totalFixed.get()};
+    }
+
+    /**
+     * 单个分片比对：源端按主键范围 + OFFSET 游标逐页读，目标按主键 IN 批量取，逐行比对。
+     * <p>返回 [diff, fixed]（本分片内）。</p>
+     */
+    private long[] compareSlice(ValidateSyncTask task, DatabaseConnectorInstance source, DatabaseConnectorInstance target,
+                                String sourceTable, String targetTable, String pkName,
+                                long start, long end, List<String> commonCols, List<String> pkNames,
+                                int pageSize, List<Map<String, Object>> content, String taskId) throws Exception {
+        long diff = 0L;
+        long fixed = 0L;
+        boolean autoSync = task.isEnableSync();
+        int offset = 0;
+        while (true) {
+            if (isStopping(taskId)) {
+                break;
+            }
+            List<Map<String, Object>> srcPage = pageRowsByRange(source, sourceTable, pkNames, commonCols,
+                    pageSize, offset, pkName, start, end);
+            if (CollectionUtils.isEmpty(srcPage)) {
+                break;
+            }
+            List<String> keys = new ArrayList<>(srcPage.size());
+            for (Map<String, Object> row : srcPage) {
+                keys.add(buildKey(row, pkNames));
+            }
+            Map<String, Map<String, Object>> tgtPage = fetchByKeys(target, targetTable, pkNames, commonCols, keys, target);
+            for (Map<String, Object> srcRow : srcPage) {
+                String key = buildKey(srcRow, pkNames);
+                Map<String, Object> tgtRow = tgtPage.get(key);
+                if (tgtRow == null) {
+                    diff++;
+                    List<Map<String, Object>> details = buildDetails(srcRow, null, commonCols, pkNames);
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标缺失", targetTable, key, details, pkNames, srcRow, null, commonCols));
+                    addItem(content, item);
+                    if (autoSync && repairInsert(target, targetTable, commonCols, srcRow)) {
+                        fixed++;
+                        markRepaired(content, key, "目标缺失");
+                    }
+                    continue;
+                }
+                List<Map<String, Object>> differs = compareRows(srcRow, tgtRow, commonCols, pkNames);
+                if (!differs.isEmpty()) {
+                    diff++;
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames);
+                    item.put("repairSql", buildRepairSql("数据不一致", targetTable, key, differs, pkNames, srcRow, tgtRow, commonCols));
+                    addItem(content, item);
                     if (autoSync && repairUpdate(target, targetTable, pkNames, key, differs)) {
                         fixed++;
                         markRepaired(content, key, "数据不一致");
@@ -404,7 +772,136 @@ public class ValidateSyncExecutor {
                 break;
             }
         }
+        return new long[]{diff, fixed};
+    }
+
+    /**
+     * 带主键范围条件的分页读取（分片并发用）：{@code WHERE pk >= ? AND pk < ? ORDER BY pk LIMIT ? OFFSET ?}。
+     */
+    private List<Map<String, Object>> pageRowsByRange(DatabaseConnectorInstance db, String table, List<String> orderCols,
+                                                      List<String> cols, int pageSize, int offset,
+                                                      String rangeKey, long start, long end) {
+        String select = cols.isEmpty() ? "*" : joinQuoted(db, cols);
+        StringBuilder sql = new StringBuilder("SELECT ").append(select).append(" FROM ").append(quote(db, table))
+                .append(" WHERE ").append(quote(db, rangeKey)).append(" >= ? AND ")
+                .append(quote(db, rangeKey)).append(" < ?");
+        if (!orderCols.isEmpty()) {
+            sql.append(" ORDER BY ").append(joinQuoted(db, orderCols));
+        }
+        if (isOracleFamily(db)) {
+            // Oracle/DM-compat 12c+：OFFSET ? ROWS FETCH NEXT ? ROWS ONLY（LIMIT 语法 Oracle 不支持）
+            sql.append(" OFFSET ? ROWS FETCH NEXT ? ROWS ONLY");
+            return db.execute(t -> t.query(sql.toString(), rs -> {
+                List<Map<String, Object>> rows = new ArrayList<>();
+                ResultSetMetaData md = rs.getMetaData();
+                int n = md.getColumnCount();
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int i = 1; i <= n; i++) {
+                        row.put(md.getColumnLabel(i), normalize(rs.getObject(i)));
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }, start, end, offset, pageSize));
+        }
+        sql.append(" LIMIT ? OFFSET ?");
+        return db.execute(t -> t.query(sql.toString(), rs -> {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            ResultSetMetaData md = rs.getMetaData();
+            int n = md.getColumnCount();
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                for (int i = 1; i <= n; i++) {
+                    row.put(md.getColumnLabel(i), normalize(rs.getObject(i)));
+                }
+                rows.add(row);
+            }
+            return rows;
+        }, start, end, pageSize, offset));
+    }
+
+    /**
+     * 原串行逐行比对（分片降级的共用实现，与 checkRowData 原串行分支逻辑一致）。
+     */
+    private long[] checkRowDataSerial(ValidateSyncTask task, DatabaseConnectorInstance source,
+                                      DatabaseConnectorInstance target, String sourceTable, String targetTable,
+                                      List<Field> sourceCols, List<Field> targetCols, List<Field> pkCols,
+                                      List<Map<String, Object>> content, boolean autoSync, String taskId) throws Exception {
+        List<String> commonCols = commonColumnNames(sourceCols, targetCols);
+        List<String> pkNames = columnNames(pkCols);
+        boolean autoSyncFinal = autoSync;
+        if ("sample".equalsIgnoreCase(task.getCompareMode())) {
+            autoSyncFinal = false;
+        }
+        long sourceTotal = countRows(source, sourceTable);
+        long targetTotal = countRows(target, targetTable);
+        long diff = 0L;
+        long fixed = 0L;
+        int pageSize = Math.min(Math.max(task.getReadNum(), 100), MAX_PAGE_SIZE);
+        int offset = 0;
+        while (true) {
+            if (isStopping(taskId)) {
+                break;
+            }
+            List<Map<String, Object>> srcPage = pageRows(source, sourceTable, pkNames, commonCols, pageSize, offset);
+            if (CollectionUtils.isEmpty(srcPage)) {
+                break;
+            }
+            List<String> keys = new ArrayList<>(srcPage.size());
+            for (Map<String, Object> row : srcPage) {
+                keys.add(buildKey(row, pkNames));
+            }
+            Map<String, Map<String, Object>> tgtPage = fetchByKeys(target, targetTable, pkNames, commonCols, keys, target);
+
+            for (Map<String, Object> srcRow : srcPage) {
+                String key = buildKey(srcRow, pkNames);
+                Map<String, Object> tgtRow = tgtPage.get(key);
+                if (tgtRow == null) {
+                    diff++;
+                    List<Map<String, Object>> details = buildDetails(srcRow, null, commonCols, pkNames);
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标缺失", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标缺失", targetTable, key, details, pkNames, srcRow, null, commonCols));
+                    addItem(content, item);
+                    if (autoSyncFinal && repairInsert(target, targetTable, commonCols, srcRow)) {
+                        fixed++;
+                        markRepaired(content, key, "目标缺失");
+                    }
+                    continue;
+                }
+                List<Map<String, Object>> differs = compareRows(srcRow, tgtRow, commonCols, pkNames);
+                if (!differs.isEmpty()) {
+                    diff++;
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "数据不一致", key, differs, pkNames);
+                    item.put("repairSql", buildRepairSql("数据不一致", targetTable, key, differs, pkNames, srcRow, tgtRow, commonCols));
+                    addItem(content, item);
+                    if (autoSyncFinal && repairUpdate(target, targetTable, pkNames, key, differs)) {
+                        fixed++;
+                        markRepaired(content, key, "数据不一致");
+                    }
+                }
+            }
+            offset += srcPage.size();
+            if (srcPage.size() < pageSize) {
+                break;
+            }
+        }
         return new long[]{sourceTotal, targetTotal, diff, fixed};
+    }
+
+    private static long toLong(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        return Long.parseLong(String.valueOf(value).trim());
+    }
+
+    /**
+     * 分片区间切片：把 [min,max] 按 count 切成左闭右开区间（复用 Wave4 的 splitHalfOpenRange）。
+     * 值域不足 2 片返回空数组（调用方据此降级串行）。包级可见以便单元测试。
+     */
+    static long[][] sliceRanges(long min, long max, int count) {
+        return ParserComponentImpl.splitHalfOpenRange(min, max, count);
     }
 
     /**
@@ -429,20 +926,34 @@ public class ValidateSyncExecutor {
             if (CollectionUtils.isEmpty(tgtPage)) {
                 break;
             }
+            // 批量存在性检查: 每页一次 IN 查询(替代逐行 EXISTS 的 N+1)
+            java.util.Set<String> existsKeys = existsByKeysBatch(source, sourceTable, pkNames, tgtPage);
+            long deletedInPage = 0L;
             for (Map<String, Object> tgtRow : tgtPage) {
                 String key = buildKey(tgtRow, pkNames);
-                boolean exists = existsByKey(source, sourceTable, pkNames, tgtRow);
+                boolean exists = existsKeys.contains(key);
                 if (!exists) {
                     diff++;
                     List<Map<String, Object>> details = buildDetails(null, tgtRow, pkNames, pkNames);
-                    addItem(content, rowDataItem(sourceTable, targetTable, "目标多余", key, details, pkNames));
+                    Map<String, Object> item = rowDataItem(sourceTable, targetTable, "目标多余", key, details, pkNames);
+                    item.put("repairSql", buildRepairSql("目标多余", targetTable, key, details, pkNames, null, tgtRow, null));
+                    addItem(content, item);
                     if (autoDelete && repairDelete(target, targetTable, pkNames, tgtRow)) {
                         fixed++;
+                        deletedInPage++;
                         markRepaired(content, key, "目标多余");
                     }
                 }
             }
-            offset += tgtPage.size();
+            // Wave30：边删边用 OFFSET 翻页会漏行——删掉 d 行后剩余行整体前移 d，
+            // 下一页必须从 (原 offset + 步长 - d) 开始，否则紧邻的一批行被跳过。
+            long step = (long) tgtPage.size()
+                    * ("sample".equalsIgnoreCase(task.getCompareMode()) ? Math.max(1, task.getSampleStep()) : 1);
+            long nextOffset = (long) offset + step - deletedInPage;
+            if (nextOffset > Integer.MAX_VALUE) {
+                break;
+            }
+            offset = (int) Math.max(0L, nextOffset);
             if (tgtPage.size() < pageSize) {
                 break;
             }
@@ -462,6 +973,101 @@ public class ValidateSyncExecutor {
         // 主键定位信息（订正 UPDATE 需要 WHERE 条件；details 仅含差异字段）
         item.put("pkFields", pkNames == null ? Collections.emptyList() : pkNames);
         return item;
+    }
+
+    /**
+     * 生成目标端修复 SQL(对标 NineData"差异生成变更脚本"):
+     * 目标缺失 -> INSERT(源值); 数据不一致 -> UPDATE(源值覆盖差异列); 目标多余 -> DELETE。
+     * 仅供展示/人工执行, 系统内订正走 manualRevise/autoSync。
+     */
+    private String buildRepairSql(String msg, String targetTable, String key,
+                                  List<Map<String, Object>> details, List<String> pkNames,
+                                  Map<String, Object> srcRow, Map<String, Object> tgtRow,
+                                  List<String> commonCols) {
+        try {
+            String q = "'";
+            java.util.function.Function<Object, String> lit = v -> {
+                if (v == null) {
+                    return "NULL";
+                }
+                if (v instanceof byte[]) {
+                    // 二进制 -> 0x 十六进制字面量(避免 Java toString 污染修复 SQL)
+                    byte[] bytes = (byte[]) v;
+                    if (bytes.length == 0) {
+                        return "NULL";
+                    }
+                    StringBuilder hex = new StringBuilder("0x");
+                    for (byte b : bytes) {
+                        hex.append(String.format("%02X", b));
+                    }
+                    return hex.toString();
+                }
+                if (v instanceof Number || v instanceof Boolean) {
+                    return String.valueOf(v);
+                }
+                String t = String.valueOf(v);
+                if (DATETIME_PATTERN.matcher(t).matches() || DATE_PATTERN.matcher(t).matches()
+                        || TIME_PATTERN.matcher(t).matches()) {
+                    return q + t + q;
+                }
+                return q + t.replace(q, q + q) + q;
+            };
+            StringBuilder where = new StringBuilder();
+            if (tgtRow != null) {
+                for (String pk : pkNames) {
+                    if (where.length() > 0) {
+                        where.append(" AND ");
+                    }
+                    where.append(pk).append(" = ").append(lit.apply(tgtRow.get(pk)));
+                }
+            } else if (srcRow != null) {
+                for (String pk : pkNames) {
+                    if (where.length() > 0) {
+                        where.append(" AND ");
+                    }
+                    where.append(pk).append(" = ").append(lit.apply(srcRow.get(pk)));
+                }
+            }
+            if (where.length() == 0) {
+                where.append(key == null ? "NULL" : key);
+            }
+            if (msg.contains("目标多余")) {
+                return "DELETE FROM " + targetTable + " WHERE " + where + ";";
+            }
+            if (msg.contains("目标缺失") && srcRow != null && commonCols != null) {
+                StringBuilder cols = new StringBuilder();
+                StringBuilder vals = new StringBuilder();
+                for (String col : commonCols) {
+                    if (cols.length() > 0) {
+                        cols.append(", ");
+                        vals.append(", ");
+                    }
+                    cols.append(col);
+                    vals.append(lit.apply(srcRow.get(col)));
+                }
+                return "INSERT INTO " + targetTable + " (" + cols + ") VALUES (" + vals + ");";
+            }
+            if (msg.contains("数据不一致") && srcRow != null && details != null) {
+                StringBuilder sets = new StringBuilder();
+                for (Map<String, Object> d : details) {
+                    Object field = d.get("field");
+                    if (field == null) {
+                        continue;
+                    }
+                    if (sets.length() > 0) {
+                        sets.append(", ");
+                    }
+                    sets.append(field).append(" = ").append(lit.apply(d.get("source")));
+                }
+                if (sets.length() == 0) {
+                    return "";
+                }
+                return "UPDATE " + targetTable + " SET " + sets + " WHERE " + where + ";";
+            }
+        } catch (Exception e) {
+            logger.debug("buildRepairSql failed: {}", e.getMessage());
+        }
+        return "";
     }
 
     private List<Map<String, Object>> compareRows(Map<String, Object> srcRow, Map<String, Object> tgtRow,
@@ -835,6 +1441,23 @@ public class ValidateSyncExecutor {
         if (!orderCols.isEmpty()) {
             sql.append(" ORDER BY ").append(joinQuoted(db, orderCols));
         }
+        if (isOracleFamily(db)) {
+            // Oracle/DM-compat 12c+：OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            sql.append(" OFFSET ? ROWS FETCH NEXT ? ROWS ONLY");
+            return db.execute(t -> t.query(sql.toString(), rs -> {
+                List<Map<String, Object>> rows = new ArrayList<>();
+                ResultSetMetaData md = rs.getMetaData();
+                int n = md.getColumnCount();
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int i = 1; i <= n; i++) {
+                        row.put(md.getColumnLabel(i), normalize(rs.getObject(i)));
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }, offset, pageSize));
+        }
         sql.append(" LIMIT ? OFFSET ?");
         return db.execute(t -> t.query(sql.toString(), rs -> {
             List<Map<String, Object>> rows = new ArrayList<>();
@@ -960,6 +1583,78 @@ public class ValidateSyncExecutor {
         return Boolean.TRUE.equals(found);
     }
 
+    /**
+     * 批量存在性检查: 对一页目标行, 用一次 IN 查询取得源端已存在的主键集合。
+     * 参数按批次拆分(单批上限 500), 键值统一走 castKey 类型对齐。
+     */
+    private java.util.Set<String> existsByKeysBatch(DatabaseConnectorInstance db, String table,
+                                                    List<String> pkNames, List<Map<String, Object>> rows) {
+        java.util.Set<String> exists = new java.util.HashSet<>();
+        if (CollectionUtils.isEmpty(rows) || CollectionUtils.isEmpty(pkNames)) {
+            return exists;
+        }
+        int batchSize = 500;
+        for (int from = 0; from < rows.size(); from += batchSize) {
+            List<Map<String, Object>> batch = rows.subList(from, Math.min(from + batchSize, rows.size()));
+            StringBuilder sql = new StringBuilder("SELECT ").append(quote(db, pkNames.get(0)));
+            for (int i = 1; i < pkNames.size(); i++) {
+                sql.append(", ").append(quote(db, pkNames.get(i)));
+            }
+            sql.append(" FROM ").append(quote(db, table)).append(" WHERE ");
+            if (pkNames.size() == 1) {
+                sql.append(quote(db, pkNames.get(0))).append(" IN (");
+                for (int i = 0; i < batch.size(); i++) {
+                    if (i > 0) {
+                        sql.append(",");
+                    }
+                    sql.append("?");
+                }
+                sql.append(")");
+            } else {
+                // 联合主键: (pk1,pk2) IN ((?,?),(?,?)...)
+                sql.append("(");
+                for (int i = 0; i < pkNames.size(); i++) {
+                    if (i > 0) {
+                        sql.append(",");
+                    }
+                    sql.append(quote(db, pkNames.get(i)));
+                }
+                sql.append(") IN (");
+                for (int i = 0; i < batch.size(); i++) {
+                    if (i > 0) {
+                        sql.append(",");
+                    }
+                    sql.append("(");
+                    for (int j = 0; j < pkNames.size(); j++) {
+                        if (j > 0) {
+                            sql.append(",");
+                        }
+                        sql.append("?");
+                    }
+                    sql.append(")");
+                }
+                sql.append(")");
+            }
+            List<Object> args = new ArrayList<>(batch.size() * pkNames.size());
+            for (Map<String, Object> row : batch) {
+                for (String pk : pkNames) {
+                    Object kv = row.get(pk);
+                    if (kv instanceof String) {
+                        kv = castKey((String) kv);
+                    }
+                    args.add(kv);
+                }
+            }
+            List<Map<String, Object>> found = db.execute(t -> t.queryForList(sql.toString(), args.toArray()));
+            if (!CollectionUtils.isEmpty(found)) {
+                for (Map<String, Object> row : found) {
+                    exists.add(buildKey(row, pkNames));
+                }
+            }
+        }
+        return exists;
+    }
+
     private int executeUpdate(DatabaseConnectorInstance db, String sql, List<Object> args) {
         Integer n = db.execute(t -> t.update(sql, args.toArray()));
         return n == null ? 0 : n;
@@ -1059,11 +1754,76 @@ public class ValidateSyncExecutor {
             row.put(ConfigConstant.DETAIL_IS_SUCCESS, diffTotal <= fixedTotal ? 1 : 0);
             row.put(ConfigConstant.DATA_ERROR, error == null ? StringUtil.EMPTY : error);
             row.put(ConfigConstant.CONFIG_MODEL_UPDATE_TIME, System.currentTimeMillis());
-            row.put(ConfigConstant.BINLOG_DATA, JsonUtil.objToJson(data));
+            row.put(ConfigConstant.BINLOG_DATA, serializeDetailData(data, content));
             storageService.editBatch(StorageEnum.TASK_DETAIL, taskId, Collections.singletonList(row));
         } catch (Exception e) {
             logger.error("订正校验任务 [{}] 写入明细结果失败: tableGroupId={}, type={}", taskId, tg.getId(), type, e);
         }
+    }
+
+    /**
+     * Wave24：明细序列化。小数据原样；超 DATA 列上限时优先整体外置（完整保留），
+     * 未安装内容外置存储时按字节预算逐条降级（仍保证 JSON 可解析，不再静默截断成坏 JSON）。
+     */
+    private String serializeDetailData(Map<String, Object> data, List<Map<String, Object>> content) {
+        final java.nio.charset.Charset utf8 = java.nio.charset.StandardCharsets.UTF_8;
+        final int limit = org.dbdatasync.sdk.util.TaskDetailUtil.MAX_DATA_BYTES;
+        String json = JsonUtil.objToJson(data);
+        if (json.getBytes(utf8).length <= limit) {
+            return json;
+        }
+        byte[] blob = org.dbdatasync.sdk.util.TaskDetailUtil.serializeContent(data);
+        if (blob == null) {
+            return json;
+        }
+        String text = new String(blob, utf8);
+        if (org.dbdatasync.sdk.storage.TaskDetailContentStore.current() != null) {
+            // DBDS-REF 引用串：读取端 deserializeContent 会还原完整明细
+            return text;
+        }
+        // Wave30：并发写入时先在同一把锁下取快照，避免遍历时 CME；
+        // 旧实现每加一条就序列化一次完整 data，是 O(n²)，上万条差异会卡死校验任务。
+        java.util.List<Map<String, Object>> snapshot;
+        synchronized (content) {
+            snapshot = new java.util.ArrayList<>(content);
+        }
+        Object original = data.get(ConfigConstant.TASK_CONTENT);
+        data.put(ConfigConstant.TASK_CONTENT, java.util.Collections.emptyList());
+        int baseBytes = JsonUtil.objToJson(data).getBytes(utf8).length;
+        // 空数组 "[]" 占 2 字节；逐条按「单条 JSON + 逗号」增量累计，整体只序列化一次
+        long used = baseBytes - 2L;
+        final int tipReserve = 512;
+        java.util.List<Map<String, Object>> kept = new java.util.ArrayList<>();
+        for (Map<String, Object> item : snapshot) {
+            int add = (kept.isEmpty() ? 0 : 1) + JsonUtil.objToJson(item).getBytes(utf8).length;
+            if (used + add + tipReserve > limit) {
+                break;
+            }
+            kept.add(item);
+            used += add;
+        }
+        Map<String, Object> tip = new java.util.LinkedHashMap<>();
+        tip.put("type", "tip");
+        tip.put("msg", "共 " + snapshot.size() + " 条差异，DATA 列 65535 字节上限内完整保留 "
+                + kept.size() + " 条；启用文件内容外置可查看全部");
+        kept.add(tip);
+        data.put(ConfigConstant.TASK_CONTENT, kept);
+        String out = JsonUtil.objToJson(data);
+        // 估算与实际转义长度可能略有偏差，最多回退 20 条（常态 0~1 次），再不行只保留提示
+        int guard = 0;
+        while (out.getBytes(utf8).length > limit && kept.size() > 1 && guard++ < 20) {
+            kept.remove(kept.size() - 2);
+            out = JsonUtil.objToJson(data);
+        }
+        if (out.getBytes(utf8).length > limit) {
+            java.util.List<Map<String, Object>> onlyTip = new java.util.ArrayList<>();
+            onlyTip.add(tip);
+            data.put(ConfigConstant.TASK_CONTENT, onlyTip);
+            out = JsonUtil.objToJson(data);
+        }
+        // 保留原始引用语义，避免调用方后续复用 data 时拿到降级副本
+        data.put(ConfigConstant.TASK_CONTENT, original);
+        return out;
     }
 
     private Map<String, Object> findDetailRow(String taskId, String tableGroupId, String type) {
@@ -1152,21 +1912,22 @@ public class ValidateSyncExecutor {
     }
 
     private void addItem(List<Map<String, Object>> content, Map<String, Object> item) {
-        if (content.size() < MAX_CONTENT_ITEMS) {
+        // Wave24：全量保留，大小问题交给 saveDetailRow 的内容外置/字节预算降级处理
+        // Wave30：分片并发下 content 会被多线程共享，写入与遍历必须同一把锁，避免 CME
+        synchronized (content) {
             content.add(item);
-        } else if (content.size() == MAX_CONTENT_ITEMS) {
-            Map<String, Object> tip = new LinkedHashMap<>();
-            tip.put("type", "tip");
-            tip.put("msg", "差异数过多，仅展示前 " + MAX_CONTENT_ITEMS + " 条");
-            content.add(tip);
         }
     }
 
     private void markRepaired(List<Map<String, Object>> content, String key, String msg) {
-        for (Map<String, Object> item : content) {
-            if (key != null && key.equals(str(item.get("key"))) && msg.equals(str(item.get("msg")))) {
-                item.put("msg", msg + "(已订正)");
-                return;
+        synchronized (content) {
+            // 刚 addItem 的项在末尾，从后往前找平均 O(1)；避免每次订正全量 O(n) 扫描
+            for (int i = content.size() - 1; i >= 0; i--) {
+                Map<String, Object> item = content.get(i);
+                if (key != null && key.equals(str(item.get("key"))) && msg.equals(str(item.get("msg")))) {
+                    item.put("msg", msg + "(已订正)");
+                    return;
+                }
             }
         }
     }
@@ -1251,9 +2012,17 @@ public class ValidateSyncExecutor {
         if (v == null) {
             return null;
         }
+        // Oracle 原生类型：ojdbc 返回 oracle.sql.TIMESTAMP / oracle.sql.DATE 等，
+        // 不是标准的 java.sql.Timestamp，需转回 JDBC 类型再统一为字符串才能跨库比对。
+        Object jdbcValue = toJdbcTimestamp(v);
+        if (jdbcValue != v) {
+            v = jdbcValue;
+        }
         // 统一日期时间表示：跨库（MySQL LocalDateTime / PG Timestamp 等）字符串一致才能正确比对
         if (v instanceof java.sql.Timestamp) {
-            return ((java.sql.Timestamp) v).toLocalDateTime().toString();
+            // 截断到秒：跨库时间精度不一致（Oracle TIMESTAMP(6)/MySQL datetime(6)/DM 扫描），
+            // 业务上通常只关心到秒级一致；纳秒级差异视为等价
+            return ((java.sql.Timestamp) v).toLocalDateTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
         }
         if (v instanceof java.sql.Date) {
             return ((java.sql.Date) v).toLocalDate().toString();
@@ -1264,10 +2033,48 @@ public class ValidateSyncExecutor {
         if (v instanceof java.time.LocalDateTime || v instanceof java.time.LocalDate
                 || v instanceof java.time.LocalTime || v instanceof java.time.ZonedDateTime
                 || v instanceof java.time.OffsetDateTime) {
+            if (v instanceof java.time.LocalDateTime) {
+                return ((java.time.LocalDateTime) v).truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+            }
             return String.valueOf(v);
         }
         if (v instanceof java.util.Date && !(v instanceof java.sql.Date)) {
-            return new java.sql.Timestamp(((java.util.Date) v).getTime()).toLocalDateTime().toString();
+            return new java.sql.Timestamp(((java.util.Date) v).getTime())
+                    .toLocalDateTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        }
+        return v;
+    }
+
+    /**
+     * Oracle 驱动返回的 oracle.sql.TIMESTAMP / oracle.sql.DATE 等原生类型转回标准 JDBC 时间类型。
+     * 不识别的类型原样返回。
+     */
+    private Object toJdbcTimestamp(Object v) {
+        String cn = v.getClass().getName();
+        try {
+            if ("oracle.sql.TIMESTAMP".equals(cn)) {
+                Object ts = v.getClass().getMethod("timestampValue").invoke(v);
+                if (ts instanceof java.sql.Timestamp) {
+                    return ts;
+                }
+            } else if ("oracle.sql.DATE".equals(cn)) {
+                Object ts = v.getClass().getMethod("timestampValue").invoke(v);
+                if (ts instanceof java.sql.Timestamp) {
+                    return ts;
+                }
+            } else if ("oracle.sql.INTERVALDS".equals(cn) || "oracle.sql.INTERVALYM".equals(cn)) {
+                // 区间类型转字符串（内部类结构各异，反射取 toString）
+                return String.valueOf(v);
+            } else if (cn.startsWith("oracle.sql.")) {
+                // 其他 Oracle 原生类型：尝试统一 toString（至少保证可比对）
+                String s = String.valueOf(v);
+                if (s.startsWith("oracle.sql.")) {
+                    return s;
+                }
+                return v;
+            }
+        } catch (Exception e) {
+            return v;
         }
         return v;
     }
@@ -1371,6 +2178,26 @@ public class ValidateSyncExecutor {
             return "`" + name + "`";
         }
         return "\"" + name + "\"";
+    }
+
+    /**
+     * Oracle 语法族（含达梦/OceanBase-Oracle）：不支持 LIMIT/OFFSET 简单分页，
+     * 需用 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY（12c+）或 ROWNUM 分页。
+     */
+    private boolean isOracleFamily(DatabaseConnectorInstance db) {
+        String type = db.getConfig() != null ? db.getConfig().getConnectorType() : "";
+        return isOracleFamilyType(type);
+    }
+
+    /**
+     * 按连接器类型判断是否 Oracle 语法族（可测试的静态判定）。
+     */
+    static boolean isOracleFamilyType(String connectorType) {
+        if (connectorType == null) {
+            return false;
+        }
+        String t = connectorType.toUpperCase();
+        return t.contains("ORACLE") || t.contains("DAMENG") || t.contains("OCEANBASE");
     }
 
     private String joinQuoted(DatabaseConnectorInstance db, List<String> names) {

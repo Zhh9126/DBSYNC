@@ -13,7 +13,7 @@
         <module>dbdatasync-biz</module>
         <module>dbdatasync-common</module>
         <module>dbdatasync-connector</module>
-        <module>dbdatasync-engine</module>
+        <!-- Wave24：dbdatasync-engine 为运行时完全不经过的死代码模块，已从 reactor 移除 -->
         <module>dbdatasync-manager</module>
         <module>dbdatasync-parser</module>
         <module>dbdatasync-plugin</module>
@@ -387,6 +387,42 @@
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>
                 <artifactId>spotless-maven-plugin</artifactId>
+            </plugin>
+
+            <!--
+              Wave23 P2 工程基线。这里的原则是「降低内存预留」而不是「加大堆」：
+              JDK8 默认按物理内存 1/4 预留堆（32GB 机器约 8GB），再叠加 Parallel GC
+              的 GC 线程 bitmap、C2 编译线程与 code cache 的原生开销，在页面文件吃紧时
+              会直接以 "Native memory allocation (malloc) failed for Chunk::new" 崩溃。
+              单测不需要峰值吞吐，因此显式收窄 JVM footprint：
+                -Xms/-Xmx          小堆，且 -Xms 不预先提交大块内存
+                -XX:+UseSerialGC   单线程 GC，去掉 N 个 GC 线程的原生 bitmap
+                TieredStopAtLevel=1 只保留 C1，避免 C2 CompilerThread 申请原生内存
+                -Xss / Metaspace / CodeCache 限制线程栈与元空间上限
+              单进程单 fork 复用，避免 34 个模块并发拉起多个 JVM。
+              另外默认排除需要真实数据库 / Kafka / ES / 文件监听的集成测试，
+              保证 CI 与发行包构建在无外部依赖时也能稳定通过；
+              需要执行这类集成测试时：-Dtest=ConnectionTest -Dsurefire.excludes=none
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-Xms64m -Xmx384m -Xss512k -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:CICompilerCount=2 -XX:ReservedCodeCacheSize=64m -XX:MaxMetaspaceSize=192m -Djdk.net.URLClassPath.disableClassPathURLCheck=true -Dfile.encoding=UTF-8</argLine>
+                    <forkCount>1</forkCount>
+                    <reuseForks>true</reuseForks>
+                    <excludes>
+                        <exclude>**/ClickhouseTest.java</exclude>
+                        <exclude>**/ConnectionTest.java</exclude>
+                        <exclude>**/ESClientTest.java</exclude>
+                        <exclude>**/KafkaClientTest.java</exclude>
+                        <exclude>**/FileConnectionTest.java</exclude>
+                        <exclude>**/FileWatchTest.java</exclude>
+                        <exclude>**/BinaryLogRemoteClientTest.java</exclude>
+                        <exclude>**/ChangeDataCaptureTest.java</exclude>
+                        <exclude>**/PGReplicationTest.java</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
         </plugins>
     </build>

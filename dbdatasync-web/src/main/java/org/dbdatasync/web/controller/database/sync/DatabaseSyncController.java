@@ -3,6 +3,7 @@
  */
 package org.dbdatasync.web.controller.database.sync;
 
+import org.dbdatasync.biz.ValidateSyncService;
 import org.dbdatasync.biz.DatabaseSyncService;
 import org.dbdatasync.biz.vo.DatabaseSyncTaskVO;
 import org.dbdatasync.biz.vo.RestResult;
@@ -23,6 +24,11 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * 整库迁移
  *
@@ -40,7 +46,13 @@ public class DatabaseSyncController extends BaseController {
     private DatabaseSyncService databaseSyncService;
 
     @Resource
+    private ValidateSyncService validateSyncService;
+
+    @Resource
     private org.dbdatasync.biz.precheck.PreCheckService preCheckService;
+
+    @Resource
+    private org.dbdatasync.biz.service.DatabaseSyncPerfAdviceService databaseSyncPerfAdviceService;
 
     @RequestMapping("/list")
     public String list(ModelMap model) {
@@ -77,6 +89,11 @@ public class DatabaseSyncController extends BaseController {
             model.put("task", task);
             Integer metaState = task.getMetaState();
             model.put("readOnly", metaState != null && CommonTaskStatusEnum.isRunning(metaState));
+        } else if ("perf".equals(page)) {
+            Assert.hasText(id, "任务 ID 不能为空");
+            model.put("taskId", id);
+            DatabaseSyncTaskVO task = databaseSyncService.get(id);
+            model.put("taskName", task != null ? task.getName() : id);
         }
         return "database-sync/" + page;
     }
@@ -159,6 +176,35 @@ public class DatabaseSyncController extends BaseController {
     }
 
     /**
+     * 整库迁移性能适配报告（文档级建议，不自动执行 DDL）。
+     */
+    @PostMapping("/perfAdvice")
+    @ResponseBody
+    public RestResult perfAdvice(@RequestParam("id") String id) {
+        try {
+            return RestResult.restSuccess(databaseSyncPerfAdviceService.analyze(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 迁移阶段推进：schedule → full → increment → validate → switchover。
+     * 阶段持久化到任务级 Meta.SNAPSHOT（migrationStage），链完成后再次调用返回当前阶段。
+     */
+    @PostMapping("/advanceStage")
+    @ResponseBody
+    public RestResult advanceStage(@RequestParam("id") String id) {
+        try {
+            return RestResult.restSuccess(databaseSyncService.advanceMigrationStage(id));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
      * 一键接续增量：为整库迁移任务创建增量（CDC/定时）驱动（autoStart=true 时直接启动）。
      */
     @PostMapping("/upgrade")
@@ -181,6 +227,40 @@ public class DatabaseSyncController extends BaseController {
     public RestResult expandDatabases(HttpServletRequest request) {
         try {
             return RestResult.restSuccess(databaseSyncService.expandDatabases(getParams(request)));
+        } catch (Exception e) {
+            logger.error(e.getLocalizedMessage(), e);
+            return RestResult.restFail(e.getMessage());
+        }
+    }
+
+    /**
+     * 从整库迁移任务一键创建数据对比任务。
+     * <p>按迁移任务的每个同步映射(mappingId)关联生成订正校验任务
+     * (自动复制源/目标连接器、库表与全部表组映射)，用于迁移/同步完成后的数据一致性对比。</p>
+     *
+     * @param id   整库迁移任务 ID
+     * @param name 对比任务名称前缀(可选, 默认“任务名-数据对比”)
+     * @return 创建的对比任务 ID 列表(与映射一一对应)
+     */
+    @PostMapping("/createValidateSync")
+    @ResponseBody
+    public RestResult createValidateSync(@RequestParam("id") String id,
+                                         @RequestParam(value = "name", required = false) String name) {
+        try {
+            DatabaseSyncTaskVO task = databaseSyncService.get(id);
+            Assert.notNull(task, "整库迁移任务不存在");
+            Assert.notEmpty(task.getDatabaseMappings(), "该任务缺少库映射, 无法发起数据对比");
+            String prefix = org.dbdatasync.common.util.StringUtil.isNotBlank(name) ? name
+                    : task.getName() + "-数据对比";
+            List<String> created = new ArrayList<>();
+            for (int i = 0; i < task.getDatabaseMappings().size(); i++) {
+                Map<String, String> params = new HashMap<>();
+                params.put("databaseSyncTaskId", id);
+                params.put("mappingIndex", String.valueOf(i));
+                params.put("name", prefix);
+                created.add(validateSyncService.add(params));
+            }
+            return RestResult.restSuccess(created);
         } catch (Exception e) {
             logger.error(e.getLocalizedMessage(), e);
             return RestResult.restFail(e.getMessage());

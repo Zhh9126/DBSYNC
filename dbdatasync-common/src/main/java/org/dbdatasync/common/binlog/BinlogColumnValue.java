@@ -73,19 +73,13 @@ public class BinlogColumnValue extends AbstractColumnValue<ByteString> {
             Short aShort = asShort();
             return new Integer(aShort);
         }
-
-        ByteBuffer buffer = ByteBuffer.allocate(BinlogByteEnum.INTEGER.getByteLength());
-        buffer.put(bytes, 0, buffer.capacity());
-        buffer.flip();
-        return buffer.asIntBuffer().get();
+        // 长度不足时补零(如 MEDIUMINT/INT24 为 3 字节), 超长时截断, 避免 BufferOverflow
+        return (int) readPadded(bytes, BinlogByteEnum.INTEGER.getByteLength()).asIntBuffer().get();
     }
 
     @Override
     public Long asLong() {
-        ByteBuffer buffer = ByteBuffer.allocate(BinlogByteEnum.LONG.getByteLength());
-        buffer.put(asByteArray(), 0, buffer.capacity());
-        buffer.flip();
-        return buffer.asLongBuffer().get();
+        return readPadded(asByteArray(), BinlogByteEnum.LONG.getByteLength()).asLongBuffer().get();
     }
 
     @Override
@@ -136,10 +130,22 @@ public class BinlogColumnValue extends AbstractColumnValue<ByteString> {
 
     @Override
     public Boolean asBoolean() {
-        ByteBuffer buffer = ByteBuffer.allocate(BinlogByteEnum.SHORT.getByteLength());
-        buffer.put(asByteArray(), 0, buffer.capacity());
+        return readPadded(asByteArray(), BinlogByteEnum.SHORT.getByteLength()).asShortBuffer().get() == 1;
+    }
+
+    /**
+     * 按期望长度读取: 长度不足补零, 超长截断, 保证任意长度输入均可安全读取。
+     */
+    private static ByteBuffer readPadded(byte[] bytes, int expectedLength) {
+        ByteBuffer buffer = ByteBuffer.allocate(expectedLength);
+        int n = Math.min(bytes.length, expectedLength);
+        buffer.put(bytes, 0, n);
+        // 不足部分补零, 使 position==capacity, 保证 asXxxBuffer().get() 可读
+        for (int i = n; i < expectedLength; i++) {
+            buffer.put((byte) 0);
+        }
         buffer.flip();
-        return buffer.asShortBuffer().get() == 1;
+        return buffer;
     }
 
     @Override

@@ -1,5 +1,5 @@
 /**
- * 订正校验列表页
+ * 数据对比列表页
  */
 (function (window) {
     'use strict';

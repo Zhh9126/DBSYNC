@@ -228,6 +228,14 @@ public final class MongoDBChangeStreamListener extends AbstractListener<MongoCon
         }
         RowChangedEvent event = new RowChangedEvent(watcher.table.getName(), operation, rowData,
                 watcher.collectionName, resumeTokenJson);
+        // Wave24：Change Stream clusterTime 是 oplog 侧源端时间（秒级），优先于 resumeToken
+        Object clusterTime = change.getClusterTime();
+        if (clusterTime instanceof org.bson.BsonTimestamp) {
+            long sourceMillis = org.dbdatasync.sdk.model.SourceEventTime
+                    .secondsToMillis(((org.bson.BsonTimestamp) clusterTime).getTime());
+            org.dbdatasync.sdk.model.SourceEventTime.apply(event, sourceMillis,
+                    ChangedOffset.EVENT_TIME_SOURCE);
+        }
         trySendEvent(event);
     }
 

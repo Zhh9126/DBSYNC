@@ -46,10 +46,19 @@ public final class MySQLTimestampType extends TimestampType {
     protected Object convert(Object val, Field field) {
         if (isDatetime(field)) {
             if (val instanceof Timestamp) {
-                return DateFormatUtil.timestampToString((Timestamp) val);
+                // 含微秒时必须保留小数位, 否则 DATETIME(3/6) 精度在同步中丢失
+                Timestamp ts = (Timestamp) val;
+                if (ts.getNanos() > 0) {
+                    return DateFormatUtil.timestampToString(ts, DateFormatUtil.YYYY_MM_DD_HH_MM_SS_SSSSSS);
+                }
+                return DateFormatUtil.timestampToString(ts);
             }
             if (val instanceof LocalDateTime) {
-                return ((LocalDateTime) val).format(DateFormatUtil.YYYY_MM_DD_HH_MM_SS);
+                LocalDateTime ldt = (LocalDateTime) val;
+                if (ldt.getNano() > 0) {
+                    return ldt.format(DateFormatUtil.YYYY_MM_DD_HH_MM_SS_SSSSSS);
+                }
+                return ldt.format(DateFormatUtil.YYYY_MM_DD_HH_MM_SS);
             }
         }
         if (val instanceof String) {

@@ -10,6 +10,10 @@ import org.dbdatasync.sdk.model.ChangedOffset;
 /**
  * 通用变更事件
  *
+ * <p>Wave23：所有变更事件统一携带事件时间。若连接器未显式给出源端时间
+ * （binlog timestamp / commit timestamp / SCN），则退化为「接收时刻估算」并明确标记，
+ * 保证下游不会把估算值冒充端到端延迟。</p>
+ *
  * @version 1.0.0
  * @Author AE86
  * @Date 2023-08-20 20:00
@@ -67,6 +71,10 @@ public abstract class CommonChangedEvent implements ChangedEvent {
 
     @Override
     public ChangedOffset getChangedOffset() {
+        // 兜底：任何路径取位点时都保证有事件时间（估算），避免下游拿到 0 后误判
+        if (changedOffset.getEventTime() <= 0) {
+            changedOffset.markEstimatedEventTime(System.currentTimeMillis());
+        }
         return changedOffset;
     }
 
@@ -76,6 +84,27 @@ public abstract class CommonChangedEvent implements ChangedEvent {
 
     public void setPosition(Object position) {
         changedOffset.setPosition(position);
+        if (changedOffset.getEventTime() <= 0) {
+            changedOffset.markEstimatedEventTime(System.currentTimeMillis());
+        }
+    }
+
+    /** 由 CDC Listener 填充源端真实事件时间 */
+    public void setEventTime(long sourceTimeMillis, String source) {
+        if (ChangedOffset.EVENT_TIME_SOURCE.equals(source)) {
+            changedOffset.markSourceEventTime(sourceTimeMillis);
+        } else if (sourceTimeMillis > 0) {
+            changedOffset.setEventTime(sourceTimeMillis);
+            changedOffset.setEventTimeSource(source);
+        }
+    }
+
+    public long getEventTime() {
+        return getChangedOffset().getEventTime();
+    }
+
+    public String getEventTimeSource() {
+        return getChangedOffset().getEventTimeSource();
     }
 
     @Override

@@ -33,9 +33,12 @@ public class DatabaseSyncTask extends ConfigModel {
      */
     private boolean overwriteSchema;
     /**
-     * 是否同步数据
+     * 是否同步数据。
+     * <p>Wave30：默认 true。存量任务 JSON 若早于该字段，反序列化保留此默认值，
+     * 仍按「整库全量迁移」执行；新建/编辑由 {@code fillSyncStrategy} 按页面开关显式赋值。
+     * 这样「仅结构迁移」的开关才真正生效，又不会让历史任务突然停止灌数据。</p>
      */
-    private boolean enableCopyData;
+    private boolean enableCopyData = true;
     /**
      * 数据是否覆盖（目标已存在时）
      */
@@ -71,6 +74,20 @@ public class DatabaseSyncTask extends ConfigModel {
      * 发现源端新增表 → 自动建目标表（enableCopySchema 开启时）+ 追加表映射 + 全量同步
      */
     private boolean enableAutoDiscover;
+
+    /**
+     * 迁移编排阶段: schedule(编排就绪) → full(全量迁移) → increment(增量追平) → validate(一致性校验) → switchover(切换)
+     * <p>由 {@code DatabaseSyncServiceImpl} 推进；持久化到 Meta.SNAPSHOT（migrationStage），不随任务配置导出。</p>
+     */
+    private String migrationStage = "schedule";
+
+    public String getMigrationStage() {
+        return migrationStage;
+    }
+
+    public void setMigrationStage(String migrationStage) {
+        this.migrationStage = migrationStage == null ? "schedule" : migrationStage;
+    }
 
     public boolean isEnableAutoDiscover() {
         return enableAutoDiscover;
@@ -150,5 +167,78 @@ public class DatabaseSyncTask extends ConfigModel {
 
     public void setMappingIds(List<String> mappingIds) {
         this.mappingIds = mappingIds == null ? new ArrayList<>() : mappingIds;
+    }
+
+    /**
+     * 每秒最多迁移行数（0 = 不限速）
+     */
+    private long recordsPerSecond = 0;
+    /**
+     * 每秒最多迁移字节数（0 = 不限速）
+     */
+    private long bytesPerSecond = 0;
+    /**
+     * 是否仅在低峰时间窗内启动
+     */
+    private boolean enableOffPeakWindow = false;
+    /**
+     * 低峰窗口开始时间（HH:mm，24 小时制）
+     */
+    private String windowStart = "";
+    /**
+     * 低峰窗口结束时间（HH:mm，24 小时制）；start &gt; end 表示跨越 24:00
+     */
+    private String windowEnd = "";
+    /**
+     * 全量完成后是否自动推进到增量追平阶段
+     */
+    private boolean autoAdvanceStage = false;
+
+    public long getRecordsPerSecond() {
+        return recordsPerSecond;
+    }
+
+    public void setRecordsPerSecond(long recordsPerSecond) {
+        this.recordsPerSecond = recordsPerSecond;
+    }
+
+    public long getBytesPerSecond() {
+        return bytesPerSecond;
+    }
+
+    public void setBytesPerSecond(long bytesPerSecond) {
+        this.bytesPerSecond = bytesPerSecond;
+    }
+
+    public boolean isEnableOffPeakWindow() {
+        return enableOffPeakWindow;
+    }
+
+    public void setEnableOffPeakWindow(boolean enableOffPeakWindow) {
+        this.enableOffPeakWindow = enableOffPeakWindow;
+    }
+
+    public String getWindowStart() {
+        return windowStart;
+    }
+
+    public void setWindowStart(String windowStart) {
+        this.windowStart = windowStart == null ? "" : windowStart;
+    }
+
+    public String getWindowEnd() {
+        return windowEnd;
+    }
+
+    public void setWindowEnd(String windowEnd) {
+        this.windowEnd = windowEnd == null ? "" : windowEnd;
+    }
+
+    public boolean isAutoAdvanceStage() {
+        return autoAdvanceStage;
+    }
+
+    public void setAutoAdvanceStage(boolean autoAdvanceStage) {
+        this.autoAdvanceStage = autoAdvanceStage;
     }
 }

@@ -5,10 +5,20 @@ SCRIPT_DIR=$(cd "$(dirname "$0")"; pwd)
 DBS_HOME=$(cd "$SCRIPT_DIR/.."; pwd)
 echo "DBS_HOME=$DBS_HOME"
 
-# 自动检测同目录下的 jre8
+# Wave29 离线交付修复：H2 的 jdbc:h2:file:./data/... 以进程工作目录为基准，
+# 不切到安装目录时数据文件会散落在调用者目录里。
+cd "$DBS_HOME" || { echo "ERROR: cannot enter $DBS_HOME" >&2; exit 1; }
+
+# 自动检测同目录下的 jre8（离线包内嵌运行时）。
+# Wave29：仅当存在本平台可执行的 bin/java 才采用。离线包里的 Windows 版 jre8
+# 只有 java.exe，在 Linux 上会被跳过并回退系统 Java，避免误用不可执行的运行时。
 if [[ -z "${JRE_HOME:-}" && -d "$DBS_HOME/jre8" ]]; then
-  export JRE_HOME="$DBS_HOME/jre8"
-  echo "Using embedded JRE8: $JRE_HOME"
+  if [[ -x "$DBS_HOME/jre8/bin/java" ]]; then
+    export JRE_HOME="$DBS_HOME/jre8"
+    echo "Using embedded JRE8: $JRE_HOME"
+  else
+    echo "WARN: embedded jre8 is not runnable on this platform, falling back to system Java (JDK/JRE 8 required)"
+  fi
 fi
 
 # 确保 conf 目录存在
@@ -90,25 +100,23 @@ else
 fi
 
 # 1. 内存与基础配置 (放在最前面)
-JAVA_OPTS+=("-Xms3g")
-JAVA_OPTS+=("-Xmx3g")
+# Wave29：离线环境常见 2~4GB 小内存机器，旧版固定 3g 堆会直接启动失败。
+# 默认小堆起步，按实际数据量用 DBS_HEAP_MIN / DBS_HEAP_MAX 放大，不再「多分配内存」硬扛。
+DBS_HEAP_MIN="${DBS_HEAP_MIN:-128m}"
+DBS_HEAP_MAX="${DBS_HEAP_MAX:-768m}"
+JAVA_OPTS+=("-Xms$DBS_HEAP_MIN")
+JAVA_OPTS+=("-Xmx$DBS_HEAP_MAX")
 JAVA_OPTS+=("-Xss512k")
-JAVA_OPTS+=("-XX:MetaspaceSize=256m")
-JAVA_OPTS+=("-XX:MaxDirectMemorySize=512m")
+JAVA_OPTS+=("-XX:MetaspaceSize=128m")
+JAVA_OPTS+=("-XX:MaxMetaspaceSize=384m")
+JAVA_OPTS+=("-XX:MaxDirectMemorySize=${DBS_DIRECT_MEM:-256m}")
 JAVA_OPTS+=("-XX:+DisableAttachMechanism")
 
-# 2. GC 配置
-JAVA_OPTS+=("-XX:+UnlockExperimentalVMOptions")
-JAVA_OPTS+=("-XX:+UseG1GC")
-JAVA_OPTS+=("-XX:G1HeapRegionSize=16m")
-JAVA_OPTS+=("-XX:MaxGCPauseMillis=200")
+# 2. GC 与故障诊断：小堆下不再强制 G1 + 16m region（会把堆切成过少的分区），
+# 使用 JDK8 默认收集器；GC 细节通过 DBS_JAVA_OPTS 按需追加。
 JAVA_OPTS+=("-XX:+HeapDumpOnOutOfMemoryError")
 JAVA_OPTS+=("-XX:HeapDumpPath=$DBS_HOME/logs/heapdump.hprof")
 JAVA_OPTS+=("-XX:ErrorFile=$DBS_HOME/logs/hs_err_pid_%p.log")
-# GC 日志已关闭，需要时可取消下面三行注释
-# JAVA_OPTS+=("-verbose:gc")
-# JAVA_OPTS+=("-XX:+PrintGCDetails")
-# JAVA_OPTS+=("-XX:+PrintGCDateStamps")
 
 # 3. Agent (如果有)
 if [ -e "$DBS_HOME/bin/$ENCRYPT_FILE" ]; then
@@ -127,6 +135,13 @@ JAVA_OPTS+=("-Duser.dir=$DBS_HOME")
 # 5. 主类
 APP="org.dbdatasync.web.Application"
 
+# 6. 追加自定义 JVM 参数（例如 -XX:+UseG1GC -verbose:gc），空格分隔
+if [[ -n "${DBS_JAVA_OPTS:-}" ]]; then
+    read -r -a DBS_EXTRA_OPTS <<< "$DBS_JAVA_OPTS"
+    JAVA_OPTS+=("${DBS_EXTRA_OPTS[@]}")
+fi
+echo "Heap: -Xms$DBS_HEAP_MIN -Xmx$DBS_HEAP_MAX (DBS_HEAP_MIN / DBS_HEAP_MAX 可覆盖)"
+
 # 确定 java 路径：优先 jre8，否则使用系统 java
 if [[ -n "${JRE_HOME:-}" ]]; then
   if [[ -x "$JRE_HOME/bin/java" ]]; then
@@ -143,7 +158,35 @@ fi
 # execute command
 echo "Starting DBDataSync Application..."
 
-nohup "$JAVA_BIN" "${JAVA_OPTS[@]}" "$APP" > /dev/null 2>&1 &
+# Wave31-fix: Spring Boot relaxed binding maps BOTH SERVER_PORT and SERVER__PORT to
+# server.port, and OS env vars rank HIGHER than conf/application.properties. Dev shells
+# (WorkBuddy/CodeBuddy/CI) inject SERVER__PORT=<random session port>, which silently
+# moved the bind port. Clear them, resolve a free port (auto-avoid +1, up to 20 tries)
+# and pass it explicitly as a command-line arg (highest priority, immune to env pollution).
+if [[ -n "${SERVER_PORT:-}" ]]; then
+  echo "WARN: SERVER_PORT=$SERVER_PORT found in environment, cleared to use conf server.port."
+  unset SERVER_PORT
+fi
+if [[ -n "${SERVER__PORT:-}" ]]; then
+  echo "WARN: SERVER__PORT=$SERVER__PORT found in environment, cleared to use conf server.port."
+  unset SERVER__PORT
+fi
+
+CONF_PORT=$(grep -E '^server\.port=' "$CONFIG_PATH" | tail -1 | cut -d= -f2 | tr -d ' \r')
+USE_PORT="${CONF_PORT:-18686}"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if ! (netstat -an 2>/dev/null || true) | grep -E "[:.]${USE_PORT}[[:space:]]" | grep -qi listen; then
+    break
+  fi
+  echo "WARN: port ${USE_PORT} is busy, trying next..."
+  USE_PORT=$((USE_PORT + 1))
+done
+if [[ "$USE_PORT" != "${CONF_PORT:-18686}" ]]; then
+  echo "WARN: conf port ${CONF_PORT:-18686} is busy, using ${USE_PORT} instead."
+fi
+echo "Using port: ${USE_PORT} (busy ports auto-avoided)"
+
+nohup "$JAVA_BIN" "${JAVA_OPTS[@]}" "$APP" --server.port="$USE_PORT" > /dev/null 2>&1 &
 APP_PID=$!
 
 # 保存 PID 并反馈结果

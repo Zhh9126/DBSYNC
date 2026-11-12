@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- DBLink 查询（方向五多技术路线补充：DBLink 读取通道，Wave20 运行时接线） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">DBLink 查询</h3>
+    </div>
+    <div class="card-body">
+        <div class="tip-box mb-3">
+            <i class="fa fa-info-circle"></i>
+            按源端连接器探测 <strong>all_db_links</strong> 视图，并执行含 <code>@dblink</code> 后缀的只读查询。
+            <br><span class="text-tertiary">保守口径：仅放行 SELECT / WITH 开头语句（支持前导注释），写操作一律拒绝；行数受 maxRows 限制。需 Oracle 等支持 DBLink 的源端。</span>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">源端连接器</label>
+            <select id="connectorId" class="form-input" style="max-width:420px;">
+                <option value="">请选择连接器</option>
+                <option th:each="c : ${connectors}" th:value="${c.id}"
+                        th:text="${c.name} + '（' + ${c.type} + '）'"></option>
+            </select>
+        </div>
+
+        <!-- DBLink 列表 -->
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doLinks()"><i class="fa fa-list"></i> 探测 DBLink 列表</button>
+        </div>
+        <div id="linksResult" style="display:none;" class="mb-4">
+            <div class="mb-2" id="linksSummary"></div>
+            <div style="max-height:280px;overflow:auto;">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th style="width:140px;">属主</th>
+                        <th>链接名（DB_LINK）</th>
+                        <th style="width:160px;">用户名</th>
+                        <th style="width:200px;">主机（HOST）</th>
+                    </tr>
+                    </thead>
+                    <tbody id="linksTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 查询 -->
+        <h4 class="mb-2 font-medium text-sm"><i class="fa fa-search text-primary"></i> 只读查询</h4>
+        <div class="mb-3">
+            <label class="form-label">SQL（SELECT / WITH，可含 @dblink）</label>
+            <textarea id="sqlText" class="form-input" rows="5"
+                      placeholder="SELECT * FROM scott.emp@remote_link WHERE ROWNUM &lt;= 10"
+                      style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-4 mb-3">
+            <div>
+                <label class="form-label">maxRows（0 = 默认 500）</label>
+                <input id="maxRows" class="form-input" type="number" min="0" placeholder="500">
+            </div>
+            <div>
+                <label class="form-label">操作</label>
+                <button class="btn btn-primary" onclick="doQuery()"><i class="fa fa-play"></i> 执行查询</button>
+            </div>
+        </div>
+
+        <div id="queryResult" style="display:none;">
+            <div class="mb-2" id="querySummary"></div>
+            <div style="max-height:420px;overflow:auto;">
+                <table class="table">
+                    <thead id="queryHead"></thead>
+                    <tbody id="queryTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="queryEmpty" style="display:none;" class="text-center py-4 text-tertiary">查询无返回行</div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    function requireConnector() {
+        const id = document.getElementById('connectorId').value;
+        if (!id) {
+            bootGrowl('请先选择连接器', 'warning');
+            return null;
+        }
+        return id;
+    }
+
+    function doLinks() {
+        const connectorId = requireConnector();
+        if (!connectorId) { return; }
+        doPoster('/dblink/links', { connectorId: connectorId }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '探测失败（需 Oracle 等支持 DBLink 的源端）', 'danger');
+                return;
+            }
+            renderLinks(response.data || []);
+        });
+    }
+
+    function renderLinks(links) {
+        const box = document.getElementById('linksResult');
+        box.style.display = 'block';
+        document.getElementById('linksSummary').innerHTML =
+            '<span class="badge badge-primary">发现 ' + links.length + ' 个 DBLink</span>';
+        const body = document.getElementById('linksTableBody');
+        body.innerHTML = '';
+        if (!links.length) {
+            document.getElementById('linksSummary').innerHTML +=
+                ' <span class="text-xs text-tertiary">视图为空或源端不支持 DBLink</span>';
+            return;
+        }
+        links.forEach(function (l) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = ''
+                + '<td class="text-xs text-tertiary">' + escapeHtml(l.owner || '') + '</td>'
+                + '<td class="text-xs">' + escapeHtml(l.dbLink || '') + '</td>'
+                + '<td class="text-xs text-tertiary">' + escapeHtml(l.username || '') + '</td>'
+                + '<td class="text-xs text-tertiary">' + escapeHtml(l.host || '') + '</td>';
+            body.appendChild(tr);
+        });
+    }
+
+    function doQuery() {
+        const connectorId = requireConnector();
+        if (!connectorId) { return; }
+        const sql = document.getElementById('sqlText').value.trim();
+        if (!sql) {
+            bootGrowl('请填写 SQL', 'warning');
+            return;
+        }
+        const btn = event && event.target ? event.target : null;
+        doPoster('/dblink/query', {
+            connectorId: connectorId,
+            sql: sql,
+            maxRows: document.getElementById('maxRows').value.trim() || '0'
+        }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '查询失败', 'danger');
+                return;
+            }
+            renderQueryResult(response.data);
+        });
+    }
+
+    function renderQueryResult(r) {
+        document.getElementById('queryEmpty').style.display = 'none';
+        if (!r || !r.rows || !r.rows.length) {
+            document.getElementById('queryResult').style.display = 'none';
+            document.getElementById('queryEmpty').style.display = 'block';
+            bootGrowl('查询成功，无返回行', 'info');
+            return;
+        }
+        document.getElementById('queryResult').style.display = 'block';
+        const linkBadge = r.dblinkUsed
+            ? ' <span class="badge badge-info">@' + escapeHtml(r.dblinkUsed) + '</span>' : '';
+        const truncBadge = r.truncated
+            ? ' <span class="badge badge-warning">已截断至 maxRows</span>' : '';
+        document.getElementById('querySummary').innerHTML = ''
+            + '<span class="badge badge-success">返回 ' + r.rowCount + ' 行</span>'
+            + linkBadge + truncBadge
+            + ' <span class="text-xs text-tertiary">耗时 ' + r.elapsedMillis + ' ms</span>';
+        const head = document.getElementById('queryHead');
+        head.innerHTML = '<tr>' + r.columns.map(function (c) {
+            return '<th class="text-xs">' + escapeHtml(c || '') + '</th>';
+        }).join('') + '</tr>';
+        const body = document.getElementById('queryTableBody');
+        body.innerHTML = '';
+        r.rows.forEach(function (row) {
+            const tds = row.map(function (v) {
+                return '<td class="text-xs" style="word-break:break-all;">'
+                    + (v === null ? '<span class="text-tertiary">NULL</span>' : escapeHtml(v)) + '</td>';
+            }).join('');
+            const tr = document.createElement('tr');
+            tr.innerHTML = tds;
+            body.appendChild(tr);
+        });
+    }
+</script>

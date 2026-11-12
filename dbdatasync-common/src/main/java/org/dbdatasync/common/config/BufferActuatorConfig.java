@@ -27,7 +27,7 @@ public abstract class BufferActuatorConfig {
     /**
      * 定时消费缓存队列间隔(毫秒)
      */
-    private int bufferPeriodMillisecond = 300;
+    private int bufferPeriodMillisecond = 100;
 
     public int getBufferWriterCount() {
         return bufferWriterCount;

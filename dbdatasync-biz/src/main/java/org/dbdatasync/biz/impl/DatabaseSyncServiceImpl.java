@@ -15,6 +15,8 @@ import org.dbdatasync.common.enums.TaskLevelEnum;
 import org.dbdatasync.common.model.ConfigModel;
 import org.dbdatasync.common.model.Paging;
 import org.dbdatasync.common.model.Result;
+import org.dbdatasync.common.scheduled.ScheduledTaskJob;
+import org.dbdatasync.common.scheduled.ScheduledTaskService;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.JsonUtil;
 import org.dbdatasync.common.util.NumberUtil;
@@ -51,6 +53,8 @@ import org.dbdatasync.sdk.model.TableMapping;
 import org.dbdatasync.sdk.spi.DatabaseSyncDetailService;
 import org.dbdatasync.sdk.spi.TaskService;
 import org.dbdatasync.sdk.util.DatabaseSyncProgressUtil;
+import org.dbdatasync.sdk.util.MigrationStageUtil;
+import org.dbdatasync.sdk.util.OffPeakWindowUtil;
 import org.dbdatasync.sdk.util.TaskSnapshotUtil;
 import org.dbdatasync.storage.impl.SnowflakeIdWorker;
 import org.slf4j.Logger;
@@ -62,6 +66,7 @@ import org.springframework.util.Assert;
 import javax.annotation.Resource;
 
 import java.time.Instant;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -74,6 +79,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -124,6 +130,9 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
 
     @Resource
     private org.dbdatasync.biz.ConnectorService connectorService;
+
+    @Resource
+    private ScheduledTaskService scheduledTaskService;
 
     @Override
     public DatabaseSyncTaskVO get(String id) {
@@ -244,6 +253,32 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
             throw new BizException("任务未配置库表映射，无法启动");
         }
         preCheckService.assertPassable("database-sync", id);
+        // Wave11 低峰时间窗：开关开启 + 时间窗已配置 + 当前不在窗口内 → 预约一次性启动；
+        // 判定/注册全程 try-catch，调度器不可用或注册失败一律降级为立即启动，绝不阻断既有启动流程。
+        if (task.isEnableOffPeakWindow()
+                && OffPeakWindowUtil.isConfigured(task.getWindowStart(), task.getWindowEnd())) {
+            try {
+                LocalTime now = LocalTime.now();
+                if (!OffPeakWindowUtil.isWithin(now, task.getWindowStart(), task.getWindowEnd())) {
+                    String cron = OffPeakWindowUtil.toCron(task.getWindowStart());
+                    if (cron != null) {
+                        // key 带 UUID，规避 ScheduledTaskServiceImpl 对同 key 抛「任务已启动」
+                        String key = "dbSyncWindow-" + id + "-" + UUID.randomUUID();
+                        ScheduledTaskJob job = () -> {
+                            try {
+                                taskService.start(id);
+                            } finally {
+                                scheduledTaskService.stop(key);
+                            }
+                        };
+                        scheduledTaskService.start(key, cron, job);
+                        return "已预约至低峰窗口 " + task.getWindowStart() + " 启动（服务重启后预约失效，请重新触发）";
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("整库迁移任务 [{}] 低峰窗口预约失败，降级为立即启动: {}", id, e.getMessage(), e);
+            }
+        }
         taskService.start(id);
         return "启动成功";
     }
@@ -253,6 +288,51 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
         Assert.hasText(id, "任务 ID 不能为空");
         taskService.stop(id);
         return "停止成功";
+    }
+
+    /** 迁移编排阶段：推进逻辑与阶段链见 {@link org.dbdatasync.sdk.util.MigrationStageUtil}（snapshot 键同其 SNAPSHOT_KEY_STAGE） */
+    private static final String SNAPSHOT_KEY_STAGE = MigrationStageUtil.SNAPSHOT_KEY_STAGE;
+
+    @Override
+    public String currentMigrationStage(String id) {
+        Assert.hasText(id, "任务 ID 不能为空");
+        DatabaseSyncTask task = taskService.get(id);
+        if (task == null) {
+            throw new BizException("任务不存在");
+        }
+        Meta taskMeta = metaProfile.getMetaByTaskId(task.getId(), TaskLevelEnum.TASK);
+        if (taskMeta != null && taskMeta.getSnapshot() != null) {
+            String stage = taskMeta.getSnapshot().get(SNAPSHOT_KEY_STAGE);
+            if (StringUtil.isNotBlank(stage)) {
+                return MigrationStageUtil.normalize(stage);
+            }
+        }
+        return MigrationStageUtil.normalize(task.getMigrationStage());
+    }
+
+    @Override
+    public String advanceMigrationStage(String id) {
+        Assert.hasText(id, "任务 ID 不能为空");
+        DatabaseSyncTask task = taskService.get(id);
+        if (task == null) {
+            throw new BizException("任务不存在");
+        }
+        String current = currentMigrationStage(id);
+        String next = MigrationStageUtil.advance(current);
+        // 持久化到任务级 Meta.SNAPSHOT；无 meta 时回落任务配置
+        Meta taskMeta = metaProfile.getMetaByTaskId(task.getId(), TaskLevelEnum.TASK);
+        if (taskMeta != null) {
+            if (taskMeta.getSnapshot() == null) {
+                taskMeta.setSnapshot(new java.util.concurrent.ConcurrentHashMap<>());
+            }
+            taskMeta.getSnapshot().put(SNAPSHOT_KEY_STAGE, next);
+            metaProfile.updateMeta(taskMeta);
+        } else {
+            task.setMigrationStage(next);
+            taskService.edit(task);
+        }
+        logger.info("整库迁移任务 [{}] 编排阶段推进: {} -> {}", id, current, next);
+        return next;
     }
 
     @Override
@@ -284,6 +364,13 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
                         vo.setMetaState(taskMeta.getState());
                         vo.setBeginTime(taskMeta.getBeginTime() > 0 ? taskMeta.getBeginTime() : null);
                         vo.setEndTime(taskMeta.getEndTime() > 0 ? taskMeta.getEndTime() : null);
+                    }
+                    // 迁移编排阶段：优先取 Meta.SNAPSHOT（推进后持久化），否则任务配置默认
+                    if (taskMeta != null && taskMeta.getSnapshot() != null) {
+                        String stage = taskMeta.getSnapshot().get(SNAPSHOT_KEY_STAGE);
+                        if (StringUtil.isNotBlank(stage)) {
+                            vo.setMigrationStage(stage);
+                        }
                     }
                     list.add(vo);
                 }
@@ -362,12 +449,129 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
         }
     }
 
+    /**
+     * 解析库映射 JSON（Wave10 P0-2 兼容归一化层）。
+     *
+     * <p>统一契约：{@code databaseMappingsJson} 为数组，每元素 {@code tableMappings} 为数组。
+     * ① blank→emptyList（保留既有 {@code StringUtil.isBlank} 保护）；② 根对象→包装为单元素数组；
+     * ③ 根字符串→先试 {@code JSON.parseArray}，失败降级 emptyList；
+     * ④ 逐元素把 {@code tableMappings} 的 null/空白字符串/对象/字符串化数组归一为 {@code []} 或合法数组；
+     * ⑤ 剔除 null 元素；⑥ 任何解析异常统一包装为可读 {@link BizException}，
+     * <strong>禁止把 fastjson2 的 {@code e.getMessage()}（syntax error : { / offset N）透传前端</strong>。</p>
+     *
+     * <p>归一后继续走既有 {@code normalizeAndSortMappings()} → {@code getSortedTableMappings()}
+     * → {@code buildTableGroups()}，顺序与配置一致；{@code add()/edit()} 主流程零改动。</p>
+     */
     private List<DatabaseMappingVO> parseDatabaseMappings(String mappingsJson) {
         if (StringUtil.isBlank(mappingsJson)) {
             return Collections.emptyList();
         }
-        List<DatabaseMappingVO> mappings = JsonUtil.jsonToArray(mappingsJson, DatabaseMappingVO.class);
-        return mappings == null ? Collections.emptyList() : mappings;
+        try {
+            String normalized = normalizeMappingsJson(mappingsJson);
+            List<DatabaseMappingVO> parsed = JsonUtil.jsonToArray(normalized, DatabaseMappingVO.class);
+            if (parsed == null) {
+                return Collections.emptyList();
+            }
+            List<DatabaseMappingVO> mappings = new ArrayList<>(parsed);
+            normalizeMappings(mappings);
+            return mappings;
+        } catch (RuntimeException e) {
+            // 含 com.alibaba.fastjson2.JSONException（syntax error : { / offset N 等），统一包装为业务异常
+            logger.warn("databaseMappingsJson 归一化失败，按格式错误提示用户: {}", e.getClass().getSimpleName());
+            throw new BizException("库映射格式错误，请重新选择表映射后重试");
+        }
+    }
+
+    /**
+     * 把根形态与每个元素的 {@code tableMappings} 字段归一为合法数组 JSON 文本。
+     *
+     * @param json 原始隐藏域值
+     * @return 可安全交给 {@code JsonUtil.jsonToArray(..., DatabaseMappingVO.class)} 的数组文本
+     */
+    private String normalizeMappingsJson(String json) {
+        String trimmed = json == null ? "" : json.trim();
+        if (trimmed.isEmpty()) {
+            return "[]";
+        }
+        String arrayJson;
+        char first = trimmed.charAt(0);
+        if (first == '[') {
+            arrayJson = trimmed;
+        } else if (first == '{') {
+            // 根对象 → 包装为单元素数组（历史回显/编辑路径可能写入）
+            arrayJson = "[" + trimmed + "]";
+        } else {
+            // 根为字符串（" " / 字符串化 JSON）或其它标量：先试 parseArray，失败降级空数组
+            try {
+                com.alibaba.fastjson2.JSONArray probe = com.alibaba.fastjson2.JSON.parseArray(trimmed);
+                if (probe == null || probe.isEmpty()) {
+                    return "[]";
+                }
+                for (int i = 0; i < probe.size(); i++) {
+                    if (!(probe.get(i) instanceof com.alibaba.fastjson2.JSONObject)) {
+                        return "[]";
+                    }
+                }
+                arrayJson = trimmed;
+            } catch (RuntimeException ignore) {
+                return "[]";
+            }
+        }
+        if ("[]".equals(arrayJson)) {
+            return arrayJson;
+        }
+        // 畸形数组解析异常将冒泡到 parseDatabaseMappings，统一包装为可读 BizException
+        com.alibaba.fastjson2.JSONArray array = com.alibaba.fastjson2.JSON.parseArray(arrayJson);
+        if (array == null) {
+            return "[]";
+        }
+        for (int i = 0; i < array.size(); i++) {
+            Object element = array.get(i);
+            if (!(element instanceof com.alibaba.fastjson2.JSONObject)) {
+                continue;
+            }
+            com.alibaba.fastjson2.JSONObject obj = (com.alibaba.fastjson2.JSONObject) element;
+            obj.put("tableMappings", normalizeRawTableMappings(obj.get("tableMappings")));
+        }
+        return com.alibaba.fastjson2.JSON.toJSONString(array);
+    }
+
+    /**
+     * {@code tableMappings} 字段归一：数组原样、字符串化数组解析成数组，
+     * 其余（null / 空白字符串 / 对象 / 标量）统一为 {@code []}。
+     */
+    private Object normalizeRawTableMappings(Object raw) {
+        if (raw instanceof com.alibaba.fastjson2.JSONArray) {
+            return raw;
+        }
+        if (raw instanceof String) {
+            String s = ((String) raw).trim();
+            if (s.startsWith("[")) {
+                try {
+                    com.alibaba.fastjson2.JSONArray parsed = com.alibaba.fastjson2.JSON.parseArray(s);
+                    return parsed == null ? new com.alibaba.fastjson2.JSONArray() : parsed;
+                } catch (RuntimeException ignore) {
+                    return new com.alibaba.fastjson2.JSONArray();
+                }
+            }
+        }
+        return new com.alibaba.fastjson2.JSONArray();
+    }
+
+    /** 逐元素归一表映射（VO 层兜底）并剔除 null 元素。 */
+    private void normalizeMappings(List<DatabaseMappingVO> mappings) {
+        if (CollectionUtils.isEmpty(mappings)) {
+            return;
+        }
+        java.util.Iterator<DatabaseMappingVO> iterator = mappings.iterator();
+        while (iterator.hasNext()) {
+            DatabaseMappingVO mapping = iterator.next();
+            if (mapping == null) {
+                iterator.remove();
+                continue;
+            }
+            mapping.normalizeTableMappings();
+        }
     }
 
     private List<DatabaseMapping> toPersistMappings(List<DatabaseMappingVO> mappings) {
@@ -463,6 +667,47 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
         task.setOverwriteSchema(task.isEnableCopySchema() && StringUtil.isNotBlank(params.get("overwriteSchema")));
         task.setOverwriteData(task.isEnableCopyData() && StringUtil.isNotBlank(params.get("overwriteData")));
         task.setEnableAutoDiscover(StringUtil.isNotBlank(params.get("enableAutoDiscover")));
+        // Wave30：大数据量性能参数从页面写入并夹紧。此前三项只有模型默认值、页面无输入、
+        // 引擎也只读取默认值，调优建议形同虚设；缺字段时保留任务原值，兼容存量 task.JSON。
+        task.setReadNum(clampInt(params.get("readNum"), task.getReadNum(), 100, 100000));
+        task.setBatchNum(clampInt(params.get("batchNum"), task.getBatchNum(), 1, 10000));
+        task.setThreadNum(clampInt(params.get("threadNum"), task.getThreadNum(), 1, 32));
+        // Wave11：限速 / 低峰时间窗 / 自动推进阶段（默认 0 / false / ""，存量任务缺字段回落默认值）
+        task.setRecordsPerSecond(parseRate(params.get("recordsPerSecond")));
+        task.setBytesPerSecond(parseRate(params.get("bytesPerSecond")));
+        task.setEnableOffPeakWindow(StringUtil.isNotBlank(params.get("enableOffPeakWindow")));
+        String windowStart = OffPeakWindowUtil.normalizeTime(params.get("windowStart"));
+        String windowEnd = OffPeakWindowUtil.normalizeTime(params.get("windowEnd"));
+        if (task.isEnableOffPeakWindow() && !OffPeakWindowUtil.isConfigured(windowStart, windowEnd)) {
+            throw new BizException("低峰时间窗格式错误，请使用 HH:mm（24 小时制）");
+        }
+        task.setWindowStart(windowStart);
+        task.setWindowEnd(windowEnd);
+        task.setAutoAdvanceStage(StringUtil.isNotBlank(params.get("autoAdvanceStage")));
+    }
+
+    /** Wave30：性能参数解析并夹紧到安全区间；空白 / 异常 / 越界一律回退原值或默认值。 */
+    private int clampInt(String raw, int current, int min, int max) {
+        int fallback = current > 0 ? current : min;
+        try {
+            int value = NumberUtil.toInt(StringUtil.trimToEmpty(raw), fallback);
+            if (value < min || value > max) {
+                return fallback >= min && fallback <= max ? fallback : min;
+            }
+            return value;
+        } catch (RuntimeException e) {
+            return fallback;
+        }
+    }
+
+    /** 限速解析：异常 / 空白 / &lt;=0 一律归一为 0（0 = 不限速），绝不抛异常。 */
+    private long parseRate(String raw) {
+        try {
+            long value = NumberUtil.toLong(StringUtil.trimToEmpty(raw), 0L);
+            return value > 0 ? value : 0L;
+        } catch (RuntimeException e) {
+            return 0L;
+        }
     }
 
     private void restoreTableGroups(String taskId, List<TableGroup> oldGroups) {
@@ -658,7 +903,8 @@ public class DatabaseSyncServiceImpl implements DatabaseSyncService {
             table.setName(metaInfo.getTable());
             table.setType(metaInfo.getTableType());
             table.setColumn(metaInfo.getColumn());
-            tableMap.put(metaInfo.getTable(), table);
+            // key 小写归一，与调用方表名匹配（Oracle-族回读为实际大写名）
+            tableMap.put(metaInfo.getTable().toLowerCase(), table);
         }
         return tableMap;
     }

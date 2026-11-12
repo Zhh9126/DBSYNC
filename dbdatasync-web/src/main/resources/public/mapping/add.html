@@ -17,6 +17,7 @@
         </div>
 
         <form id="mappingAddForm">
+
             <!-- 数据源和目标源 -->
             <div class="grid grid-cols-2">
                 <!-- 数据源 -->
@@ -134,6 +135,44 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 全量分片并发读（对标 DataX splitPk） -->
+            <div class="mt-5">
+                <div class="text-sm text-gray-700 font-weight-bold">
+                    <i class="fa fa-tasks text-primary"></i> 全量分片并发读
+                    <span class="badge badge-info text-xs align-middle">对标 DataX splitPk</span>
+                </div>
+                <div class="grid grid-cols-4 gap-4 mt-2">
+                    <div class="form-item">
+                        <label class="form-label">分片键（源表列，建议整型主键/索引列）</label>
+                        <input type="text" class="form-control form-control-sm" id="fullSplitKey"
+                               placeholder="如 id，留空表示不启用分片" />
+                    </div>
+                    <div class="form-item">
+                        <label class="form-label">切分方式</label>
+                        <select class="form-control form-control-sm" id="fullSplitMode">
+                            <option value="value">值域均分</option>
+                            <option value="sample">采样均分</option>
+                        </select>
+                    </div>
+                    <div class="form-item">
+                        <label class="form-label">分片数（&gt;1 启用并发）</label>
+                        <input type="number" class="form-control form-control-sm" id="fullSplitCount" min="2" max="1024"
+                               placeholder="如 4" />
+                    </div>
+                    <div class="form-item">
+                        <label class="form-label">采样点数（可选）</label>
+                        <input type="number" class="form-control form-control-sm" id="fullSplitSampleCap" min="2" max="4096"
+                               placeholder="默认 64" />
+                    </div>
+                </div>
+                <div class="text-xs text-gray-500 mt-2">
+                    <i class="fa fa-info-circle text-primary"></i> 值域均分：按 MIN/MAX 等宽切，适合单调连续数值键；
+                    采样均分：按行位置采样断点切，按行均匀、抗倾斜，适合 uuid / 字符串 / 日期 / 倾斜数值键（采样失败自动降级值域均分）。
+                    分片数超过执行线程数自动收敛；分片键非法或值域探测失败自动降级串行。
+                </div>
+            </div>
+            <input type="hidden" name="params" id="mappingParams" value="{}" />
         </form>
     </div>
 </div>
@@ -260,6 +299,26 @@
             try { paramsObj = JSON.parse(paramsStr); } catch (e) { paramsObj = {}; }
             var syncMode = ($form.find('input[name="syncMode"]:checked').val() || 'SYNC').toUpperCase();
             paramsObj.syncMode = (syncMode === 'ASYNC') ? 'ASYNC' : 'SYNC';
+            // 全量分片并发读配置合并入 params JSON
+            var splitKey = $.trim($('#fullSplitKey').val() || '');
+            var splitCount = $.trim($('#fullSplitCount').val() || '');
+            var splitMode = $.trim($('#fullSplitMode').val() || 'value');
+            var splitSampleCap = $.trim($('#fullSplitSampleCap').val() || '');
+            if (splitKey === '' || splitCount === '' || parseInt(splitCount, 10) <= 0) {
+                delete paramsObj.fullSplitKey;
+                delete paramsObj.fullSplitCount;
+                delete paramsObj.fullSplitMode;
+                delete paramsObj.fullSplitSampleCap;
+            } else {
+                paramsObj.fullSplitKey = splitKey;
+                paramsObj.fullSplitCount = parseInt(splitCount, 10);
+                paramsObj.fullSplitMode = (splitMode === 'sample') ? 'sample' : 'value';
+                if (splitSampleCap !== '' && parseInt(splitSampleCap, 10) >= 2) {
+                    paramsObj.fullSplitSampleCap = parseInt(splitSampleCap, 10);
+                } else {
+                    delete paramsObj.fullSplitSampleCap;
+                }
+            }
             $paramsInput.val(JSON.stringify(paramsObj));
 
             if (validateForm($form)) {

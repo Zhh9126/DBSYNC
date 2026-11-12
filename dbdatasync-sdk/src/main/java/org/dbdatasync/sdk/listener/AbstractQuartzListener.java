@@ -209,7 +209,7 @@ public abstract class AbstractQuartzListener extends AbstractListener implements
             snapshot.putAll(point.getPosition());
         }
         if (context.isSupportedCursor() && cursors != null && cursors.length > 0) {
-            snapshot.put(index + CURSOR, StringUtil.join(cursors, ","));
+            snapshot.put(index + CURSOR, PrimaryKeyUtil.encodeCursors(cursors));
         }
     }
 

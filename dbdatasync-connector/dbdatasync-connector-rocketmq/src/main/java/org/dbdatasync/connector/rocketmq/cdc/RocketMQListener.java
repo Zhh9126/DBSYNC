@@ -122,7 +122,11 @@ public class RocketMQListener extends AbstractListener<RocketMQConnectorInstance
         String sourceTableName = StringUtil.isNotBlank(parsedMessage.getTable()) ? parsedMessage.getTable() : topic;
         String event = parsedMessage.getEvent();
         List<Object> rowData = mapToRowList(table.getColumn(), rowMap);
-        trySendEvent(new RowChangedEvent(sourceTableName, event, rowData, topic, message.getQueueOffset() + 1));
+        RowChangedEvent changedEvent = new RowChangedEvent(sourceTableName, event, rowData, topic, message.getQueueOffset() + 1);
+        // Wave24：bornTimestamp 是消息在 producer 侧生成的源端时间
+        org.dbdatasync.sdk.model.SourceEventTime.apply(changedEvent, message.getBornTimestamp(),
+                org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_SOURCE);
+        trySendEvent(changedEvent);
     }
 
     private List<Object> mapToRowList(List<Field> columns, Map<String, Object> map) {

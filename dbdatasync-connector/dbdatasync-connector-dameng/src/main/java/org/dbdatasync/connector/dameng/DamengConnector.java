@@ -7,6 +7,7 @@ import org.dbdatasync.common.model.Result;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.dameng.cdc.DamengListener;
+import org.dbdatasync.connector.dameng.cdc.DamengTriggerLogListener;
 import org.dbdatasync.connector.dameng.constant.DamengConstant;
 import org.dbdatasync.connector.dameng.schema.DamengSchemaResolver;
 import org.dbdatasync.connector.dameng.validator.DamengConfigValidator;
@@ -110,6 +111,10 @@ public final class DamengConnector extends OracleConnector {
         }
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new DamengListener();
+        }
+        // Wave26/28：Trigger CDC 兜底捕获（免归档模式）
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new DamengTriggerLogListener();
         }
         return null;
     }

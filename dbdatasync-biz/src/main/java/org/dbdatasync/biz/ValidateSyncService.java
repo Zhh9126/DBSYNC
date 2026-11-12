@@ -124,6 +124,42 @@ public interface ValidateSyncService {
      */
     Object manualReviseDetail(String taskId, String detailId);
 
+    /**
+     * 对账报告导出取数（只读）：detailId 非空时只取单条明细，否则按状态筛选分页遍历全任务。
+     * <p>仅读取结果明细，不修改任何明细 / Meta / 任务配置。
+     *
+     * @param taskId       校验任务ID
+     * @param detailStatus 状态筛选（可空）
+     * @param detailId     明细ID（可空，非空时忽略分页与状态筛选）
+     * @return 已铺平的明细行列表
+     */
+    List<Map<String, Object>> listResultDetails(String taskId, String detailStatus, String detailId);
+
+    /**
+     * Wave30：对账报告导出的流式取数（只读），逐行交给 consumer，不把全量明细堆进 List。
+     * <p>与 {@link #listResultDetails} 不同，这里没有 5000 行截断，适合百万级差异明细导出；
+     * 同一任务两次调用可得到同样的行序列（第一遍统计抬头、第二遍写数据行）。</p>
+     *
+     * @param taskId       校验任务ID
+     * @param detailStatus 状态筛选（可空）
+     * @param detailId     明细ID（可空，非空时只投递该 1 条）
+     * @param consumer     逐行消费者，不得为 null
+     */
+    void scanResultDetails(String taskId, String detailStatus, String detailId,
+                           java.util.function.Consumer<Map<String, Object>> consumer);
+
+    /**
+     * 对单条明细中指定下标的差异条目执行重推（只处理该 1 条）。
+     *
+     * @param taskId    校验任务ID
+     * @param detailId  明细ID
+     * @param itemIndex 0-based 差异条目下标，与对账报告「差异序号」一致
+     * @return 更新后的明细
+     */
+    Object reviseDiffItem(String taskId, String detailId, int itemIndex);
+
+    Map<String, Object> reviseDiffItems(String taskId, String detailId, List<Integer> itemIndexes);
+
     String addTableGroup(Map<String, String> params);
 
     String editTableGroup(Map<String, String> params);

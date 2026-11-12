@@ -55,4 +55,19 @@ public final class ExtDeleteDeserializer extends DeleteRowsEventDataDeserializer
     protected Serializable deserializeTimeV2(int meta, ByteArrayInputStream inputStream) throws IOException {
         return timeDeserialize.deserializeTimeV2(meta, inputStream);
     }
+
+    @Override
+    protected Serializable deserializeString(int length, ByteArrayInputStream inputStream) throws IOException {
+        return CrossPlatformDeserializers.deserializeString(length, inputStream);
+    }
+
+    @Override
+    protected Serializable deserializeVarString(int length, ByteArrayInputStream inputStream) throws IOException {
+        return CrossPlatformDeserializers.deserializeVarString(length, inputStream);
+    }
+
+    @Override
+    protected Serializable deserializeLongLong(ByteArrayInputStream inputStream) throws IOException {
+        return CrossPlatformDeserializers.deserializeLongLong(inputStream);
+    }
 }

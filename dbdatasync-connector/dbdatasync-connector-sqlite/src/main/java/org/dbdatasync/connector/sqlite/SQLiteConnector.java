@@ -6,6 +6,7 @@ package org.dbdatasync.connector.sqlite;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.sqlite.schema.SQLiteSchemaResolver;
+import org.dbdatasync.connector.sqlite.storage.SqliteStorageService;
 import org.dbdatasync.connector.sqlite.validator.SQLiteConfigValidator;
 import org.dbdatasync.sdk.config.DatabaseConfig;
 import org.dbdatasync.sdk.config.SqlBuilderConfig;
@@ -25,6 +26,7 @@ import org.dbdatasync.sdk.model.Table;
 import org.dbdatasync.sdk.model.ValidateSyncTask;
 import org.dbdatasync.sdk.plugin.ReaderContext;
 import org.dbdatasync.sdk.schema.SchemaResolver;
+import org.dbdatasync.sdk.storage.StorageService;
 import org.dbdatasync.sdk.util.PrimaryKeyUtil;
 
 import java.util.ArrayList;
@@ -53,6 +55,16 @@ public final class SQLiteConnector extends AbstractDatabaseConnector {
         return "SQLite";
     }
 
+    /**
+     * Wave32：让 dbdatasync.storage.type=sqlite 真正使用 SQLite 元库。
+     * 未覆盖时 ConnectorService 默认返回 null，StorageSupportConfiguration 会静默
+     * 回落到 H2StorageService，出现「配置切了、其实还在写 H2 文件」的假象。
+     */
+    @Override
+    public StorageService getStorageService() {
+        return new SqliteStorageService();
+    }
+
     @Override
     public ConfigValidator getConfigValidator() {
         return configValidator;
@@ -75,6 +87,14 @@ public final class SQLiteConnector extends AbstractDatabaseConnector {
     public Listener getListener(String listenerType) {
         if (ListenerTypeEnum.isTiming(listenerType)) {
             return new DatabaseQuartzListener();
+        }
+        // Wave24：Trigger CDC（早期 P1-6 设计项）在 SQLite 上落地为真实日志型监听器
+        if (ListenerTypeEnum.isLog(listenerType)) {
+            return new org.dbdatasync.connector.sqlite.cdc.TriggerLogListener();
+        }
+        // Wave28：显式 trigger 监听类型与 log 同一实现（SQLite 无原生日志）
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new org.dbdatasync.connector.sqlite.cdc.TriggerLogListener();
         }
         return null;
     }

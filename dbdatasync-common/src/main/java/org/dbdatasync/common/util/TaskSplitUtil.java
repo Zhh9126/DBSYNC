@@ -3,9 +3,9 @@
  */
 package org.dbdatasync.common.util;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 /**
  * @author wuji
@@ -20,8 +20,11 @@ public final class TaskSplitUtil {
         }
         int effectiveBatch = batchNum > 0 ? batchNum : rows.size();
         int total = rows.size();
+        // Wave30：stream().skip(from) 对顺序 List 是 O(from)，整批拆分会退化成 O(n²/batch)。
+        // subList 是 O(1) 视图；复制出独立 ArrayList 避免子批与源 List 共享导致并发改动互相影响。
         for (int from = 0; from < total; from += effectiveBatch) {
-            consumer.accept(rows.stream().skip(from).limit(effectiveBatch).collect(Collectors.toList()));
+            int to = (int) Math.min((long) from + effectiveBatch, (long) total);
+            consumer.accept(new ArrayList<T>(rows.subList(from, to)));
         }
     }
 }

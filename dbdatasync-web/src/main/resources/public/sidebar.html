@@ -2,12 +2,15 @@
 <html xmlns="http://www.w3.org/1999/xhtml"
       xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 
-<!-- 左侧边栏 -->
+<!-- 左侧边栏 · DataX Web 深蓝导航 -->
 <aside th:fragment="nav" class="sidebar">
     <!-- 品牌标识 -->
     <div class="sidebar-brand">
-        <i class="fa fa-database"></i>
-        <span>数据同步工具</span>
+        <div class="sidebar-brand-logo"><i class="fa fa-database"></i></div>
+        <div class="sidebar-brand-text">
+            <strong>DBDataSync</strong>
+            <span>DATA SYNC PLATFORM</span>
+        </div>
     </div>
 
     <!-- 导航菜单 -->
@@ -40,13 +43,47 @@
                 <i class="fa fa-clone w-5 text-center"></i>
                 <span>整库迁移</span>
             </div>
-            <div class="sidebar-item" url="/validate-sync/list">
-                <i class="fa fa-history w-5 text-center"></i>
-                <span>订正校验</span>
-            </div>
             <div class="sidebar-item" url="/lineage/list">
                 <i class="fa fa-sitemap w-5 text-center"></i>
                 <span>数据血缘</span>
+            </div>
+        </div>
+
+        <!-- 数据对比(独立模块, 对标 NineData Compare) -->
+        <div class="sidebar-group-title compare">数据对比</div>
+        <div class="space-y-1">
+            <div class="sidebar-item" url="/validate-sync/list">
+                <i class="fa fa-check-circle-o w-5 text-center"></i>
+                <span>对比任务</span>
+            </div>
+        </div>
+
+        <!-- 迁移评估(对标 NineData SQL 转换 / 阿里 DMS) -->
+        <div class="sidebar-group-title compare">迁移评估</div>
+        <div class="space-y-1">
+            <div class="sidebar-item" url="/sql-scan">
+                <i class="fa fa-code w-5 text-center"></i>
+                <span>SQL 兼容扫描</span>
+            </div>
+            <div class="sidebar-item" url="/slow-sql">
+                <i class="fa fa-hourglass-2 w-5 text-center"></i>
+                <span>慢 SQL 采集</span>
+            </div>
+            <div class="sidebar-item" url="/logical-io">
+                <i class="fa fa-file-text-o w-5 text-center"></i>
+                <span>逻辑导入导出</span>
+            </div>
+            <div class="sidebar-item" url="/cutover">
+                <i class="fa fa-exchange w-5 text-center"></i>
+                <span>切流编排</span>
+            </div>
+            <div class="sidebar-item" url="/content-offload">
+                <i class="fa fa-database w-5 text-center"></i>
+                <span>超大内容外置</span>
+            </div>
+            <div class="sidebar-item" url="/dblink">
+                <i class="fa fa-link w-5 text-center"></i>
+                <span>DBLink 查询</span>
             </div>
         </div>
 
@@ -56,6 +93,14 @@
             <div class="sidebar-item" url="/monitor">
                 <i class="fa fa-line-chart w-5 text-center"></i>
                 <span>性能监控</span>
+            </div>
+            <div class="sidebar-item" url="/link-health">
+                <i class="fa fa-heartbeat w-5 text-center"></i>
+                <span>链路健康</span>
+            </div>
+            <div class="sidebar-item" url="/schema-history">
+                <i class="fa fa-code-fork w-5 text-center"></i>
+                <span>结构变更</span>
             </div>
             <div class="sidebar-item" url="/notice">
                 <i class="fa fa-bell w-5 text-center"></i>
@@ -91,9 +136,11 @@
 
     <!-- 底部品牌（固定在 sidebar 底部） -->
     <div class="sidebar-footer">
-        DBDataSync 通用数据同步中间件
-        <br/>
-        <span class="version-tag">v2.x</span>
+        <div class="sidebar-footer-row">
+            <span>通用数据同步中间件</span>
+            <span class="status-dot" title="服务运行中"></span>
+        </div>
+        <span class="version-tag" id="sidebarVersionTag">v2.x</span>
     </div>
 </aside>
 </html>

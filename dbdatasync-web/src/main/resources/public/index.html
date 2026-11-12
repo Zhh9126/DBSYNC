@@ -9,17 +9,17 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <!-- 上述3个meta标签*必须*放在最前面，任何其他内容都*必须*跟随其后！ -->
-    <meta name="description" content="search">
+    <meta name="description" content="DBDataSync 通用数据同步与集成平台控制台">
     <meta name="author" content="AE86">
-    <title>数据同步工具</title>
+    <title>DBDataSync · 数据集成控制台</title>
 
-    
     <!-- 字体预加载优化：提前加载 woff2 格式字体 -->
     <link rel="preload" th:href="@{/plugins/fonts/fontawesome-webfont.woff2?v=4.7.0}" as="font" type="font/woff2" crossorigin="anonymous">
     <!-- FontAwesome 图标库 -->
     <link type="text/css" rel="stylesheet" th:href="@{/plugins/css/font-awesome.min.css}"/>
-    <!-- 主题样式 -->
-    <link type="text/css" rel="stylesheet" th:href="@{/css/DBDataSync-theme.css}">
+    <!-- 主题样式（内含 DataX Web 视觉升级层） -->
+    <link type="text/css" rel="stylesheet" th:href="@{/css/dbdatasync-theme.css}">
+    <script>(function(){try{var t=localStorage.getItem('dbdatasync-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
     <script th:src="@{/plugins/js/jquery/jquery-1.11.3.min.js}"></script>
     <script th:src="@{/plugins/js/chartjs/chart.umd.min.js}" onerror="console.error('Chart.js 加载失败，请检查文件是否完整或版本是否兼容');"></script>
 </head>
@@ -40,6 +40,7 @@
         </main>
     </div>
 </body>
+<script th:src="@{/js/theme-toggle.js}"></script>
 <script th:src="@{/js/framework.js}"></script>
 <script th:src="@{/js/components/confirm.js}"></script>
 <script th:src="@{/js/components/notify.js}"></script>
@@ -50,4 +51,5 @@
 <script th:src="@{/js/components/tags-input.js}"></script>
 <script th:src="@{/js/components/radio.js}"></script>
 <script th:src="@{/js/components/checkbox.js}"></script>
+<script th:src="@{/js/ui-enhance.js}"></script>
 </html>

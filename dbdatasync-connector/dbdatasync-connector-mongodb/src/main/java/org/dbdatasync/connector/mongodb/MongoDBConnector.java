@@ -250,10 +250,14 @@ public final class MongoDBConnector extends AbstractConnector implements Connect
         if (StringUtil.isBlank(databaseName) || StringUtil.isBlank(collectionName)) {
             throw new MongoDBException("MongoDB reader database or collection is empty.");
         }
-        BooleanFilter booleanFilter = ((FullPluginContext) context).getFilter();
-        Bson filter = buildFilterToBson(booleanFilter);
+        BooleanFilter booleanFilter = context instanceof FullPluginContext
+                ? ((FullPluginContext) context).getFilter() : null;
+        Bson filter = booleanFilter == null ? null : buildFilterToBson(booleanFilter);
         if (filter == null) {
-            return new Result(Collections.emptyList());
+            // Wave32：全量同步时 commandKey 可能非空但没有 BooleanFilter，
+            // 旧实现直接返回空集合 → 任务「成功」但目标表 0 行。
+            // 无过滤条件应回退到正常的全量分页读取，而不是静默返回 0 条。
+            return readPage(connectorInstance, context);
         }
         MongoCollection<Document> collection = connectorInstance.getConnection()
                 .getDatabase(databaseName)

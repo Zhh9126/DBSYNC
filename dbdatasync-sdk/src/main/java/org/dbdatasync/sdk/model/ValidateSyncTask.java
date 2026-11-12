@@ -72,6 +72,21 @@ public class ValidateSyncTask extends ConfigModel {
     private boolean enableReverseScan = false;
 
     /**
+     * 对比模式: full=全量逐行(默认, 精确定位差异); sample=抽样对比(大表快速健康检查, 按 sampleStep 跳读, 不自动订正)
+     */
+    private String compareMode = "full";
+
+    /**
+     * 抽样步长: sample 模式下每 sampleStep 页取 1 页比对(>=1)
+     */
+    private int sampleStep = 10;
+
+    /**
+     * 分片数: full 模式下单列主键且 fullSplitCount>1 时按主键值域分片并发校验(对标 Wave4 全量分片读); 默认 0=串行
+     */
+    private String fullSplitCount = "0";
+
+    /**
      * 任务执行时是否自动删除目标库中源表不存在的多余行
      */
     private boolean enableReverseSync = false;
@@ -219,6 +234,13 @@ public class ValidateSyncTask extends ConfigModel {
     public void setEnableSync(boolean enableSync) {
         this.enableSync = enableSync;
     }
+
+    public String getCompareMode() { return compareMode; }
+    public void setCompareMode(String compareMode) { this.compareMode = compareMode; }
+    public int getSampleStep() { return sampleStep; }
+    public void setSampleStep(int sampleStep) { this.sampleStep = sampleStep; }
+    public String getFullSplitCount() { return fullSplitCount; }
+    public void setFullSplitCount(String fullSplitCount) { this.fullSplitCount = fullSplitCount; }
 
     public boolean isEnableReverseScan() {
         return enableReverseScan;

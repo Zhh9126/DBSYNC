@@ -1,0 +1,21 @@
+# DBDataSync 离线基座（参考 AIDBM 增量构建：基座只放运行时，后续升级只刷应用层）
+# 零联网约束：基础镜像 python:3.11-slim-bookworm 必须已在本机 docker images 中，
+# JRE 8 由构建上下文 jre8/ 提供（Java 8 是硬要求，-Djava.ext.dirs 在 JDK9+ 已移除）。
+FROM python:3.11-slim-bookworm
+
+LABEL org.opencontainers.image.title="DBDataSync JRE8 offline base" \
+      org.opencontainers.image.version="8" \
+      org.opencontainers.image.description="Debian slim + bundled OpenJDK 8 runtime for DBDataSync"
+
+ENV JAVA_HOME=/opt/jre8 \
+    PATH=/opt/jre8/bin:$PATH \
+    TZ=Asia/Shanghai \
+    LANG=C.UTF-8 \
+    MALLOC_ARENA_MAX=2
+
+COPY jre8/ /opt/jre8/
+COPY tz/Shanghai /etc/localtime
+
+RUN echo "Asia/Shanghai" > /etc/timezone \
+ && /opt/jre8/bin/java -version \
+ && test -d /opt/jre8/lib/ext

@@ -22,6 +22,8 @@ import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 持久化执行器
@@ -71,21 +73,40 @@ public final class StorageBufferActuator extends AbstractBufferActuator<StorageR
     public void pull(StorageResponse response) {
         String shardId = response.getTaskDetailShardId();
         // 严格走库 + 明细分表：写入 DBDataSync_task_detail_{taskId}
-        storageExecutor.execute(() -> storageService.addBatch(StorageEnum.TASK_DETAIL, shardId, response.getDataList()));
+        Runnable write = () -> storageService.addBatch(StorageEnum.TASK_DETAIL, shardId, response.getDataList());
+        try {
+            storageExecutor.execute(write);
+        } catch (RejectedExecutionException e) {
+            // Wave30：线程池关闭/饱和时旧实现直接丢掉整批明细。宁可同步落库阻塞生产者，也不丢数据。
+            logger.warn("明细写线程池拒绝任务，改为同步落库: shardId={}, rows={}", shardId, response.getDataList().size());
+            write.run();
+        }
     }
 
     @Override
     protected void offerFailed(BlockingQueue<StorageRequest> queue, StorageRequest request) {
+        // Wave30：旧实现只 log 一行就丢掉该明细，队列一满即静默少数据。
+        // 明细写入属于不可丢路径，改为限时阻塞入队形成背压；仍失败才显式报错并保留行内容摘要。
         String shardId = request.getTaskDetailShardId();
-        Meta meta = metaProfile.getMetaByTaskId(shardId, TaskLevelEnum.TASK);
-        if (meta == null) {
-            meta = metaProfile.getMeta(shardId);
+        boolean accepted = false;
+        try {
+            accepted = queue.offer(request, 5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        if (meta != null) {
-            Mapping mapping = profileComponent.getMapping(meta.getTaskId());
-            if (mapping != null) {
-                logger.info("{}, data={}", mapping.getName(), request.getRow());
+        if (!accepted) {
+            Meta meta = metaProfile.getMetaByTaskId(shardId, TaskLevelEnum.TASK);
+            if (meta == null) {
+                meta = metaProfile.getMeta(shardId);
             }
+            String name = "";
+            if (meta != null) {
+                Mapping mapping = profileComponent.getMapping(meta.getTaskId());
+                if (mapping != null) {
+                    name = mapping.getName();
+                }
+            }
+            logger.error("明细队列持续满载，丢弃 1 条明细: task={}, shardId={}, data={}", name, shardId, request.getRow());
         }
     }
 

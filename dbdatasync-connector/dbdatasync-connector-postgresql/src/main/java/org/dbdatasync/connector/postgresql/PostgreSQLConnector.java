@@ -6,6 +6,7 @@ package org.dbdatasync.connector.postgresql;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.postgresql.cdc.PostgreSQLListener;
+import org.dbdatasync.connector.postgresql.cdc.trigger.PostgreSQLTriggerLogListener;
 import org.dbdatasync.connector.postgresql.schema.PostgreSQLSchemaResolver;
 import org.dbdatasync.connector.postgresql.validator.PostgreSQLConfigValidator;
 import org.dbdatasync.sdk.config.DatabaseConfig;
@@ -66,6 +67,11 @@ public class PostgreSQLConnector extends AbstractDatabaseConnector {
 
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new PostgreSQLListener();
+        }
+
+        // Wave28: Trigger CDC fallback capture (no native logical replication/binlog required)
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new PostgreSQLTriggerLogListener();
         }
         return null;
     }
@@ -373,6 +379,11 @@ public class PostgreSQLConnector extends AbstractDatabaseConnector {
         String floatMapped = mapPostgreSqlFloatAliases(t);
         if (floatMapped != null) {
             return floatMapped;
+        }
+        // 跨方言二进制类型统一落为 BYTEA：Oracle RAW/BLOB、MySQL BLOB/LONGBLOB 等。
+        // 到达此处时 RAW 已被基类归一为 VARBINARY，BLOB 系列保持原名；PG/Kingbase 无 BLOB/BINARY 类型。
+        if (t.contains("BLOB") || t.contains("BINARY") || t.contains("RAW")) {
+            return "BYTEA";
         }
         return super.formatPhysicalType(sourceDefinition);
     }

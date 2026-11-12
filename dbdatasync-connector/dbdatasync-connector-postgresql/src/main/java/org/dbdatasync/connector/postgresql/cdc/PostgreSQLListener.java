@@ -314,6 +314,9 @@ public class PostgreSQLListener extends AbstractDatabaseListener {
                     RowChangedEvent event = messageDecoder.processMessage(msg);
                     if (event != null && filterTable.contains(event.getSourceTableName())) {
                         event.setPosition(lsn.asString());
+                        // Wave24：pgoutput BEGIN/COMMIT 的源端事务时间 → 真实端到端 lag
+                        org.dbdatasync.sdk.model.SourceEventTime.apply(event,
+                                messageDecoder.lastSourceEventTimeMillis(), ChangedOffset.EVENT_TIME_SOURCE);
                         while (connected) {
                             try {
                                 sendChangedEvent(event);

@@ -3,7 +3,7 @@
 
 <div class="form-container">
     <div class="card-header">
-        <h3 class="card-title text-center">添加订正校验</h3>
+        <h3 class="card-title text-center">新建数据对比</h3>
     </div>
 
     <div class="card-body">
@@ -117,6 +117,58 @@
                 </div>
             </div>
 
+                <!-- 对比配置: 对比与订正解耦(对比=检测; 订正=差异处理动作, 默认关闭) -->
+                <div class="grid grid-cols-2 mt-5">
+                    <div class="form-item">
+                        <label class="form-label">对比模式
+                            <i class="fa fa-question-circle" title="full=全量逐行对比(精确定位差异); sample=抽样对比(按步长跳页采样, 大表快速健康检查); health=快速体检(count+主键值域, 秒级粗检不订正); checksum=字段级指纹比对(分块 MD5 摘要, 纯定位不订正)"></i>
+                        </label>
+                        <div class="form-control-area">
+                            <select class="form-control" name="compareMode" id="compareModeSelect">
+                                <option value="full">全量逐行对比(推荐)</option>
+                                <option value="sample">抽样对比(大表快速检查)</option>
+                                <option value="health">快速体检(count+主键值域)</option>
+                                <option value="checksum">字段级指纹(分块 MD5 摘要)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-item" id="sampleStepItem" style="display:none;">
+                        <label class="form-label">抽样步长
+                            <i class="fa fa-question-circle" title="每 N 页取 1 页比对, 越大越快但覆盖越低"></i>
+                        </label>
+                        <div class="form-control-area">
+                            <input type="number" class="form-control" name="sampleStep" value="10" min="1" max="100"/>
+                        </div>
+                    </div>
+                    <div class="form-item" id="fullSplitItem">
+                        <label class="form-label">分片并发数
+                            <i class="fa fa-question-circle" title="full 模式单列主键时按主键值域分片并发校验(对标全量分片读); 1=串行, 建议 4~8"></i>
+                        </label>
+                        <div class="form-control-area">
+                            <input type="number" class="form-control" name="fullSplitCount" value="0" min="0" max="1024"/>
+                            <span class="text-xs text-gray-500">0 或 1 = 串行</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 mt-5">
+                    <div class="form-item">
+                        <label class="form-label">
+                            <i class="fa fa-wrench text-info"></i> 发现差异自动订正
+                            <i class="fa fa-question-circle" title="默认关闭: 仅对比并输出差异与修复 SQL; 开启后对比发现差异时自动修改目标端数据(谨慎)"></i>
+                        </label>
+                        <div class="form-control-area">
+                            <label class="form-switch">
+                                <input type="checkbox" name="enableSync" value="true"/>
+                                <span class="switch-track">
+                                    <span class="switch-option switch-option-on">开</span>
+                                    <span class="switch-option switch-option-off">关</span>
+                                    <span class="switch-thumb"></span>
+                                </span>
+                            </label>
+                            <span class="text-xs text-gray-500 ml-2">默认关闭(纯对比); 开启后将自动修改目标端数据</span>
+                        </div>
+                    </div>
+                </div>
             <!-- 关联配置 -->
             <div id="linked-config" class="hidden mt-4">
                 <div class="grid grid-cols-2 mt-5">
@@ -305,6 +357,12 @@
     }
 
     $(document).ready(function() {
+        var $mode = $('#compareModeSelect');
+        $mode.on('change', function(){
+            $('#sampleStepItem').toggle($mode.val() === 'sample');
+            // 分片并发仅 full 模式有意义（sample 抽样/health 体检模式下隐藏，避免歧义配置）
+            $('#fullSplitItem').toggle($mode.val() === 'full');
+        }).trigger('change');
         initDBSelect($('#sourceConnectorId'), $('#sourceDatabase'), $('#sourceSchema'), 'source');
         initDBSelect($('#targetConnectorId'), $('#targetDatabase'), $('#targetSchema'), 'target');
 
@@ -331,7 +389,7 @@
                 doPoster("/validate-sync/add", payload, function (response) {
                     btn.html(originalText).prop('disabled', false);
                     if (response.success === true) {
-                        bootGrowl("保存订正校验成功!", "success");
+                        bootGrowl("数据对比任务创建成功!", "success");
                         const rawStr = localStorage.getItem("dbdatasync.pagination.validate-sync-list");
                         const raw = JSON.parse(rawStr);
                         raw.pageNum = 1;

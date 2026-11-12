@@ -8,6 +8,7 @@ import org.dbdatasync.common.util.DateFormatUtil;
 import org.dbdatasync.common.util.SqlIdentifierValidator;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.sqlserver.cdc.Lsn;
+import org.dbdatasync.connector.sqlserver.cdc.trigger.SqlServerTriggerLogListener;
 import org.dbdatasync.connector.sqlserver.cdc.SqlServerListener;
 import org.dbdatasync.connector.sqlserver.schema.SqlServerSchemaResolver;
 import org.dbdatasync.connector.sqlserver.validator.SqlServerConfigValidator;
@@ -76,6 +77,11 @@ public final class SqlServerConnector extends AbstractDatabaseConnector {
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new SqlServerListener();
         }
+
+        // Wave28: Trigger CDC fallback capture (no CDC components / SQL Server Agent required)
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new SqlServerTriggerLogListener();
+        }
         return null;
     }
 
@@ -115,6 +121,23 @@ public final class SqlServerConnector extends AbstractDatabaseConnector {
         Integer count = connectorInstance.execute(databaseTemplate ->
                 databaseTemplate.queryForObject("SELECT COUNT(1) FROM sys.databases WHERE name = ?", Integer.class, databaseName));
         return count != null && count > 0;
+    }
+
+    @Override
+    public String buildAddColumnsSql(DatabaseConnectorInstance targetInstance, String targetTableName,
+                                      String qualifiedName, List<Field> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return StringUtil.EMPTY;
+        }
+        // SqlServer 方言: ALTER TABLE t ADD c1 t1, c2 t2 (无 COLUMN 关键字)
+        StringBuilder clauses = new StringBuilder();
+        for (Field field : fields) {
+            if (clauses.length() > 0) {
+                clauses.append(", ");
+            }
+            clauses.append(buildWithQuotation(field.getName())).append(" ").append(formatPhysicalType(field));
+        }
+        return "ALTER TABLE " + qualifiedName + " ADD " + clauses;
     }
 
     @Override

@@ -5,6 +5,7 @@ package org.dbdatasync.connector.h2;
 
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.h2.schema.H2SchemaResolver;
+import org.dbdatasync.connector.h2.cdc.H2TriggerLogListener;
 import org.dbdatasync.connector.h2.storage.H2StorageService;
 import org.dbdatasync.connector.h2.validator.H2ConfigValidator;
 import org.dbdatasync.sdk.config.DatabaseConfig;
@@ -63,6 +64,10 @@ public final class H2Connector extends AbstractDatabaseConnector {
     public Listener getListener(String listenerType) {
         if (ListenerTypeEnum.isTiming(listenerType)) {
             return new DatabaseQuartzListener();
+        }
+        // Wave26/28：H2 无原生日志监听器，Trigger CDC 是唯一增量捕获路径
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new H2TriggerLogListener();
         }
         return null;
     }

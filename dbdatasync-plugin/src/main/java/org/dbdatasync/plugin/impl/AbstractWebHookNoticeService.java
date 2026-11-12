@@ -71,6 +71,26 @@ public abstract class AbstractWebHookNoticeService extends AbstractNoticeService
             TestNoticeContent meta = (TestNoticeContent) noticeContent;
             return String.format("[%s] %s %s", getAppConfig().getName(), noticeContent.getTitle(), meta.getContent());
         }
+
+        // 实时链路健康告警（Wave22）
+        if (noticeContent instanceof ReplicationHealthContent) {
+            ReplicationHealthContent meta = (ReplicationHealthContent) noticeContent;
+            StringBuilder c = new StringBuilder();
+            c.append(String.format("[%s] %s，异常链路数：%s\n",
+                    getAppConfig().getName(), noticeContent.getTitle(),
+                    meta.getErrorItems() == null ? 0 : meta.getErrorItems().size()));
+            c.append(String.format("%s\n\n", DateFormatUtil.now()));
+            if (meta.getErrorItems() != null) {
+                for (int i = 0; i < meta.getErrorItems().size(); i++) {
+                    ReplicationHealthContent.ErrorItem item = meta.getErrorItems().get(i);
+                    c.append(String.format("%d. %s(%s) 等级:%s 停滞:%ss/阈值:%ss 失败率:%.2f%% 死信:%s 原因:%s\n",
+                            i + 1, item.getName(), item.getMetaId(), item.getLevel(),
+                            item.getStallSeconds(), item.getThresholdSeconds(), item.getFailRate(),
+                            item.getDeadLetters(), item.getReason() == null ? "" : item.getReason()));
+                }
+            }
+            return c.toString();
+        }
         return null;
     }
 }

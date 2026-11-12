@@ -75,6 +75,36 @@
                     </div>
                 </div>
                 <div class="form-item">
+                    <label class="form-label">DDL 同步风险策略<i class="fa fa-question-circle"
+                                                               title="all=全部 ALTER 自动同步; add_only=仅新增字段自动同步(改类型/删列/改名拦截需人工确认); off=关闭 DDL 同步"></i><strong
+                            class="text-primary">*</strong></label>
+                    <div class="form-control-area">
+                        <select class="form-control" name="ddlSyncPolicy">
+                            <option value="all" th:selected="${config?.ddlSyncPolicy == null || config?.ddlSyncPolicy == 'all'}">all - 全部自动同步</option>
+                            <option value="add_only" th:selected="${config?.ddlSyncPolicy == 'add_only'}">add_only - 仅新增字段(推荐)</option>
+                            <option value="off" th:selected="${config?.ddlSyncPolicy == 'off'}">off - 关闭 DDL 同步</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">驱动(同步任务)总数上限<i class="fa fa-question-circle"
+                                                               title="允许创建的驱动数量上限，超过后禁止新建/复制驱动，0 表示不限制"></i><strong
+                            class="text-primary">*</strong></label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="0" max="10000" required
+                               name="maxMappingSize" th:value="${config?.maxMappingSize}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">运行中驱动并发上限<i class="fa fa-question-circle"
+                                                               title="同时处于运行状态的驱动数量上限，超过后禁止启动新驱动，0 表示不限制"></i><strong
+                            class="text-primary">*</strong></label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="0" max="1000" required
+                               name="maxRunningMappingSize" th:value="${config?.maxRunningMappingSize}"/>
+                    </div>
+                </div>
+                <div class="form-item">
                     <label class="form-label">同步数据过期时间(天)<strong class="text-primary">*</strong></label>
                     <div class="form-control-area">
                         <input type="number" class="form-control" min="1" max="180" required name="expireDataDays"
@@ -244,6 +274,300 @@
                     <div class="form-control-area">
                         <textarea name="ipWhitelist" class="form-control" rows="5"
                                   placeholder="每行一个，支持：单个IP、CIDR(192.168.1.0/24)、范围(192.168.1.1-192.168.1.100)">[[${config?.ipWhitelistText}]]</textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 可靠性与链路健康（Wave22） -->
+            <div class="grid mt-5 grid-cols-2">
+                <div class="form-item">
+                    <label class="form-label">写入自动重试<i class="fa fa-question-circle"
+                        title="仅对死锁、锁等待、连接闪断、超时等瞬时故障做指数退避重试；主键冲突、类型不符、语法错误等永久故障直接进死信"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableWriteRetry" th:checked="${config?.enableWriteRetry}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">单行最大写入次数</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="1" max="10" name="writeRetryMaxAttempts"
+                               th:value="${config?.writeRetryMaxAttempts}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">退避基础间隔(ms)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="0" max="2000" name="writeRetryBaseMillis"
+                               th:value="${config?.writeRetryBaseMillis}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">单行重试时间预算(ms)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="0" max="30000" name="writeRetryMaxMillis"
+                               th:value="${config?.writeRetryMaxMillis}"/>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid mt-5 grid-cols-2">
+                <div class="form-item">
+                    <label class="form-label">链路健康告警<i class="fa fa-question-circle"
+                        title="链路停滞或失败率超阈值时，通过已配置的告警渠道通知"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableReplicationAlarm" th:checked="${config?.enableReplicationAlarm}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">Prometheus 指标</label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enablePrometheus" th:checked="${config?.enablePrometheus}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">停滞告警阈值(秒)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="5" max="86400" name="lagWarnSeconds"
+                               th:value="${config?.lagWarnSeconds}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">停滞严重阈值(秒)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="10" max="86400" name="lagCriticalSeconds"
+                               th:value="${config?.lagCriticalSeconds}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">失败率告警阈值(%)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="1" max="100" name="failRateWarnPercent"
+                               th:value="${config?.failRateWarnPercent}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">同链路告警冷却(秒)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="30" max="86400" name="healthAlarmCooldownSeconds"
+                               th:value="${config?.healthAlarmCooldownSeconds}"/>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 架构级能力（Wave23） -->
+            <div class="grid mt-5 grid-cols-1">
+                <div class="form-item">
+                    <h4 class="form-label" style="font-size:14px;font-weight:700;color:var(--primary-color);margin-bottom:2px">
+                        <i class="fa fa-cubes"></i> 架构级能力（Wave23）
+                    </h4>
+                    <p style="font-size:12px;color:var(--text-tertiary);margin:0">
+                        以下能力默认关闭，保存后即时生效；生产启用前请确认对应目录可被所有节点访问。
+                    </p>
+                </div>
+            </div>
+            <div class="grid mt-2 grid-cols-2">
+                <div class="form-item">
+                    <label class="form-label">事务型 checkpoint<i class="fa fa-question-circle"
+                        title="开启后在真实增量链路上计算幂等键，写入成功才提交位点；重复事件直接丢弃，向 exactly-once 收敛。需目标端主键/唯一键 upsert 配合"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableTransactionalCheckpoint" th:checked="${config?.enableTransactionalCheckpoint}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">checkpoint 目录<i class="fa fa-question-circle"
+                        title="位点文件与幂等账本目录；多节点部署时需为共享存储"></i></label>
+                    <div class="form-control-area">
+                        <input type="text" class="form-control" name="checkpointDir" maxlength="256"
+                               th:value="${config?.checkpointDir}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">幂等账本上限(条)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="1000" max="2000000" name="checkpointMaxKeys"
+                               th:value="${config?.checkpointMaxKeys}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">无主键表退化支持<i class="fa fa-question-circle"
+                        title="缺主键时优先使用唯一索引列作为 WHERE 键；缺唯一索引时只做全行哈希识别，不伪装成目标端列"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableNoPkFallback" th:checked="${config?.enableNoPkFallback}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid mt-4 grid-cols-2">
+                <div class="form-item">
+                    <label class="form-label">集群 HA<i class="fa fa-question-circle"
+                        title="开启后任务启动需取得 leader + 任务独占租约，关闭任务释放租约，并周期接管过期租约的真实任务"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableClusterHA" th:checked="${config?.enableClusterHA}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">集群租约目录<i class="fa fa-question-circle"
+                        title="文件租约目录，多节点必须指向同一 NFS/共享盘；非共享存储不提供 HA 保证"></i></label>
+                    <div class="form-control-area">
+                        <input type="text" class="form-control" name="clusterLeaseDir" maxlength="256"
+                               th:value="${config?.clusterLeaseDir}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">死信自动重放<i class="fa fa-question-circle"
+                        title="每分钟扫描带失败标签的明细，指数退避重放；只有写入结果明确成功才删除明细，避免二次丢数据"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableDeadLetterAutoReplay" th:checked="${config?.enableDeadLetterAutoReplay}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">重放次数上限</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="1" max="10" name="deadLetterReplayMaxAttempts"
+                               th:value="${config?.deadLetterReplayMaxAttempts}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">重放退避基础(ms)</label>
+                    <div class="form-control-area">
+                        <input type="number" class="form-control" min="50" max="60000" name="deadLetterReplayBaseMillis"
+                               th:value="${config?.deadLetterReplayBaseMillis}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">严格安全模式<i class="fa fa-question-circle"
+                        title="开启后 /actuator/**、/system/**、/user/** 仅 admin 角色可访问；默认关闭以兼容存量部署"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableStrictSecurity" th:checked="${config?.enableStrictSecurity}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section mt-4">
+                <div class="section-heading">
+                    <h3>Wave24 · 一致性与结构变更</h3>
+                    <p>目标库事务内位点、DDL schema history 与自动切流均默认关闭；启用前请按操作手册第 19 章完成前置准备。</p>
+                </div>
+            </div>
+            <div class="grid mt-2 grid-cols-2">
+                <div class="form-item">
+                    <label class="form-label">目标库事务内位点<i class="fa fa-question-circle"
+                        title="把 checkpoint 写入目标库同一 JDBC 事务（__DBSYNC_CHECKPOINT 表），数据与位点原子提交；需先建表且同时开启事务型 checkpoint"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableCheckpointInTargetTx" th:checked="${config?.enableCheckpointInTargetTx}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">表级 DDL 自动同步<i class="fa fa-question-circle"
+                        title="开启后非高风险表级 DDL 自动写目标端；DROP/TRUNCATE/RENAME 等仍必须人工确认"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableDdlAutoSync" th:checked="${config?.enableDdlAutoSync}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">DDL-DML 顺序守卫<i class="fa fa-question-circle"
+                        title="表级 DDL 未确认时挂起同表 DML，确认应用后按原顺序重放，避免按旧 schema 写入"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableDdlDmlOrderGuard" th:checked="${config?.enableDdlDmlOrderGuard}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">schema history 目录<i class="fa fa-question-circle"
+                        title="DDL 历史 JSONL 落盘目录；单实例可用本地盘，多节点建议共享存储"></i></label>
+                    <div class="form-control-area">
+                        <input type="text" class="form-control" name="schemaHistoryDir" maxlength="256"
+                               th:value="${config?.schemaHistoryDir}"/>
+                    </div>
+                </div>
+                <div class="form-item">
+                    <label class="form-label">自动切流 / 真实回滚<i class="fa fa-question-circle"
+                        title="相位推进成功后调用真实执行器；未接入外部动作处理器时结果标记 simulated，不冒充已切流"></i></label>
+                    <div class="form-control-area">
+                        <label class="form-switch">
+                            <input name="enableCutoverAutoExecute" th:checked="${config?.enableCutoverAutoExecute}" type="checkbox"/>
+                            <span class="switch-track">
+                                <span class="switch-option switch-option-on">Yes</span>
+                                <span class="switch-option switch-option-off">No</span>
+                                <span class="switch-thumb"></span>
+                            </span>
+                        </label>
                     </div>
                 </div>
             </div>

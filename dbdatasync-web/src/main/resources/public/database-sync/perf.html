@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 整库迁移 · 性能适配建议（文档级，不自动执行 DDL） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">性能适配建议
+            <small class="text-tertiary"> · <span th:text="${taskName}">任务名</span></small>
+        </h3>
+    </div>
+    <div class="card-body">
+        <div id="perfLoading" class="text-center py-8 text-tertiary">
+            <i class="fa fa-spinner fa-spin"></i> 正在生成性能适配建议…
+        </div>
+        <div id="perfBody" style="display:none;"></div>
+        <div class="blank-block"></div>
+        <div class="text-right">
+            <button class="btn btn-default" onclick="window.backIndexPage ? window.backIndexPage() : doLoader('/database-sync/list')">
+                <i class="fa fa-arrow-left"></i> 返回列表
+            </button>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    const PERF_TASK_ID = /*[[${taskId}]]*/ '';
+
+    function renderPerfAdvice(data) {
+        document.getElementById('perfLoading').style.display = 'none';
+        const body = document.getElementById('perfBody');
+        body.style.display = '';
+        if (!data || !data.migrated) {
+            body.innerHTML = '<div class="p-4 text-secondary border rounded bg-surface">'
+                + '该任务尚未执行过迁移，请先启动迁移后再查看性能适配建议。</div>';
+            return;
+        }
+        let html = '<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">'
+            + statCard('总数据量', fmtNum(data.totalRows) + ' 行', '总数据量=成功+失败', fmtNum(data.totalRows) + ' 行')
+            + statCard('成功行数', fmtNum(data.successRows) + ' 行', '任务级 Meta.success', fmtNum(data.successRows) + ' 行')
+            + statCard('失败行数', fmtNum(data.failRows) + ' 行', '任务级 Meta.fail', fmtNum(data.failRows) + ' 行')
+            + statCard('净吞吐', (data.throughputPerSecond || 0) + ' 行/s', '成功行每秒（successRows ÷ 耗时）', null)
+            + statCard('耗时', fmtDuration(data.durationMs), 'beginTime → endTime', null)
+            + statCard('表数', String(data.tableCount || 0), '表组数', null)
+            + '</div>'
+            + sectionTitle('成本与策略', null)
+            + '<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-3">'
+            + statCard('配置限速（行/s）', fmtNum(data.configuredRecordsPerSecond || 0) + ' 行/s', null, null)
+            + statCard('配置限速（字节/s）', fmtNum(data.configuredBytesPerSecond || 0) + ' 字节/s', null, null)
+            + statCard('低峰时间窗', data.offPeakWindowText || '未启用', null, null)
+            + statCard('每千行平均耗时', fmtNum(data.avgMsPerThousandRows || 0) + ' ms', null, null)
+            + statCard('限速估算理论最短耗时', fmtDuration(data.estimatedMinDurationMs || 0), null, null)
+            + '</div>'
+            + '<div class="p-3 mb-3 border rounded bg-surface text-xs">' + escapeHtml(data.costSummary || '') + '</div>'
+            + sectionTitle('大表适配建议（索引 / 分区）', data.bigTables && data.bigTables.length)
+            + renderBigTables(data.bigTables)
+            + sectionTitle('差异 / 失败表（需补迁或重校验）', data.diffTables && data.diffTables.length)
+            + renderDiffTables(data.diffTables)
+            + sectionTitle('读写参数建议', data.parameterAdvices && data.parameterAdvices.length)
+            + renderBulletList(data.parameterAdvices)
+            + sectionTitle('目标库参数建议', data.targetDbAdvices && data.targetDbAdvices.length)
+            + renderBulletList(data.targetDbAdvices)
+            + sectionTitle('汇总结论', null)
+            + (data.rowsConsistent === false
+                ? '<div class="p-2 mb-2 text-xs text-danger border rounded bg-surface">'
+                    + '任务级 Meta.total 与 成功+失败 不一致，请核对运行记录（Meta.total='
+                    + escapeHtml(fmtNum(data.metaTotal)) + ' 行）。</div>'
+                : '')
+            + '<div class="p-3 mb-3 border rounded bg-surface text-xs">' + escapeHtml(data.conclusion || '') + '</div>';
+        body.innerHTML = html;
+    }
+
+    function statCard(label, value, hint, exact) {
+        const titleAttr = exact ? ' title="精确值：' + escapeHtml(exact) + '"' : '';
+        const hintHtml = hint ? '<div class="text-xs text-tertiary mt-1">口径：' + escapeHtml(hint) + '</div>' : '';
+        const exactHtml = exact ? '<div class="text-xs text-tertiary">精确值：' + escapeHtml(exact) + '</div>' : '';
+        return '<div class="p-3 border rounded bg-surface"><div class="text-xs text-tertiary">' + escapeHtml(label)
+            + '</div><div class="text-base font-medium"' + titleAttr + '>' + escapeHtml(value) + '</div>'
+            + hintHtml + exactHtml + '</div>';
+    }
+
+    function sectionTitle(text, count) {
+        const badge = count != null ? '<span class="text-xs text-tertiary ml-1">(' + count + ')</span>' : '';
+        return '<div class="mb-2 mt-3 font-medium text-sm">' + escapeHtml(text) + badge + '</div>';
+    }
+
+    function renderBigTables(list) {
+        if (!list || !list.length) {
+            return '<div class="p-2 text-xs text-tertiary">无超百万行大表，无需索引/分区专项优化。</div>';
+        }
+        let html = '<table class="table table-compact"><thead><tr><th>表</th>'
+            + '<th>源行数（明细 sourceTotal）</th><th>建议</th></tr></thead><tbody>';
+        list.forEach(function (item) {
+            html += '<tr><td class="text-xs whitespace-nowrap">' + escapeHtml(item.tableName || '')
+                + '</td><td class="text-xs" title="精确值：' + escapeHtml(fmtNum(item.sourceRows)) + ' 行">'
+                + fmtNum(item.sourceRows) + '</td>'
+                + '<td class="text-xs">' + escapeHtml(item.advice || '') + '</td></tr>';
+        });
+        return html + '</tbody></table>';
+    }
+
+    function renderDiffTables(list) {
+        if (!list || !list.length) {
+            return '<div class="p-2 text-xs text-tertiary">无差异/失败表，数据一致性良好。</div>';
+        }
+        let html = '<table class="table table-compact"><thead><tr><th>表</th><th>差异/失败数</th><th>建议</th></tr></thead><tbody>';
+        list.forEach(function (item) {
+            html += '<tr><td class="text-xs whitespace-nowrap">' + escapeHtml(item.tableName || '')
+                + '</td><td class="text-xs" title="精确值：' + escapeHtml(fmtNum(item.diffTotal)) + ' 行">'
+                + fmtNum(item.diffTotal) + '</td>'
+                + '<td class="text-xs">' + escapeHtml(item.advice || '') + '</td></tr>';
+        });
+        return html + '</tbody></table>';
+    }
+
+    function renderBulletList(list) {
+        if (!list || !list.length) {
+            return '<div class="p-2 text-xs text-tertiary">无。</div>';
+        }
+        let html = '<ul class="text-xs list-disc pl-4 space-y-1">';
+        list.forEach(function (item) {
+            html += '<li>' + escapeHtml(item || '') + '</li>';
+        });
+        return html + '</ul>';
+    }
+
+    // Wave10 P0-1：保留精确值，不再用「X.X 万 / X.XX 亿」缩写丢失精度；
+    // 卡片与表格同时通过 title / 副文本给出精确值，可与明细精确核对。
+    function exactNum(n) {
+        const v = Number(n || 0);
+        return v.toLocaleString('en-US');
+    }
+
+    function fmtNum(n) {
+        return exactNum(n);
+    }
+
+    function fmtDuration(ms) {
+        const v = Number(ms || 0);
+        if (v <= 0) {
+            return '-';
+        }
+        if (v < 1000) {
+            return v + ' ms';
+        }
+        const sec = v / 1000;
+        if (sec < 60) {
+            return sec.toFixed(1) + ' s';
+        }
+        const min = sec / 60;
+        if (min < 60) {
+            return min.toFixed(1) + ' min';
+        }
+        return (min / 60).toFixed(1) + ' h';
+    }
+
+    // 加载性能适配报告
+    doPoster('/database-sync/perfAdvice', { id: PERF_TASK_ID }, function (response) {
+        if (!response.success) {
+            document.getElementById('perfLoading').style.display = 'none';
+            document.getElementById('perfBody').style.display = '';
+            document.getElementById('perfBody').innerHTML =
+                '<div class="p-4 text-danger border rounded bg-surface">' + escapeHtml(response.message || '生成性能建议失败') + '</div>';
+            return;
+        }
+        renderPerfAdvice(response.data || {});
+    });
+</script>
+</html>

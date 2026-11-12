@@ -85,6 +85,15 @@ public class LogMiner {
      */
     private final boolean isDameng;
 
+    /**
+     * Oracle 会话周期性重开间隔(秒)。实测(19c): 会话启动后写入在线 redo 的新提交在
+     * V$LOGMNR_CONTENTS 持续查询中不可见, 只有重开会话后才可见(与达梦行为一致);
+     * 故 Oracle 也需周期性重开会话保证增量实时性。0 表示禁用(仅 redo 切换时重开)。
+     */
+    private static final long SESSION_REFRESH_SECONDS = Long.getLong("dbdatasync.oracle.logminer.sessionRefreshSeconds", 30L);
+    private long lastSessionRefreshAt;
+    private long sessionStartedAt;
+
     public LogMiner(String username, String password, String url, String schema, String driverClassName) {
         this.username = username;
         this.password = password;
@@ -211,6 +220,7 @@ public class LogMiner {
     private void restartLogMiner(long endScn) throws SQLException {
         LogMinerHelper.startLogMiner(connection, startScn, endScn);
         logMinerSessionStarted = true;
+        sessionStartedAt = System.currentTimeMillis();
         currentRedoLogSequences = LogMinerHelper.getCurrentRedoLogSequences(connection);
     }
 
@@ -618,6 +628,16 @@ public class LogMiner {
                     } else if (redoLogSwitchOccurred()) {
                         logger.info("Switch to new redo log");
                         addLogFilesIfNeeded(endScn);
+                    } else if (SESSION_REFRESH_SECONDS > 0
+                            && System.currentTimeMillis() - Math.max(lastSessionRefreshAt, sessionStartedAt)
+                                    >= SESSION_REFRESH_SECONDS * 1000L) {
+                        // Oracle 与达梦同源问题: 会话启动后写入在线 redo 的新提交不可见(实测),
+                        // 周期性重开会话使新提交尽快可见; 节流由 SESSION_REFRESH_SECONDS 控制
+                        logger.info("Periodic LogMiner session refresh (every {}s)", SESSION_REFRESH_SECONDS);
+                        LogMinerHelper.endLogMiner(connection);
+                        logMinerSessionStarted = false;
+                        addLogFilesIfNeeded(endScn);
+                        lastSessionRefreshAt = System.currentTimeMillis();
                     }
 
                     // 4. 动态调整堆积偏移SCN

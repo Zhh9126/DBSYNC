@@ -66,10 +66,17 @@ public class WebAppConfig extends WebSecurityConfigurerAdapter implements Authen
     @Resource
     private UserConfigService userConfigService;
 
+    /** Wave24：运行期安全策略（RBAC / CSRF 均按严格模式即时生效） */
+    @Resource
+    private WebSecurityPolicy webSecurityPolicy;
+
     /**
      * 是否重置管理员密码
      */
     private boolean resetPwd;
+
+    /** Wave23 严格安全模式：/actuator/**、/system/** 仅 admin 可访问 */
+    private boolean strict;
 
     /**
      * 登录失败
@@ -120,7 +127,22 @@ public class WebAppConfig extends WebSecurityConfigurerAdapter implements Authen
         // .anyRequest().permitAll()
         // .and().logout().permitAll();
 
-        http.csrf().disable().authorizeRequests().antMatchers("/css/**", "/js/**", "/img/**", "/plugins/**", "/index/version.json", "/openapi/**").permitAll().anyRequest().authenticated().and()
+        // Wave23：严格安全模式改为运行期求值，系统配置页保存后即时生效；
+        // 关闭时表达式退化为 isAuthenticated()，与存量部署完全一致。
+        String privileged = "isAuthenticated() and (!@webSecurityPolicy.isStrict() "
+                + "or hasAnyAuthority('admin','ADMIN','ROLE_ADMIN'))";
+        // Wave24：CSRF（仅严格模式下的管理动作）+ RBAC（逐请求按角色矩阵求值）。
+        // 严格模式关闭时两者都退化为原有行为，存量页面与 AJAX 请求零影响。
+        http.csrf()
+                .csrfTokenRepository(org.springframework.security.web.csrf.CookieCsrfTokenRepository.withHttpOnlyFalse())
+                .requireCsrfProtectionMatcher(new StrictModeCsrfMatcher(webSecurityPolicy))
+                .and()
+                .authorizeRequests()
+                .antMatchers("/css/**", "/js/**", "/img/**", "/plugins/**", "/index/version.json", "/openapi/**").permitAll()
+                .antMatchers("/actuator/**").access(privileged)
+                .antMatchers("/system/**", "/user/**").access(privileged)
+                .anyRequest().access("@rbacPolicy.check(authentication,request)")
+                .and()
                 .formLogin().loginProcessingUrl(LOGIN).loginPage(LOGIN_PAGE).successHandler(loginSuccessHandler()).failureHandler(loginFailHandler()).permitAll().and().logout().permitAll()
                 .invalidateHttpSession(true).deleteCookies("JSESSIONID").logoutSuccessHandler(logoutHandler()).and().sessionManagement().sessionFixation().migrateSession()
                 .maximumSessions(MAXIMUM_SESSIONS);
@@ -210,5 +232,9 @@ public class WebAppConfig extends WebSecurityConfigurerAdapter implements Authen
 
     public void setResetPwd(boolean resetPwd) {
         this.resetPwd = resetPwd;
+    }
+
+    public void setStrict(boolean strict) {
+        this.strict = strict;
     }
 }

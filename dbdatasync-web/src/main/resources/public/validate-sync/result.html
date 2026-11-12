@@ -49,6 +49,7 @@
                 <th style="width: 200px;">目标源表</th>
                 <th>执行结果</th>
                 <th style="width: 180px;">更新时间</th>
+                <th style="width: 80px;">操作</th>
             </tr>
             </thead>
             <tbody id="resultTableBody">
@@ -133,7 +134,7 @@
         const taskId = window.taskId;
         // 返回列表按钮
         $('#backToListBtn').click(function() {
-            doLoader('/task');
+            doLoader('/validate-sync');
         });
 
         // 刷新按钮

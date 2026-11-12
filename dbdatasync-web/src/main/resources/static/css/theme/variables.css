@@ -1,16 +1,17 @@
 /**
  * DBDataSync 设计系统变量
- * 设计规范：Slate + Teal 专业克制体系（禁止蓝紫渐变 / Ant Blue）
+ * 设计规范：DataX Web 蓝调体系（深蓝导航 + 科技蓝主色 + 冷灰蓝内容底）
+ * 与登录页 login.css 的 #1e3a8a → #1d4ed8 → #0ea5e9 渐变保持同源
  */
 
 :root {
-  /* 主色调（Teal） */
-  --primary-color: #0D9488;        /* teal-600 */
-  --primary-hover: #0F766E;        /* teal-700 */
-  --primary-active: #115E59;       /* teal-800 */
-  --primary-light: #CCFBF1;        /* teal-100 浅色高亮底 */
-  --primary-lighter: #F0FDFA;      /* teal-50 极浅底色 */
-  --primary-border: #5EEAD4;       /* teal-300 主色边框 */
+  /* 主色调（科技蓝） */
+  --primary-color: #2563EB;        /* blue-600 */
+  --primary-hover: #1D4ED8;        /* blue-700 */
+  --primary-active: #1E40AF;       /* blue-800 */
+  --primary-light: #DBEAFE;        /* blue-100 浅色高亮底 */
+  --primary-lighter: #EFF6FF;      /* blue-50 极浅底色 */
+  --primary-border: #93C5FD;       /* blue-300 主色边框 */
 
   /* 状态色 */
   --success-color: #059669;        /* emerald-600 */
@@ -22,11 +23,11 @@
   --error-color: #DC2626;          /* red-600 */
   --error-hover: #EF4444;
   --error-light: #FEE2E2;
-  --info-color: #0D9488;
-  --info-light: #F0FDFA;
-  --violet-color: #0F766E;         /* 弃用紫色，统一为 teal-700 */
+  --info-color: #0284C7;           /* sky-600 */
+  --info-light: #E0F2FE;
+  --violet-color: #6366F1;         /* indigo-500 辅助色 */
 
-  /* 中性色（Slate） */
+  /* 中性色（冷灰蓝） */
   --text-primary: #0F172A;         /* slate-900 */
   --text-secondary: #475569;       /* slate-600 */
   --text-tertiary: #94A3B8;        /* slate-400 */
@@ -34,34 +35,38 @@
 
   /* 背景色 */
   --bg-primary: #FFFFFF;           /* 卡片/面板 */
-  --bg-secondary: #F8FAFC;         /* 主内容区背景 slate-50 */
-  --bg-tertiary: #F1F5F9;          /* slate-100 */
-  --bg-quaternary: #E2E8F0;        /* slate-200 */
+  --bg-secondary: #F3F6FC;         /* 主内容区背景（冷灰蓝） */
+  --bg-tertiary: #EAF0FA;          /* 次级底 */
+  --bg-quaternary: #DDE7F7;        /* 三级底 */
 
   /* 边框色 */
-  --border-primary: #CBD5E1;       /* slate-300 */
-  --border-secondary: #E2E8F0;     /* slate-200 */
-  --border-tertiary: #F1F5F9;      /* slate-100 */
+  --border-primary: #D8E2F0;       /* 主边框 */
+  --border-secondary: #E7EDF7;     /* 分割线 */
+  --border-tertiary: #F1F5FC;      /* 极浅分割线 */
 
-  /* 侧边栏（深色 Slate） */
-  --sidebar-bg: #1E293B;           /* slate-800 */
-  --sidebar-hover: #334155;        /* slate-700 */
-  --sidebar-active: #0D9488;       /* teal-600 */
-  --sidebar-text: #CBD5E1;         /* slate-300 */
-  --sidebar-text-muted: #64748B;   /* slate-500 */
+  /* 侧边栏（深蓝） */
+  --sidebar-bg: #0B1B3F;           /* 深海军蓝 */
+  --sidebar-hover: #1B3A7A;        /* 悬停蓝 */
+  --sidebar-active: rgba(59, 130, 246, 0.20);
+  --sidebar-text: #A9BEE3;         /* 菜单文字 */
+  --sidebar-text-muted: #6B83B0;   /* 分组标题 */
 
-  /* 阴影 */
-  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --shadow-md: 0 2px 8px 0 rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 4px 12px 0 rgba(0, 0, 0, 0.12);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  --shadow-sidebar: 2px 0 8px 0 rgba(0, 0, 0, 0.15);
+  /* 品牌渐变（与登录页一致） */
+  --brand-gradient: linear-gradient(135deg, #1E3A8A 0%, #1D4ED8 45%, #0EA5E9 100%);
+  --brand-gradient-soft: linear-gradient(120deg, #1D4ED8 0%, #3B82F6 60%, #38BDF8 100%);
 
-  /* 圆角 */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  /* 阴影（柔和冷色投影） */
+  --shadow-sm: 0 1px 2px 0 rgba(30, 64, 175, 0.05), 0 2px 8px 0 rgba(30, 64, 175, 0.05);
+  --shadow-md: 0 4px 16px 0 rgba(30, 64, 175, 0.10);
+  --shadow-lg: 0 10px 30px 0 rgba(30, 64, 175, 0.13);
+  --shadow-xl: 0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 8px 16px -8px rgba(30, 64, 175, 0.16);
+  --shadow-sidebar: 6px 0 24px 0 rgba(11, 27, 63, 0.22);
+
+  /* 圆角（更舒展） */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-round: 50%;
 
   /* 间距 */
@@ -88,7 +93,7 @@
 
   /* 布局尺寸 */
   --header-height: 64px;
-  --sidebar-width: 240px;
+  --sidebar-width: 248px;
   --sidebar-collapsed-width: 80px;
 
   /* 过渡动画 */

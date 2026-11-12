@@ -26,5 +26,23 @@ public enum DDLOperationEnum {
     /**
      * 删除字段
      */
-    ALTER_DROP;
+    ALTER_DROP,
+    /** 建表（表级，需人工确认） */
+    CREATE_TABLE,
+    /** 删表（表级，需人工确认） */
+    DROP_TABLE,
+    /** 清空表（表级，需人工确认） */
+    TRUNCATE_TABLE,
+    /** 表重命名（表级，需人工确认） */
+    RENAME_TABLE,
+    /** 建索引 */
+    CREATE_INDEX,
+    /** 删索引 */
+    DROP_INDEX,
+    /** 加约束 */
+    ADD_CONSTRAINT,
+    /** 删约束 */
+    DROP_CONSTRAINT,
+    /** 未识别 */
+    UNKNOWN;
 }

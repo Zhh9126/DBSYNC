@@ -702,6 +702,38 @@
         $('#btnAddTablesToMapping').on('click', openAppendTablePickerModal);
     }
 
+    /**
+     * Wave32 多库同步：刷新「已映射到 N 个目标库」提示条。
+     * 统计与当前活跃映射「同源（连接+库+schema）」但目标库不同的映射组数。
+     */
+    function updateMultiTargetHint() {
+        if (!hasDetailTargetPanel()) {
+            return;
+        }
+        const block = state.mappings[state.activeMappingIndex];
+        if (!block || !state.mappings.length) {
+            $('#multiTargetHint').hide();
+            return;
+        }
+        const sourceConnectorId = getMappingSourceConnectorId(block);
+        const srcDb = block.sourceDatabase || '';
+        const srcSchema = block.sourceSchema || '';
+        let count = 0;
+        state.mappings.forEach(function (m) {
+            if (m && (m.sourceDatabase || '') === srcDb
+                && (m.sourceSchema || '') === srcSchema
+                && getMappingSourceConnectorId(m) === sourceConnectorId) {
+                count++;
+            }
+        });
+        if (count > 1) {
+            $('#multiTargetCount').text(count);
+            $('#multiTargetHint').show();
+        } else {
+            $('#multiTargetHint').hide();
+        }
+    }
+
     function applyTablePrefixToBlock(block, prefix) {
         (block.tableMappings || []).forEach(function (row) {
             row.targetTable = prefix + (row.targetTable || '');
@@ -1421,6 +1453,19 @@
     }
 
     function syncMappingsJson() {
+        // Wave10 P0-2：前后端统一为数组契约。异常形态在此就地归一，正常路径行为零变化。
+        // 保证 databaseMappingsJson 恒为 JSON 数组，且每个 block 的 tableMappings 恒为数组。
+        if (!Array.isArray(state.mappings)) {
+            state.mappings = [];
+        }
+        state.mappings = state.mappings.filter(function (block) {
+            return block && typeof block === 'object';
+        });
+        state.mappings.forEach(function (block) {
+            if (!Array.isArray(block.tableMappings)) {
+                block.tableMappings = [];
+            }
+        });
         reindexMappings();
         $('#databaseMappingsJson').val(JSON.stringify(state.mappings));
     }
@@ -1884,6 +1929,7 @@
         $list.html(html);
         bindMappingSidebarEvents();
         syncMappingsJson();
+        updateMultiTargetHint();
     }
 
     function bindMappingSidebarEvents() {
@@ -2056,6 +2102,7 @@
         $('#mappingDetailPanel').removeClass('hidden');
         updateWorkspaceEmptyState();
         syncDetailPanelFromActiveMapping();
+        updateMultiTargetHint();
         if (reset) {
             state.detailPageNum = 1;
         }
@@ -2336,6 +2383,126 @@
         });
     }
 
+    /**
+     * Wave32 多库同步（一源多目标）：把当前源库映射到同连接器的多个目标库。
+     *
+     * 复用现有 state.mappings 数组契约：选中 N 个目标库后，按「当前源库 + 各目标库」
+     * 追加 N 组 DatabaseMappingVO（表映射暂留空，由用户逐个追加表），天然支持
+     * 一份源 → 多份目标库的并行同步（全量 + 接续增量逐目标独立）。
+     */
+    function openMultiTargetsModal() {
+        syncActiveMappingFromDetailPanel();
+        const block = state.mappings[state.activeMappingIndex];
+        if (!block) {
+            bootGrowl('请先选择一组库映射', 'warning');
+            return;
+        }
+        const sourceConnectorId = getMappingSourceConnectorId(block);
+        const targetConnectorId = getMappingTargetConnectorId(block);
+        if (!sourceConnectorId || !targetConnectorId) {
+            bootGrowl('请先选择源连接与目标连接', 'warning');
+            return;
+        }
+        if (!isSameConnectorType(sourceConnectorId, targetConnectorId)) {
+            bootGrowl('多目标库仅支持同类型连接器（异构分发暂未开放）', 'warning');
+            return;
+        }
+        if (isOracleTargetConnector(targetConnectorId)) {
+            bootGrowl('Oracle 目标以 Schema 区分，暂不支持多目标库助手（请逐组添加）', 'warning');
+            return;
+        }
+        const sourceDbName = getMappingSourceDbName(block);
+        const sourceSchema = block.sourceSchema || '';
+        const tgtConnectorId = block.targetConnectorId || targetConnectorId;
+        const existTargets = new Set();
+        state.mappings.forEach(function (m) {
+            if (m.sourceDatabase === block.sourceDatabase
+                && (m.sourceSchema || '') === sourceSchema
+                && getMappingSourceConnectorId(m) === sourceConnectorId) {
+                existTargets.add((m.targetDatabase || '') + '@' + (m.targetSchema || ''));
+            }
+        });
+        // 枚举目标连接器下的库（与添加表弹层同源接口）
+        doGetter('/connector/getDatabase', { id: tgtConnectorId }, function (response) {
+            if (!response.success || !response.data) {
+                bootGrowl('获取目标库列表失败: ' + (response.message || ''), 'danger');
+                return;
+            }
+            const allDbs = response.data || [];
+            if (!allDbs.length) {
+                bootGrowl('目标连接器没有可枚举的库（或连接器不支持库级枚举）', 'warning');
+                return;
+            }
+            const checked = [];
+            const html = ['<div class="grid grid-cols-2 gap-2 max-h-320 overflow-auto pb-2">'];
+            allDbs.forEach(function (dbName) {
+                const isExist = existTargets.has((dbName || '') + '@');
+                const checkedAttr = isExist ? ' checked' : '';
+                html.push('<label class="flex items-center gap-2 border rounded px-2 py-1 cursor-pointer">'
+                    + '<input type="checkbox" class="multi-target-cb" value="' + escapeHtml(dbName) + '"' + checkedAttr + '/> '
+                    + '<span class="text-sm truncate">' + escapeHtml(dbName) + '</span>'
+                    + (isExist ? '<span class="text-tertiary text-xs flex-shrink-0">(已映射)</span>' : '')
+                    + '</label>');
+            });
+            html.push('</div>');
+            const $modal = $('<div class="modal fade show" style="display:block;background:rgba(0,0,0,.45);z-index:12000;">'
+                + '<div class="modal-dialog modal-dialog-centered">'
+                + '<div class="modal-content">'
+                + '<div class="modal-header"><h5 class="modal-title"><i class="fa fa-clone text-primary"></i> 多目标库（一源多目标）</h5>'
+                + '<button type="button" class="close" data-dismiss="modal"><span>&times;</span></button></div>'
+                + '<div class="modal-body">'
+                + '<p class="text-sm text-tertiary mb-3">源: ' + escapeHtml(sourceDbName || '（当前源）')
+                + (sourceSchema ? ' / ' + escapeHtml(sourceSchema) : '')
+                + '　→　目标连接: ' + escapeHtml(getConnectorDisplayName(tgtConnectorId)) + '</p>'
+                + '<p class="text-xs text-tertiary mb-3"><i class="fa fa-info-circle"></i> 勾选多个目标库，会把当前源库复制为多组映射，'
+                + '每一组目标库独立同步（可分别添加表、接续增量）。已存在的组合自动勾选，取消勾选不会删除已建映射。</p>'
+                + html.join('')
+                + '</div>'
+                + '<div class="modal-footer">'
+                + '<button type="button" class="btn btn-outline btn-sm" data-dismiss="modal">取消</button>'
+                + '<button type="button" class="btn btn-primary btn-sm" id="btnConfirmMultiTargets">确认追加</button>'
+                + '</div></div></div></div>');
+            $('body').append($modal);
+            let added = 0;
+            $modal.find('.close, [data-dismiss="modal"]').on('click', function () { $modal.remove(); });
+            $modal.find('#btnConfirmMultiTargets').on('click', function () {
+                const selected = [];
+                $modal.find('.multi-target-cb:checked').each(function () {
+                    selected.push($(this).val());
+                });
+                if (!selected.length) {
+                    bootGrowl('请至少勾选一个目标库', 'warning');
+                    return;
+                }
+                selected.forEach(function (dbName) {
+                    const existIdx = findMappingIndex(block.sourceDatabase, sourceSchema, dbName, '',
+                        sourceConnectorId, tgtConnectorId);
+                    if (existIdx >= 0) {
+                        return;
+                    }
+                    const clone = $.extend(true, {}, block);
+                    const base = (clone.targetDatabase || '').trim();
+                    clone.targetDatabase = String(dbName).trim();
+                    // 表映射不复制：多目标下每组的源表选择应独立（避免误把主目标表复制到新目标）
+                    clone.tableMappings = [];
+                    // 目标库更名后置空分区/表前缀等派生配置（如配置了可自行微调）
+                    clone.id = undefined;
+                    clone.index = state.mappings.length + 1;
+                    state.mappings.push(clone);
+                    added++;
+                });
+                $modal.remove();
+                if (added) {
+                    syncMappingsJson();
+                    renderMappingSidebar();
+                    bootGrowl('已追加 ' + added + ' 组目标库映射，请逐库添加要同步的表', 'success');
+                } else {
+                    bootGrowl('所选目标库均已存在，未新增', 'info');
+                }
+            });
+        });
+    }
+
     function clearMappings() {
         state.mappings = [];
         renderMappingSidebar();
@@ -2465,6 +2632,10 @@
         $('input[name="enableCopyData"]').prop('checked', !!task.enableCopyData);
         $('input[name="overwriteData"]').prop('checked', !!task.overwriteData);
         $('input[name="enableAutoDiscover"]').prop('checked', !!task.enableAutoDiscover);
+        // Wave30：大数据量性能参数回填（存量任务缺字段时用页面默认值）
+        $('input[name="readNum"]').val(Number(task.readNum) > 0 ? task.readNum : 10000);
+        $('input[name="batchNum"]').val(Number(task.batchNum) > 0 ? task.batchNum : 1000);
+        $('input[name="threadNum"]').val(Number(task.threadNum) > 0 ? task.threadNum : 5);
         refreshSyncStrategyCheckboxState();
         bindSyncStrategyEvents();
     }
@@ -2556,6 +2727,7 @@
 
         $('#btnAddDbMapping').on('click', openTablePickerModal);
     $('#btnExpandDatabases').on('click', expandAllDatabases);
+        $('#btnMultiTargets').on('click', openMultiTargetsModal);
 
         $('#database-sync-submit-btn').on('click', function () {
             syncActiveMappingFromDetailPanel();

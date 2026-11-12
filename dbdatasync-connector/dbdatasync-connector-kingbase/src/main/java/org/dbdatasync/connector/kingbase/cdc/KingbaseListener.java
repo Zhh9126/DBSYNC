@@ -335,6 +335,9 @@ public class KingbaseListener extends AbstractDatabaseListener {
                     RowChangedEvent event = messageDecoder.processMessage(msg);
                     if (event != null && filterTable.contains(event.getSourceTableName())) {
                         event.setPosition(lsn.asString());
+                        // Wave24：Kingbase 复用 pgoutput 解码器，同样取源端事务时间
+                        org.dbdatasync.sdk.model.SourceEventTime.apply(event,
+                                messageDecoder.lastSourceEventTimeMillis(), ChangedOffset.EVENT_TIME_SOURCE);
                         while (connected) {
                             try {
                                 sendChangedEvent(event);

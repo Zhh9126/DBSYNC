@@ -27,6 +27,7 @@ import org.dbdatasync.sdk.connector.ConnectorInstance;
 import org.dbdatasync.sdk.connector.database.Database;
 import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
 import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
+import org.dbdatasync.sdk.constant.ConfigConstant;
 import org.dbdatasync.sdk.enums.DatabaseMigrationDetailTypeEnum;
 import org.dbdatasync.sdk.enums.TableTypeEnum;
 import org.dbdatasync.sdk.model.CommonTaskSnapshot;
@@ -35,6 +36,7 @@ import org.dbdatasync.sdk.model.DatabaseSyncTask;
 import org.dbdatasync.sdk.model.Field;
 import org.dbdatasync.sdk.model.MetaInfo;
 import org.dbdatasync.sdk.model.Table;
+import org.dbdatasync.sdk.util.MigrationStageUtil;
 import org.dbdatasync.sdk.util.TaskSnapshotUtil;
 import org.dbdatasync.storage.impl.SnowflakeIdWorker;
 import org.slf4j.Logger;
@@ -55,15 +57,21 @@ import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 整库迁移执行引擎：复用映射通道的全量链路（ParserComponent.execute）逐表迁移数据，
  * 进度/状态写入任务级 Meta 与表级明细 Meta（权威在 DBDataSync_meta，供列表页计算进度）。
- * <p>enableCopyData（数据迁移）+ enableCopySchema（结构迁移）：
- * 目标库/表缺失时，若两端连接器具备 DDL 能力（sdk Database 接口），
- * 自动「建库 → 建表（源表 DDL → 目标方言）」，overwriteSchema 先删后建；
- * 无 DDL 能力的连接器目标端仍按缺失失败并跳过。
+ * <p>enableCopySchema（结构迁移）控制「目标库/表缺失时自动建库 → 建表（源表 DDL → 目标方言）」，
+ * overwriteSchema 先删后建；无 DDL 能力的连接器目标端仍按缺失失败并跳过。
+ * <p>Wave30：enableCopyData（数据迁移）关闭时只执行结构阶段、不发起任何读写；开启时按
+ * threadNum 做表级并发（结构阶段保持串行），并复用映射通道的全量链路逐表写入。
  *
  * @author wuji
  * @version 1.0.0
@@ -73,6 +81,12 @@ import java.util.concurrent.Executor;
 public class DatabaseSyncTaskRunner {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
+
+    /**
+     * Wave30：单表全量迁移可能持续数小时，表级并发等待不能短到把正常任务判失败。
+     * 可用 -Ddbdatasync.migration.tableAwaitHours 调整。
+     */
+    private static final long TABLE_AWAIT_HOURS = Long.getLong("dbdatasync.migration.tableAwaitHours", 6L);
 
     @Resource
     private ParserComponent parserComponent;
@@ -125,14 +139,20 @@ public class DatabaseSyncTaskRunner {
         }
         // 任务/表级子任务共享启停状态（中止后不再发起新表迁移）
         boolean allOk = true;
+        // Wave30：结构迁移 / 仅结构迁移是两种真实运行模式，进度明细的阶段标记也随此区分
+        final boolean copyData = task.isEnableCopyData();
+        // Wave30：异常路径也必须收尾，否则 Meta.state 永久卡 RUNNING，任务既不能编辑也无法自愈
+        Meta taskMeta = null;
+        boolean finished = false;
         try {
             // 1、任务级 Meta（计数/状态权威，缺失则补建）
-            Meta taskMeta = ensureTaskMeta(taskId, rootTask);
+            taskMeta = ensureTaskMeta(taskId, rootTask);
             // 2、表映射（按 index 升序）
             List<TableGroup> tableGroups = loadTableGroups(taskId);
             if (CollectionUtils.isEmpty(tableGroups)) {
                 logger.warn("整库迁移任务 [{}] 无表映射，跳过执行", taskId);
                 finishTaskMeta(taskMeta, true);
+                finished = true;
                 return;
             }
             // 新表自动发现（enableAutoDiscover）：源端新增表 → 自动建表（可选）+ 追加表映射 + 参与本轮迁移
@@ -169,7 +189,7 @@ public class DatabaseSyncTaskRunner {
                     allOk = false;
                     logger.error("整库迁移任务 [{}] 建立连接器实例失败: {}", taskId, e.getMessage(), e);
                     for (TableGroup group : clusterGroups) {
-                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage());
+                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage(), copyData);
                     }
                     continue;
                 }
@@ -182,12 +202,12 @@ public class DatabaseSyncTaskRunner {
                         allOk = false;
                         logger.error("整库迁移任务 [{}] 自动建目标库失败: {}", taskId, e.getMessage(), e);
                         for (TableGroup group : clusterGroups) {
-                            markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage());
+                            markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage(), copyData);
                         }
                         continue;
                     }
                 }
-                // 目标端库表元数据预读（目标表缺失时由 syncOneTable 内部自动建表补齐）
+                // 目标端库表元数据预读（目标表缺失时由结构阶段 prepareOneTable 自动建表补齐）
                 Map<String, Table> targetTableMetas;
                 try {
                     targetTableMetas = loadTargetTableMetas(taskId, clusterGroups);
@@ -195,41 +215,61 @@ public class DatabaseSyncTaskRunner {
                     allOk = false;
                     logger.error("整库迁移任务 [{}] 读取目标端表元数据失败: {}", taskId, e.getMessage(), e);
                     for (TableGroup group : clusterGroups) {
-                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage());
+                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage(), copyData);
                     }
                     continue;
                 }
-                // 5、逐表执行结构校验 + 数据迁移
+                // 5、结构阶段串行（目标表补齐 + 字段映射 + 命令构建）。
+                //    DDL 与元数据写回不能并发：同一目标库并发 CREATE/DROP 会互相阻塞甚至串表。
+                List<TableGroup> prepared = new ArrayList<>();
                 for (TableGroup group : clusterGroups) {
                     if (!rootTask.isRunning()) {
                         allOk = false;
                         break;
                     }
                     try {
-                        syncOneTable(task, rootTask, group, targetTableMetas);
-                        markGroupResult(taskId, group, mappingIndexByKey, true, null);
+                        prepareOneTable(task, group, targetTableMetas);
+                        prepared.add(group);
                     } catch (Exception e) {
                         allOk = false;
-                        logger.error("整库迁移表失败: {} -> {}, {}", safeName(group, true), safeName(group, false), e.getMessage(), e);
-                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage());
+                        logger.error("整库迁移表结构准备失败: {} -> {}, {}", safeName(group, true), safeName(group, false), e.getMessage(), e);
+                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage(), copyData);
                     }
                 }
+                if (!copyData) {
+                    // Wave30：「同步数据」关闭时此前仍会调用 Parser 全量链路灌数据，开关完全失效。
+                    // 这里只完成结构阶段并按结构阶段记完成，不再发起任何读写。
+                    logger.info("整库迁移任务 [{}] 未开启同步数据，本簇 {} 张表仅做结构迁移", taskId, prepared.size());
+                    for (TableGroup group : prepared) {
+                        markGroupResult(taskId, group, mappingIndexByKey, true, null, false);
+                    }
+                    continue;
+                }
+                // 6、数据阶段按 threadNum 表级并发（此前 DatabaseSyncTask.threadNum 只是预留字段，从未生效）
+                allOk &= runTablesConcurrently(task, rootTask, prepared, mappingIndexByKey, taskId);
             }
             // 6、收尾：任务级状态（正常跑完=DONE，中止/有失败=READY 待重跑）
-            finishTaskMeta(taskMeta, allOk && rootTask.isRunning());
+            boolean success = allOk && rootTask.isRunning();
+            finishTaskMeta(taskMeta, success);
+            finished = true;
+            maybeAutoAdvanceStage(task, success);
             logger.info("整库迁移任务 [{}] 执行结束: {}", taskId, allOk ? "完成" : "存在失败/中止");
         } catch (Exception e) {
             logger.error("整库迁移任务 [{}] 执行异常: {}", taskId, e.getMessage(), e);
             allOk = false;
         } finally {
+            if (!finished && taskMeta != null) {
+                finishTaskMeta(taskMeta, false);
+            }
             runningTasks.remove(taskId);
         }
     }
 
     /**
-     * 单表迁移：定位目标表元数据 → 字段映射 → 执行命令 → Parser 全量链路写入。
+     * 结构阶段（串行）：定位/补齐目标表元数据 → 字段映射 → 构建执行命令。
+     * <p>Wave30：与数据阶段拆开，使「仅结构迁移」不触发任何读写，也让并发 DDL 不发生。</p>
      */
-    private void syncOneTable(DatabaseSyncTask task, Task rootTask, TableGroup group, Map<String, Table> targetTableMetas) {
+    private void prepareOneTable(DatabaseSyncTask task, TableGroup group, Map<String, Table> targetTableMetas) {
         Mapping stub = buildStubMapping(task, group);
         connectInstances(stub);
         Table targetMeta = targetTableMetas.get(buildTargetTableKey(group));
@@ -245,14 +285,80 @@ public class DatabaseSyncTaskRunner {
             targetTableMetas.put(buildTargetTableKey(group), targetMeta);
         }
         group.setFieldMapping(buildFieldMapping(group, targetMeta));
+        // 目标表名对齐目标库实际标识符（Oracle-族元数据回读为大写存储名），避免 DML/命令用小写带引号标识符找不到表
+        if (targetMeta != null && StringUtil.isNotBlank(targetMeta.getName())
+                && group.getTargetTable() != null) {
+            group.getTargetTable().setName(targetMeta.getName());
+        }
         group.setCommand(parserComponent.getCommand(stub, group));
         if (CollectionUtils.isEmpty(group.getCommand())) {
             throw new IllegalStateException(String.format("表 [%s] >> [%s] 执行命令构建失败", safeName(group, true), safeName(group, false)));
         }
-        // 表级子任务：共享启停；写入走同步执行器（与映射通道 SYNC 模式一致，逐批串行写）
+    }
+
+    /**
+     * 数据阶段（可并发）：Parser 全量链路写入。表级子任务共享父任务启停信号。
+     */
+    private void copyTableData(DatabaseSyncTask task, Task rootTask, TableGroup group) {
+        Mapping stub = buildStubMapping(task, group);
         Task tableTask = rootTask.createTableTask(group.getId());
         Executor writeExecutor = Runnable::run;
         parserComponent.execute(tableTask, stub, group, writeExecutor);
+    }
+
+    /**
+     * Wave30：按 {@code task.threadNum} 做表级并发，异常逐表收集、不因一表失败取消其余表。
+     * <p>每张表独立标记成功/失败；等待带上限，超时不再无限挂住整个整库任务。
+     * 池只在本簇内使用，结束即 shutdown，不泄漏线程。</p>
+     *
+     * @return 本簇是否全部成功
+     */
+    private boolean runTablesConcurrently(DatabaseSyncTask task, Task rootTask, List<TableGroup> prepared,
+                                          Map<String, Integer> mappingIndexByKey, String taskId) {
+        if (CollectionUtils.isEmpty(prepared)) {
+            return true;
+        }
+        int threads = Math.min(Math.max(1, task.getThreadNum()), prepared.size());
+        ExecutorService pool = Executors.newFixedThreadPool(threads, r -> {
+            Thread t = new Thread(r, "db-migration-" + taskId);
+            t.setDaemon(true);
+            return t;
+        });
+        List<Future<?>> futures = new ArrayList<>(prepared.size());
+        boolean ok = true;
+        try {
+            for (TableGroup group : prepared) {
+                futures.add(pool.submit(() -> {
+                    try {
+                        if (!rootTask.isRunning()) {
+                            throw new IllegalStateException("任务已中止");
+                        }
+                        copyTableData(task, rootTask, group);
+                        markGroupResult(taskId, group, mappingIndexByKey, true, null, true);
+                    } catch (Exception e) {
+                        logger.error("整库迁移表失败: {} -> {}, {}", safeName(group, true), safeName(group, false), e.getMessage(), e);
+                        markGroupResult(taskId, group, mappingIndexByKey, false, e.getMessage(), true);
+                        throw new IllegalStateException("整库迁移表失败: " + e.getMessage(), e);
+                    }
+                }));
+            }
+            for (Future<?> future : futures) {
+                try {
+                    future.get(TABLE_AWAIT_HOURS, TimeUnit.HOURS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    ok = false;
+                    logger.error("整库迁移表级并发等待被中断: taskId={}", taskId);
+                } catch (ExecutionException | TimeoutException e) {
+                    ok = false;
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    logger.error("整库迁移表级并发存在失败: taskId={}, {}", taskId, cause.getMessage(), cause);
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        return ok;
     }
 
     /**
@@ -410,7 +516,7 @@ public class DatabaseSyncTaskRunner {
                 }
                 Map<String, Table> sourceMetaMap = loadSourceTableMetaMap(task.getId(), mapping, candidateNames);
                 for (String name : candidateNames) {
-                    Table sourceTable = sourceMetaMap.get(name);
+                    Table sourceTable = sourceMetaMap.get(name.toLowerCase());
                     if (sourceTable == null) {
                         continue;
                     }
@@ -458,14 +564,14 @@ public class DatabaseSyncTaskRunner {
             if (metaInfo == null || StringUtil.isBlank(metaInfo.getTable())) {
                 continue;
             }
-            Table table = new Table();
-            table.setName(metaInfo.getTable());
-            table.setType(metaInfo.getTableType());
-            table.setColumn(metaInfo.getColumn());
-            tableMap.put(metaInfo.getTable(), table);
-        }
-        return tableMap;
-    }
+    Table table = new Table();
+    table.setName(metaInfo.getTable());
+    table.setType(metaInfo.getTableType());
+    table.setColumn(metaInfo.getColumn());
+    tableMap.put(metaInfo.getTable().toLowerCase(), table);
+}
+return tableMap;
+}
 
     private Mapping buildStubMapping(DatabaseSyncTask task, TableGroup group) {
         Mapping mapping = new Mapping();
@@ -479,6 +585,23 @@ public class DatabaseSyncTaskRunner {
         mapping.setReadNum(task.getReadNum() > 0 ? task.getReadNum() : 10000);
         mapping.setBatchNum(task.getBatchNum() > 0 ? task.getBatchNum() : 1000);
         mapping.setForceUpdate(task.isOverwriteData());
+        // Wave30：分片并发读的线程池上限也跟随任务配置（原来恒定用 Mapping 默认 10，threadNum 形同虚设）
+        mapping.setThreadNum(task.getThreadNum() > 0 ? task.getThreadNum() : 1);
+        // Wave11：仅当限速值 >0 时写入 params（避免污染既有 params 语义与 splitSupported 判定；
+        // 绝不写 FULL_SPLIT_KEY/FULL_SPLIT_COUNT，否则会意外开启分片）。
+        if (task.getRecordsPerSecond() > 0 || task.getBytesPerSecond() > 0) {
+            Map<String, String> params = mapping.getParams();
+            if (params == null) {
+                params = new HashMap<>();
+                mapping.setParams(params);
+            }
+            if (task.getRecordsPerSecond() > 0) {
+                params.put(ConfigConstant.RATE_RECORDS_PER_SECOND, String.valueOf(task.getRecordsPerSecond()));
+            }
+            if (task.getBytesPerSecond() > 0) {
+                params.put(ConfigConstant.RATE_BYTES_PER_SECOND, String.valueOf(task.getBytesPerSecond()));
+            }
+        }
         return mapping;
     }
 
@@ -649,18 +772,60 @@ public class DatabaseSyncTaskRunner {
 
     private void finishTaskMeta(Meta taskMeta, boolean success) {
         try {
-            taskMeta.setEndTime(System.currentTimeMillis());
-            taskMeta.setState(success ? CommonTaskStatusEnum.DONE.getCode() : CommonTaskStatusEnum.READY.getCode());
-            metaProfile.updateMeta(taskMeta);
+            // Wave30：parserComponent 通过 incrementMeta 原子累加 success/fail/total，
+            // 直接回写运行前的 taskMeta 会把计数整列覆盖回旧值（新任务即 0），
+            // 进度、吞吐、成功率全部失真。收尾前重新读取最新对象，只改状态与时间。
+            String refId = taskMeta == null ? null
+                    : (taskMeta.getTaskId() != null ? taskMeta.getTaskId() : taskMeta.getId());
+            Meta latest = refId == null ? null
+                    : metaProfile.getMetaByTaskId(refId, TaskLevelEnum.TASK);
+            Meta target = latest != null ? latest : taskMeta;
+            if (target == null) {
+                return;
+            }
+            target.setEndTime(System.currentTimeMillis());
+            target.setState(success ? CommonTaskStatusEnum.DONE.getCode() : CommonTaskStatusEnum.READY.getCode());
+            metaProfile.updateMeta(target);
         } catch (Exception e) {
             logger.error("整库迁移任务收尾状态更新失败: {}", e.getMessage(), e);
         }
     }
 
     /**
+     * Wave11：全量完成（success）且开启自动推进时，仅把编排阶段从 full 推进到 increment。
+     * 读任务级 Meta.SNAPSHOT；其它阶段与未命中一律不动。整个方法吞异常只记 warn，绝不影响收尾。
+     */
+    private void maybeAutoAdvanceStage(DatabaseSyncTask task, boolean success) {
+        if (!success || !task.isAutoAdvanceStage()) {
+            return;
+        }
+        try {
+            Meta meta = metaProfile.getMetaByTaskId(task.getId(), TaskLevelEnum.TASK);
+            if (meta == null) {
+                return;
+            }
+            Map<String, String> snapshot = meta.getSnapshot();
+            if (snapshot == null) {
+                snapshot = new ConcurrentHashMap<>();
+                meta.setSnapshot(snapshot);
+            }
+            String current = MigrationStageUtil.normalize(snapshot.get(MigrationStageUtil.SNAPSHOT_KEY_STAGE));
+            if (!"full".equals(current)) {
+                return;
+            }
+            snapshot.put(MigrationStageUtil.SNAPSHOT_KEY_STAGE, MigrationStageUtil.advance("full"));
+            metaProfile.updateMeta(meta);
+            logger.info("整库迁移任务 [{}] 自动推进编排阶段: full -> increment", task.getId());
+        } catch (Exception e) {
+            logger.warn("整库迁移任务 [{}] 自动推进阶段失败（不影响收尾）: {}", task.getId(), e.getMessage(), e);
+        }
+    }
+
+    /**
      * 写表级明细快照（成功/失败 + 错误信息），并把整库状态摘要推进到任务级 Meta。
      */
-    private void markGroupResult(String taskId, TableGroup group, Map<String, Integer> mappingIndexByKey, boolean success, String error) {
+    private void markGroupResult(String taskId, TableGroup group, Map<String, Integer> mappingIndexByKey,
+                                 boolean success, String error, boolean dataPhase) {
         try {
             Meta detailMeta = metaProfile.getMetaByTaskId(group.getId(), TaskLevelEnum.TASK_DETAIL);
             if (detailMeta == null) {
@@ -671,9 +836,14 @@ public class DatabaseSyncTaskRunner {
                 metaProfile.addMeta(detailMeta);
             }
             CommonTaskSnapshot snapshot = new CommonTaskSnapshot();
-            snapshot.setStep(DatabaseMigrationDetailTypeEnum.ROW_DATA.getCode());
+            // Wave30：仅结构迁移时标记 tableSchema，避免把「未执行的数据阶段」显示成已完成行数据
+            snapshot.setStep(dataPhase ? DatabaseMigrationDetailTypeEnum.ROW_DATA.getCode()
+                    : DatabaseMigrationDetailTypeEnum.TABLE_SCHEMA.getCode());
             snapshot.setStatus(success ? CommonTaskStatusEnum.DONE.getCode() : CommonTaskStatusEnum.READY.getCode());
-            TaskSnapshotUtil.writeTableSnapshot(detailMeta.getSnapshot(), snapshot, mappingIndexByKey.get(buildSourceTargetKey(group)));
+            // Wave30：writeTableSnapshot 在 snapshot 为 null 时返回新建 Map，旧实现丢弃返回值，
+            // 表级快照永远写不进去、进度恒为 0。
+            detailMeta.setSnapshot(TaskSnapshotUtil.writeTableSnapshot(detailMeta.getSnapshot(), snapshot,
+                    mappingIndexByKey.get(buildSourceTargetKey(group))));
             detailMeta.setUpdateTime(System.currentTimeMillis());
             metaProfile.updateMeta(detailMeta);
             Integer mappingIndex = mappingIndexByKey.get(buildSourceTargetKey(group));

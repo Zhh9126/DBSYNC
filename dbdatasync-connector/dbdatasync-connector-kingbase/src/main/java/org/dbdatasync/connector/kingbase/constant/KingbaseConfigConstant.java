@@ -14,7 +14,7 @@ public final class KingbaseConfigConstant {
 
     public static final String DROP_SLOT_ON_CLOSE = "dropSlotOnClose";
 
-    public static final String DEFAULT_PLUGIN = "test_decoding";
+    public static final String DEFAULT_PLUGIN = "syslogical_output";
 
     private KingbaseConfigConstant() {
     }

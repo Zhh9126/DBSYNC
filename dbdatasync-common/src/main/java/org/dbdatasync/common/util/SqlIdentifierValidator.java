@@ -54,7 +54,16 @@ public final class SqlIdentifierValidator {
      * 含引号、分号、等号、注释符、空格、圆括号闭合、星号通配、百分号、反引号、美元符、反斜杠等。
      */
     private static final Pattern DANGEROUS_IDENTIFIER = Pattern.compile(
-            "[\"';=#\\-*/\\\\\\s()`%@<>\\[\\]\\{\\}\\$\\|]");
+            "[\"';=\\-*/\\\\\\s()`%@<>\\[\\]\\{\\}\\$\\|]");
+
+    /**
+     * Oracle CDB 公共用户 schema 命名（12c+ 强制以 C## 开头），
+     * 如 {@code C##AIDBM_RO} / {@code c##e2e17}。
+     * <p>这类 schema 名合法包含 {@code #}，但必须整体匹配该模式才放行，
+     * 防止任意位置出现 {@code #} 的标识符（MySQL/SQL Server 注释分隔符风险）。</p>
+     */
+    private static final Pattern ORACLE_CDB_SCHEMA = Pattern.compile(
+            "[cC]##[A-Za-z0-9_$#]+");
 
     /**
      * 系统函数表达式白名单：仅允许 {@code select 函数(标识符)} 形式（可含简单算术组合），
@@ -88,6 +97,11 @@ public final class SqlIdentifierValidator {
         }
         String trimmed = identifier.trim();
         if (DANGEROUS_IDENTIFIER.matcher(trimmed).find()) {
+            throw new IllegalArgumentException("Illegal SQL identifier (possible injection): " + trimmed);
+        }
+        // Oracle CDB 公共用户 schema（C## 前缀）合法包含 '#'，单独放行；
+        // 非 CDB 命名中任何 '#' 一律拒绝（MySQL/SQL Server 注释分隔符风险）
+        if (trimmed.indexOf('#') >= 0 && !ORACLE_CDB_SCHEMA.matcher(trimmed).matches()) {
             throw new IllegalArgumentException("Illegal SQL identifier (possible injection): " + trimmed);
         }
         return trimmed;
@@ -165,6 +179,15 @@ public final class SqlIdentifierValidator {
         }
         if (trimmed.replaceAll(";\\s*$", "").contains(";")) {
             throw new IllegalArgumentException("Illegal custom SQL (multiple statements): " + trimmed);
+        }
+        // 危险关键字黑名单同样作用于只读 SQL:
+        // SELECT/WITH 开头不足以保证只读, 如 WITH x AS (DELETE ... RETURNING *) / SELECT ... INTO OUTFILE
+        String lower = trimmed.toLowerCase();
+        for (Pattern pattern : DANGEROUS_PATTERNS) {
+            if (pattern.matcher(lower).find()) {
+                throw new IllegalArgumentException(
+                        "Illegal custom SQL (read-only) contains forbidden token '" + pattern.pattern() + "': " + trimmed);
+            }
         }
         return trimmed;
     }

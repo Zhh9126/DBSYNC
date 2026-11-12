@@ -7,27 +7,36 @@ import org.dbdatasync.common.model.Result;
 import org.dbdatasync.common.rsa.RsaManager;
 import org.dbdatasync.common.util.BatchTaskUtil;
 import org.dbdatasync.common.util.CollectionUtils;
+import org.dbdatasync.common.util.SqlIdentifierValidator;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.common.util.TaskSplitUtil;
 import org.dbdatasync.connector.base.ConnectorFactory;
+import org.dbdatasync.parser.MetaProfile;
 import org.dbdatasync.parser.ParserComponent;
 import org.dbdatasync.parser.ProfileComponent;
 import org.dbdatasync.parser.event.FullRefreshEvent;
 import org.dbdatasync.parser.model.FieldMapping;
 import org.dbdatasync.parser.model.Mapping;
+import org.dbdatasync.parser.model.Meta;
 import org.dbdatasync.parser.model.Picker;
 import org.dbdatasync.parser.model.TableGroup;
+import org.dbdatasync.parser.model.TableSyncProgress;
 import org.dbdatasync.parser.model.Task;
 import org.dbdatasync.parser.strategy.FlushStrategy;
 import org.dbdatasync.parser.util.ConnectorInstanceUtil;
 import org.dbdatasync.parser.util.ConvertUtil;
+import org.dbdatasync.parser.util.FullTableProgressUtil;
+import org.dbdatasync.parser.util.MetaLockUtil;
+import org.dbdatasync.parser.util.MigrationRateLimiter;
 import org.dbdatasync.parser.util.PickerUtil;
 import org.dbdatasync.plugin.PluginFactory;
 import org.dbdatasync.plugin.enums.ProcessEnum;
 import org.dbdatasync.sdk.config.CommandConfig;
+import org.dbdatasync.sdk.constant.ConfigConstant;
 import org.dbdatasync.sdk.connector.ConnectorInstance;
 import org.dbdatasync.sdk.connector.DefaultConnectorServiceContext;
 import org.dbdatasync.sdk.connector.FullPluginContext;
+import org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance;
 import org.dbdatasync.sdk.constant.ConnectorConstant;
 import org.dbdatasync.sdk.model.ConnectorConfig;
 import org.dbdatasync.sdk.model.Field;
@@ -49,10 +58,18 @@ import javax.annotation.Resource;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -65,6 +82,13 @@ public class ParserComponentImpl implements ParserComponent {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    /**
+     * Wave30：写批子任务等待上限。旧实现 {@code latch.await()} 无超时，线程池被拒/写入卡死时
+     * 整个同步线程永久挂起；超时后未完成子批一律计入失败明细，绝不静默丢数据。
+     */
+    private static final long WRITE_BATCH_AWAIT_MINUTES =
+            Long.getLong("dbdatasync.write.awaitMinutes", 30L);
+
     @Resource
     private ConnectorFactory connectorFactory;
 
@@ -76,6 +100,9 @@ public class ParserComponentImpl implements ParserComponent {
 
     @Resource
     private ProfileComponent profileComponent;
+
+    @Resource
+    private MetaProfile metaProfile;
 
     @Resource
     private ApplicationContext applicationContext;
@@ -149,8 +176,865 @@ public class ParserComponentImpl implements ParserComponent {
         Map<String, String> command = group.getCommand();
         Assert.notEmpty(command, "执行命令不能为空.");
         List<FieldMapping> fieldMapping = group.getFieldMapping();
-        String sTableName = group.getSourceTable().getName();
-        String tTableName = group.getTargetTable().getName();
+        // 限速器：从映射参数读取（默认 0 不限速，存量任务零影响），整表/各分片共享同一实例
+        MigrationRateLimiter limiter = MigrationRateLimiter.fromParams(mapping.getParams());
+        // 分片并发读前置判定：满足条件时走分片分支（兼容旧逻辑，不满足自动降级回串行）
+        if (splitSupported(mapping, command, group)) {
+            executeSliced(task, mapping, group, command, executor, limiter);
+            return;
+        }
+        executeCommon(task, mapping, group, command, fieldMapping, executor, limiter);
+    }
+
+    /**
+     * 全量分片前置判定：仅当满足以下全部条件时启用分片并发读，否则走原串行路径：
+     * <ol>
+     *     <li>游标分页 SQL 可用（QUERY_CURSOR 非空），否则无法按主键稳定分页；</li>
+     *     <li>映射配置了分片键 fullSplitKey 与分片数 fullSplitCount&gt;0（默认关闭，存量任务零影响）；</li>
+     *     <li>源表包含该分片键列（避免 SQL 引用不存在列）。</li>
+     * </ol>
+     */
+    private boolean splitSupported(Mapping mapping, Map<String, String> command, TableGroup group) {
+        if (mapping == null || mapping.getParams() == null || StringUtil.isBlank(command.get(ConnectorConstant.OPERTION_QUERY_CURSOR))) {
+            return false;
+        }
+        String splitKey = mapping.getParams().get(ConfigConstant.FULL_SPLIT_KEY);
+        String splitCount = mapping.getParams().get(ConfigConstant.FULL_SPLIT_COUNT);
+        if (StringUtil.isBlank(splitKey) || StringUtil.isBlank(splitCount) || !splitCount.matches("\\d+")) {
+            return false;
+        }
+        Table sourceTable = group.getSourceTable();
+        return sourceTable != null
+                && !CollectionUtils.isEmpty(sourceTable.getColumn())
+                && sourceTable.getColumn().stream().anyMatch(f -> splitKey.equalsIgnoreCase(f.getName()));
+    }
+
+    /**
+     * 规范化分片数：非法/非数字返回 1（退化为串行）；上限 1024 防配置错误导致资源爆炸。
+     */
+    private int normalizeSplitCount(String splitCount) {
+        if (StringUtil.isBlank(splitCount) || !splitCount.matches("\\d+")) {
+            return 1;
+        }
+        try {
+            long v = Long.parseLong(splitCount);
+            if (v <= 1) {
+                return 1;
+            }
+            return (int) Math.min(v, 1024);
+        } catch (NumberFormatException e) {
+            return 1;
+        }
+    }
+
+    /**
+     * 分片并发读主流程：将单表按 splitKey 切分为 splitCount 个左闭右开区间，
+     * 每个区间一个独立子上下文（继承 command/映射/插件，注入 [start,end) 过滤条件），
+     * 并发执行各自的游标循环；共享 task 启停信号与 meta 计数（flush 原子累加，天然线程安全）。
+     * <p>切分方式（Wave32）：
+     * <ul>
+     *     <li>{@code fullSplitMode=value}（默认）：值域算术均分（Wave4 行为，存量零影响）；</li>
+     *     <li>{@code fullSplitMode=sample}：按 {@code ORDER BY 分片键 LIMIT n,1} 采样断点均分，
+     *         按行均分、抗倾斜，适合 uuid / 字符串 / 日期 / 倾斜数值键。</li>
+     * </ul>
+     * 任何子分片异常都将聚合后上抛，保证失败可见。</p>
+     *
+     * @param task     父任务（子分片共享其 isRunning 信号）
+     * @param mapping  映射配置
+     * @param group    合并后的表映射（含 command）
+     * @param command  执行命令
+     * @param executor 外部调度执行器（用于 flush / 批写）
+     */
+    private void executeSliced(Task task, Mapping mapping, TableGroup group, Map<String, String> command, Executor executor, MigrationRateLimiter limiter) {
+        final String splitKey = mapping.getParams().get(ConfigConstant.FULL_SPLIT_KEY);
+        final int splitCount = normalizeSplitCount(mapping.getParams().get(ConfigConstant.FULL_SPLIT_COUNT));
+        final String mode = parseSplitMode(mapping);
+        final String metaId = task.getId();
+
+        List<FieldMapping> fieldMappings = group.getFieldMapping();
+        Field splitField = group.getSourceTable().getColumn().stream()
+                .filter(f -> splitKey.equalsIgnoreCase(f.getName()))
+                .findFirst()
+                .orElse(null);
+        Assert.notNull(splitField, String.format("分片键[%s]在源表中不存在.", splitKey));
+
+        SplitBound[] intervals;
+        if ("sample".equals(mode)) {
+            intervals = buildSampleIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        } else {
+            intervals = buildValueIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        }
+        if (intervals == null || intervals.length <= 1) {
+            logger.info("分片并发读降级为串行:{} 值域不足2片", metaId);
+            executeCommon(task, mapping, group, group.getCommand(), fieldMappings, executor, limiter);
+            return;
+        }
+        logger.info("分片并发读:{} 表[{}] 分片键[{}] 方式[{}] 分片数[{}]", metaId,
+                group.getSourceTable().getName(), splitKey, mode, intervals.length);
+
+        // 并发执行各分片（共享 task/meta，flush 与 meta 计数天然线程安全）
+        runSlices(task, mapping, group, command, fieldMappings, splitKey, intervals, executor, limiter);
+    }
+
+    /**
+     * 构建值域算术均分区间（Wave4 行为）。
+     * <p>探测失败 / 空表 / 值域不足时返回 null（调用方降级串行）。</p>
+     */
+    private SplitBound[] buildValueIntervals(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                                             String splitKey, int splitCount, String metaId) {
+        FullyQualifiedSplitRange range = probeSplitRange(task, mapping, group, command, splitKey);
+        if (range == null || range.max <= range.min) {
+            logger.warn("分片值域探测失败或空表，降级为串行:{} 分片键[{}]", metaId, splitKey);
+            return null;
+        }
+        long[][] raw = splitHalfOpenRange(range.min, range.max, splitCount);
+        if (raw.length <= 1) {
+            return null;
+        }
+        SplitBound[] intervals = new SplitBound[raw.length];
+        for (int i = 0; i < raw.length; i++) {
+            intervals[i] = new SplitBound(raw[i][0], raw[i][1]);
+        }
+        return intervals;
+    }
+
+    /**
+     * 构建采样均分区间（Wave32 新增）。
+     * <ul>
+     *     <li>先探测值域（MIN/MAX）兜底；</li>
+     *     <li>再按采样断点切；断点探测失败自动降级 value 均分；</li>
+     *     <li>结果区间与原 value 模式同为左闭右开，断点续传/并发语义 100% 复用。</li>
+     * </ul>
+     * 任一环节不可用返回 null（调用方降级串行）。
+     */
+    private SplitBound[] buildSampleIntervals(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                                              String splitKey, int splitCount, String metaId) {
+        // 1、MIN/MAX 兜底（与 value 共用探测，采样失败降级用）
+        FullyQualifiedSplitRange range = probeSplitRange(task, mapping, group, command, splitKey);
+        if (range == null || range.max <= range.min) {
+            logger.warn("分片值域探测失败或空表，降级为串行:{} 分片键[{}]", metaId, splitKey);
+            return null;
+        }
+        // 2、采样断点
+        int sampleCap = parseSampleCap(mapping);
+        int points = Math.min(splitCount - 1, sampleCap);
+        Object[] bounds = probeSampleBounds(task, mapping, group, command, splitKey, splitCount);
+        if (bounds == null || bounds.length == 0) {
+            logger.info("采样断点探测失败，降级 value 均分:{} 分片键[{}]", metaId, splitKey);
+            return buildValueIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        }
+        // 3、断点转区间；断点去重后不足 2 片降级 value
+        SplitBound[] intervals = buildSampleIntervals(bounds, range.min, range.max);
+        if (intervals != null && intervals.length <= 1) {
+            logger.info("采样断点去重后仅{}片，降级 value 均分:{}", intervals.length, metaId);
+            return buildValueIntervals(task, mapping, group, command, splitKey, splitCount, metaId);
+        }
+        return intervals;
+    }
+
+    /**
+     * 探测分片键值域。
+     * <p>复用 command 中 QUERY_COUNT 的「FROM 子句」（含方言限定表名与 queryFilter 条件），
+     * 把 {@code COUNT(*)} 替换为 {@code MIN(x), MAX(x)}，避免重复拼表名/条件且天然支持映射过滤条件。</p>
+     *
+     * @return 探测结果（min/max）；执行失败 / SQL 不含 COUNT(*) 模式 / 结果为 null 时返回 null
+     */
+    private FullyQualifiedSplitRange probeSplitRange(Task task, Mapping mapping, TableGroup group, Map<String, String> command, String splitKey) {
+        String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
+        if (StringUtil.isBlank(countSql)) {
+            return null;
+        }
+        final String countToken = "COUNT(*)";
+        int idx = countSql.toUpperCase().indexOf(countToken);
+        if (idx < 0) {
+            return null;
+        }
+        // 列名经白名单校验后原样拼接（splitKey 已在 splitSupported 确认是源表元数据列）
+        SqlIdentifierValidator.validateIdentifier(splitKey);
+        final String minMaxSql = countSql.substring(0, idx) + "MIN(" + splitKey + "), MAX(" + splitKey + ")"
+                + countSql.substring(idx + countToken.length());
+        final String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getSourceConnectorId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+        try {
+            ConnectorInstance sourceInstance = connectorFactory.connect(sourceInstanceId);
+            Object[] minMax = ((DatabaseConnectorInstance) sourceInstance).execute(databaseTemplate -> {
+                java.util.List<Map<String, Object>> rows = databaseTemplate.queryForList(minMaxSql);
+                if (CollectionUtils.isEmpty(rows)) {
+                    return null;
+                }
+                Map<String, Object> row = rows.get(0);
+                Object min = row.values().toArray()[0];
+                Object max = row.values().toArray()[1];
+                if (min == null || max == null) {
+                    return null;
+                }
+                return new Object[]{toLong(min), toLong(max)};
+            });
+            if (minMax == null || minMax.length < 2) {
+                return null;
+            }
+            return new FullyQualifiedSplitRange((Long) minMax[0], (Long) minMax[1]);
+        } catch (Exception e) {
+            logger.warn("分片值域探测SQL执行失败，降级串行:{} 原因:{}", task.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 把 MIN/MAX 探测结果安全转为 long：支持 Number（含 BigInteger/BigDecimal）与字符串。
+     */
+    private static long toLong(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof java.math.BigDecimal) {
+            return ((java.math.BigDecimal) value).longValue();
+        }
+        return Long.parseLong(String.valueOf(value).trim());
+    }
+
+    /**
+     * 采样均分断点探测：按 {@code ORDER BY splitKey LIMIT offset,1} 采样行分位断点。
+     * <p>对源表执行 N 次索引点查（N=采样点数，默认 64，可配置），每次取第 offset 行的分片键值，
+     * 天然按行均分，不受键值分布偏斜影响（uuid/字符串/日期/倾斜数值均适用）。</p>
+     *
+     * @return 断点数组（升序，长度 n-1）；探测失败返回 null（由调用方降级）
+     */
+    private Object[] probeSampleBounds(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                                       String splitKey, int sampleCount) {
+        String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
+        if (StringUtil.isBlank(countSql)) {
+            return null;
+        }
+        // 取 COUNT 的 FROM 子句做采样 base（与 COUNT 同口径）
+        final String countToken = "COUNT(*)";
+        int idx = countSql.toUpperCase().indexOf(countToken);
+        if (idx < 0) {
+            return null;
+        }
+        SqlIdentifierValidator.validateIdentifier(splitKey);
+        String fromAndWhere = countSql.substring(idx + countToken.length());
+        // 采样 SQL: SELECT splitKey FROM <fromAndWhere> ORDER BY splitKey LIMIT ?, 1
+        final String sampleSql = "SELECT " + splitKey + " FROM " + fromAndWhere + " ORDER BY " + splitKey + " LIMIT ?, 1";
+        // 总行数先探一次（COUNT），避免采样偏移越界
+        Long totalRows = probeTotalRows(task, mapping, group, command);
+        if (totalRows == null || totalRows <= 0) {
+            return null;
+        }
+        final int n = Math.min(sampleCount, Math.max(1, (int) (totalRows / 1000L + 1))); // 采样点 ≥1
+        if (n <= 1) {
+            return null;
+        }
+        final int points = n - 1;
+        final int cap = Math.max(16, points);
+        Object[] bounds = new Object[points];
+        final String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getSourceConnectorId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+        try {
+            ConnectorInstance sourceInstance = connectorFactory.connect(sourceInstanceId);
+            java.util.List<Object> pointList = ((DatabaseConnectorInstance) sourceInstance).execute(databaseTemplate -> {
+                java.util.List<Object> result = new ArrayList<>(points);
+                for (int i = 0; i < points; i++) {
+                    long offset = (long) Math.ceil((double) (i + 1) * totalRows / n);
+                    if (offset >= totalRows) {
+                        offset = totalRows - 1;
+                    }
+                    java.util.List<Map<String, Object>> rows =
+                            databaseTemplate.queryForList(sampleSql, offset, 1);
+                    if (CollectionUtils.isEmpty(rows)) {
+                        return null;
+                    }
+                    Object v = rows.get(0).values().iterator().next();
+                    if (v == null) {
+                        return null;
+                    }
+                    result.add(v);
+                }
+                return result;
+            });
+            if (pointList == null || pointList.size() != points) {
+                return null;
+            }
+            for (int i = 0; i < points; i++) {
+                bounds[i] = pointList.get(i);
+            }
+            return bounds;
+        } catch (Exception e) {
+            logger.warn("分片采样断点探测失败（降级 value 均分）:{} 原因:{}", task.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 探测分片键总行数（COUNT），供采样偏移计算。
+     */
+    private Long probeTotalRows(Task task, Mapping mapping, TableGroup group, Map<String, String> command) {
+        String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
+        if (StringUtil.isBlank(countSql)) {
+            return null;
+        }
+        final String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), mapping.getSourceConnectorId(), ConnectorInstanceUtil.SOURCE_SUFFIX);
+        try {
+            ConnectorInstance sourceInstance = connectorFactory.connect(sourceInstanceId);
+            return ((DatabaseConnectorInstance) sourceInstance).execute(databaseTemplate -> {
+                java.util.List<Map<String, Object>> rows = databaseTemplate.queryForList(countSql);
+                if (CollectionUtils.isEmpty(rows)) {
+                    return null;
+                }
+                Object v = rows.get(0).values().iterator().next();
+                if (v == null) {
+                    return null;
+                }
+                return v instanceof Number ? ((Number) v).longValue() : Long.parseLong(String.valueOf(v).trim());
+            });
+        } catch (Exception e) {
+            logger.warn("分片表总行数探测失败:{} 原因:{}", task.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 把采样断点数组转为 SplitBound 区间（左闭右开，覆盖全值域）。
+     * <p>断点已升序（ORDER BY 保证），相邻断点间构成一片；断点相等（同键多行）时合并窄片。
+     * 最后一片上界 = maxValue（探测值），与 value 模式 {@code max+1} 闭区间语义一致，避免 null 参数导致恒假。</p>
+     * <p>包级可见以便单元测试。</p>
+     */
+    SplitBound[] buildSampleIntervals(Object[] bounds, Object minValue, Object maxValue) {
+        if (bounds == null || bounds.length == 0) {
+            return new SplitBound[0];
+        }
+        java.util.List<SplitBound> list = new ArrayList<>(bounds.length + 1);
+        Object prev = minValue;
+        for (Object b : bounds) {
+            // 相等断点（同键多行）合并：不断点该处，否则产生空片
+            if (b != null && b.equals(prev)) {
+                continue;
+            }
+            list.add(new SplitBound(prev, b));
+            prev = b;
+        }
+        // 最后一片 [prev, maxValue]（inclusiveEnd 闭区间，用探测的 MAX 承载上界）
+        list.add(new SplitBound(prev, maxValue));
+        return list.toArray(new SplitBound[0]);
+    }
+
+    /**
+     * 解析分片切分方式：value（默认） / sample。非法值回退 value。
+     */
+    String parseSplitMode(Mapping mapping) {
+        String mode = mapping.getParams() == null ? null : mapping.getParams().get(ConfigConstant.FULL_SPLIT_MODE);
+        if (mode == null) {
+            return "value";
+        }
+        String m = mode.trim().toLowerCase();
+        return "sample".equals(m) ? "sample" : "value";
+    }
+
+    /**
+     * 解析采样点数：默认 64，[2,4096] 收敛（上限防资源爆炸）。
+     */
+    int parseSampleCap(Mapping mapping) {
+        String cap = mapping.getParams() == null ? null : mapping.getParams().get(ConfigConstant.FULL_SPLIT_SAMPLE_CAP);
+        if (cap == null || !cap.matches("\\d+")) {
+            return 64;
+        }
+        try {
+            long v = Long.parseLong(cap);
+            if (v < 2) {
+                return 64;
+            }
+            return (int) Math.min(v, 4096);
+        } catch (NumberFormatException e) {
+            return 64;
+        }
+    }
+
+    /**
+     * 并发执行全量分片读：每分片一个独立游标循环，共享父 task 启停信号。
+     * 任一子分片失败即取消中止父任务并上抛首个异常，其余分片尽力退出。
+     *
+     * <p>Wave31 分片断点隔离：进度键从共享的 {@code 组ID} 改为 {@code 组ID#s+下标}，
+     * 各分片的游标/页码互不覆盖；恢复时按分片边界（bounds）校验值域未漂移后分别续传，
+     * 已完成分片直接跳过。</p>
+     */
+    private void runSlices(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                           List<FieldMapping> fieldMappings, String splitKey, SplitBound[] intervals, Executor executor,
+                           MigrationRateLimiter limiter) {
+        long t0 = System.nanoTime();
+        final int count = intervals.length;
+        final int poolSize = Math.min(count, mapping.getThreadNum() > 0 ? mapping.getThreadNum() : count);
+        final CountDownLatch latch = new CountDownLatch(count);
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        final ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
+            Thread t = new Thread(r, "full-split-" + task.getId() + "-" + r.hashCode());
+            t.setDaemon(true);
+            return t;
+        });
+        // Wave31：恢复前先把本次切分的边界写入各分片进度（值域漂移的分片重置为从头读）
+        prepareSliceProgress(task, group, intervals);
+        for (int i = 0; i < count; i++) {
+            final SplitBound interval = intervals[i];
+            final boolean firstSlice = i == 0;
+            final String sliceKey = sliceProgressKey(group.getId(), i);
+            // 已完成且边界未漂移的分片直接跳过（断点续传）
+            if (FullTableProgressUtil.isDone(metaSnapshot(task.getId()), sliceKey)) {
+                logger.info("分片已完成，跳过:{} {} 区间[{}~{})", task.getId(), sliceKey,
+                        interval.getLower(), interval.getUpper() == null ? "+∞" : interval.getUpper());
+                latch.countDown();
+                continue;
+            }
+            pool.execute(() -> {
+                // 每个分片独立子任务：独立 tableGroupId（进度键）+ cursors/pageIndex，共享父任务启停
+                Task sliceTask = task.createTableTask(sliceKey);
+                restoreSliceProgress(sliceTask, task.getId(), sliceKey, interval);
+                try {
+                    executeSlice(sliceTask, mapping, group, command, fieldMappings, splitKey,
+                            interval.getLower(), interval.getUpper(), firstSlice, executor, limiter);
+                    // 仅在任务未被中止时标记完成：因其它分片失败而提前退出的分片，
+                    // 重跑时必须重读（宁可重复读不可误跳过）
+                    if (task.isRunning()) {
+                        markSliceDone(task.getId(), sliceKey, interval);
+                    }
+                } catch (Throwable e) {
+                    failure.compareAndSet(null, e);
+                    task.stop();
+                    logger.error(String.format("分片执行失败[%s] 区间[%s~%s):%s", task.getId(),
+                            interval.getLower(), interval.getUpper() == null ? "+∞" : interval.getUpper()), e);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        pool.shutdown();
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            task.stop();
+        }
+        Throwable error = failure.get();
+        if (error != null) {
+            throw error instanceof RuntimeException ? (RuntimeException) error : new RuntimeException(error);
+        }
+        long costMs = (System.nanoTime() - t0) / 1_000_000L;
+        long avgMs = count > 0 ? costMs / count : 0;
+        logger.info("分片并发读完成:{} 共{}个分片, 耗时{}ms / 分片数{} / 平均{}ms每片", task.getId(), count, costMs, count, avgMs);
+    }
+
+    /**
+     * 分片进度键：{@code 组ID#s+分片下标}。与组级进度同存于 Meta.snapshot.tableProgress。
+     */
+    static String sliceProgressKey(String tableGroupId, int sliceIndex) {
+        return tableGroupId + "#s" + sliceIndex;
+    }
+
+    /**
+     * 分片边界串：{@code start~end}，用于恢复断点时校验值域未漂移。
+     * <p>Wave32：支持任意对象边界（数值 Long / uuid / 字符串 / 日期），统一 {@code String.valueOf} 序列化；
+     * Wave31 数值模式（{@code 10~20}）格式完全不变，存量断点零影响。</p>
+     */
+    static String intervalBounds(Object start, Object end) {
+        return String.valueOf(start) + "~" + (end == null ? "" : String.valueOf(end));
+    }
+
+    private Map<String, String> metaSnapshot(String taskId) {
+        Meta meta = metaProfile.getMeta(taskId);
+        return meta == null ? null : meta.getSnapshot();
+    }
+
+    /**
+     * 恢复单分片断点：仅当已有进度未完成、且边界与本次切分一致时才复用游标/页码；
+     * 边界漂移（源表 MIN/MAX 变化导致切分变化）一律从头读，避免按旧游标漏数据。
+     */
+    private void restoreSliceProgress(Task sliceTask, String rootTaskId, String sliceKey, SplitBound interval) {
+        Map<String, String> snapshot = metaSnapshot(rootTaskId);
+        if (snapshot == null) {
+            return;
+        }
+        TableSyncProgress progress = FullTableProgressUtil.getOrInit(snapshot, sliceKey);
+        if (progress.isDone()) {
+            return;
+        }
+        boolean boundsMatched = intervalBounds(interval.getLower(), interval.getUpper()).equals(progress.getBounds());
+        if (!boundsMatched) {
+            return;
+        }
+        if (StringUtil.isNotBlank(progress.getCursor())) {
+            sliceTask.setCursors(PrimaryKeyUtil.getLastCursors(progress.getCursor()));
+        }
+        if (progress.getPageIndex() > 1) {
+            sliceTask.setPageIndex(progress.getPageIndex());
+        }
+    }
+
+    /**
+     * 分片启动前统一准备进度：为每个分片写入/修正 bounds（值域漂移的旧进度重置）。
+     * 无 Meta（如纯内存测试环境）时静默跳过。
+     */
+    private void prepareSliceProgress(Task task, TableGroup group, SplitBound[] intervals) {
+        Map<String, String> snapshot = metaSnapshot(task.getId());
+        if (snapshot == null) {
+            return;
+        }
+        boolean changed = false;
+        for (int i = 0; i < intervals.length; i++) {
+            String sliceKey = sliceProgressKey(group.getId(), i);
+            String bounds = intervalBounds(intervals[i].getLower(), intervals[i].getUpper());
+            TableSyncProgress progress = FullTableProgressUtil.getOrInit(snapshot, sliceKey);
+            if (!bounds.equals(progress.getBounds())) {
+                TableSyncProgress fresh = new TableSyncProgress();
+                fresh.setPageIndex(1);
+                fresh.setCursor("");
+                fresh.setDone(false);
+                fresh.setBounds(bounds);
+                FullTableProgressUtil.put(snapshot, sliceKey, fresh);
+                changed = true;
+            }
+        }
+        if (changed) {
+            persistMetaSnapshot(task.getId());
+        }
+    }
+
+    /**
+     * 分片成功完成：标记该分片 done=true（保留 bounds），供续传跳过。
+     */
+    private void markSliceDone(String rootTaskId, String sliceKey, SplitBound interval) {
+        Map<String, String> snapshot = metaSnapshot(rootTaskId);
+        if (snapshot == null) {
+            return;
+        }
+        synchronized (MetaLockUtil.lock(rootTaskId)) {
+            try {
+                Meta meta = metaProfile.getMeta(rootTaskId);
+                if (meta == null) {
+                    return;
+                }
+                TableSyncProgress progress = new TableSyncProgress();
+                progress.setPageIndex(1);
+                progress.setCursor("");
+                progress.setDone(true);
+                progress.setBounds(intervalBounds(interval.getLower(), interval.getUpper()));
+                FullTableProgressUtil.put(meta.getSnapshot(), sliceKey, progress);
+                profileComponent.editConfigModel(meta);
+            } catch (Exception e) {
+                logger.warn("分片完成标记写入失败（不影响数据，重跑时该分片会重读）:{} {}", sliceKey, e.getMessage());
+            }
+        }
+    }
+
+    private void persistMetaSnapshot(String rootTaskId) {
+        try {
+            Meta meta = metaProfile.getMeta(rootTaskId);
+            if (meta != null) {
+                synchronized (MetaLockUtil.lock(rootTaskId)) {
+                    profileComponent.editConfigModel(meta);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("分片断点初始化写入失败（不影响执行）:{} {}", rootTaskId, e.getMessage());
+        }
+    }
+
+    /**
+     * 单个分片的全量游标循环：与串行 executeCommon 的循环体语义一致，差异仅在：
+     * <ol>
+     *     <li>SOURCE command 克隆后注入分片范围条件（splitKey &gt;= start AND splitKey &lt; end）；</li>
+     *     <li>每次游标读取的 args 前缀追加 [start, end]（与注入 SQL 的占位符顺序对齐）；</li>
+     *     <li>子上下文独立，不共享 cursors/pageIndex 可变状态。</li>
+     * </ol>
+     * <p>Wave32：start/end 由 long 扩展为 Object（采样模式承载 uuid/字符串/日期原值），
+     * 统一走 JDBC 参数化绑定（?），SQL 生成逻辑与 Wav4 完全一致。</p>
+     */
+    private void executeSlice(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                              List<FieldMapping> fieldMapping, String splitKey, Object start, Object end,
+                              boolean includeNullRows, Executor executor, MigrationRateLimiter limiter) {
+        final String metaId = task.getId();
+        // 最后一片 end 饱和在 Long.MAX_VALUE（value 模式）或为 null（sample 模式最后一片），改用 <= 闭区间兜住上界
+        final boolean inclusiveEnd = end == null || (end instanceof Long && (Long) end == Long.MAX_VALUE);
+        final String sourceConnectorId = mapping.getSourceConnectorId();
+        final String targetConnectorId = mapping.getTargetConnectorId();
+        final String sTableName = group.getSourceTable().getName();
+        final String tTableName = group.getTargetTable().getName();
+        Assert.notEmpty(fieldMapping, String.format("数据源表[%s]同步到目标源表[%s], 映射关系不能为空.", sTableName, tTableName));
+        Picker picker = new Picker(group);
+
+        // 分片专用 SOURCE command：克隆并注入范围条件到 QUERY_CURSOR SQL
+        Map<String, String> sliceCommand = new HashMap<>(command);
+        String cursorSql = command.get(ConnectorConstant.OPERTION_QUERY_CURSOR);
+        boolean enableCursor = StringUtil.isNotBlank(cursorSql);
+        if (enableCursor) {
+            String injected = injectRangeCondition(cursorSql, splitKey, start, end, includeNullRows, inclusiveEnd);
+            sliceCommand.put(ConnectorConstant.OPERTION_QUERY_CURSOR, injected);
+            // QUERY（第一页非游标）与 QUERY_COUNT 一并注入，保证总览页与计数口径一致
+            String querySql = command.get(ConnectorConstant.OPERTION_QUERY);
+            if (StringUtil.isNotBlank(querySql)) {
+                sliceCommand.put(ConnectorConstant.OPERTION_QUERY,
+                        injectRangeCondition(querySql, splitKey, start, end, includeNullRows, inclusiveEnd));
+            }
+            String countSql = command.get(ConnectorConstant.OPERTION_QUERY_COUNT);
+            if (StringUtil.isNotBlank(countSql)) {
+                sliceCommand.put(ConnectorConstant.OPERTION_QUERY_COUNT,
+                        injectRangeCondition(countSql, splitKey, start, end, includeNullRows, inclusiveEnd));
+            }
+        }
+
+        List<String> primaryKeys = getPrimaryKeysForCursor(sliceCommand, group.getSourceTable(), enableCursor);
+        final FullPluginContext context = new FullPluginContext();
+        String sourceInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), sourceConnectorId, ConnectorInstanceUtil.SOURCE_SUFFIX);
+        String targetInstanceId = ConnectorInstanceUtil.buildConnectorInstanceId(mapping.getId(), targetConnectorId, ConnectorInstanceUtil.TARGET_SUFFIX);
+        context.setSourceConnectorInstance(connectorFactory.connect(sourceInstanceId));
+        context.setTargetConnectorInstance(connectorFactory.connect(targetInstanceId));
+        context.setEvent(ConnectorConstant.OPERTION_INSERT);
+        context.setCommand(sliceCommand);
+        context.setBatchSize(mapping.getBatchNum());
+        context.setPlugin(group.getPlugin());
+        context.setPluginExtInfo(group.getPluginExtInfo());
+        context.setForceUpdate(mapping.isForceUpdate());
+        context.setSourceTable(group.getSourceTable());
+        context.setTargetTable(group.getTargetTable());
+        context.setTargetFields(picker.getTargetFields());
+        context.setSupportedCursor(enableCursor);
+        context.setPageSize(mapping.getReadNum());
+        setRsaConfig(context);
+        ConnectorService sourceConnector = connectorFactory.getConnectorService(context.getSourceConnectorInstance().getConfig());
+        ConnectorService targetConnector = connectorFactory.getConnectorService(context.getTargetConnectorInstance().getConfig());
+        picker.setSourceResolver(sourceConnector.getSchemaResolver());
+        Map<String, Field> targetFieldMap = picker.getTargetFieldMap();
+        pluginFactory.process(context, ProcessEnum.BEFORE);
+
+        // 分片范围参数前缀（每次读取必须存在于 args 起始位，与注入 SQL 占位符顺序一致；
+        // injectRangeCondition 始终生成 2 个占位符 [start, end]，即使 inclusiveEnd 也绑 2 个）
+        final List<Object> rangePrefix = Arrays.asList(start, end);
+
+        for (; ; ) {
+            if (!task.isRunning()) {
+                logger.warn("任务被中止:{}", metaId);
+                break;
+            }
+            // 1、获取数据源数据（分片前缀 + 游标参数）
+            List<Object> args = new ArrayList<>(rangePrefix);
+            context.setArgs(args);
+            context.setCursors(task.getCursors());
+            context.setPageIndex(task.getPageIndex());
+            Result reader = connectorFactory.reader(context);
+            List<Map> source = reader.getSuccessData();
+            if (CollectionUtils.isEmpty(source)) {
+                logger.info("完成分片全量任务:{} 区间[{}~{}) [{}] >> [{}]", metaId, start, end, sTableName, tTableName);
+                break;
+            }
+
+            // 批次级限速：读取后、写入前申请本秒「记录数 + 估算字节数」配额（默认 0 时零开销、不改执行顺序）
+            // Wave30：未启用限速时绝不能先算 estimateBytes（逐行 Map.toString，宽行下比数据本身还贵）
+            limiter.acquire(source.size(), limiter.isEnabled() ? estimateBytes(source) : 0L);
+
+            // 2、映射字段
+            List<Map> target = picker.pickTargetData(source);
+
+            // 3、参数转换
+            ConvertUtil.convert(group.getConvert(), target);
+
+            // 4、插件转换
+            context.setSourceList(source);
+            context.setTargetList(target);
+            pluginFactory.process(context, ProcessEnum.CONVERT);
+
+            // 5、写入目标源
+            Result result = writeBatch(context, executor);
+
+            // 6、更新结果
+            task.setPageIndex(task.getPageIndex() + 1);
+            task.setCursors(PrimaryKeyUtil.getLastCursors(source, primaryKeys));
+            result.setTableGroupId(group.getId());
+            result.setTargetTableGroupName(tTableName);
+            flush(task, result, targetConnector.getSchemaResolver(), targetFieldMap);
+
+            // 7、同步完成后通知插件做后置处理
+            pluginFactory.process(context, ProcessEnum.AFTER);
+
+            // 8、释放本批数据引用
+            if (context.getSourceList() != null) {
+                context.getSourceList().clear();
+            }
+            if (context.getTargetList() != null) {
+                context.getTargetList().clear();
+            }
+        }
+    }
+
+    /**
+     * 向已有只读查询 SQL 注入单值分片范围条件：
+     * <pre>
+     * SELECT ... FROM "t" [WHERE &lt;原条件&gt;] [ORDER BY ...] [LIMIT ?,?]
+     *  → SELECT ... FROM "t" [WHERE (&lt;splitKey&gt; &gt;= ? AND &lt;splitKey&gt; &lt; ?) AND &lt;原条件&gt;] [ORDER BY ...] [LIMIT ?,?]
+     * </pre>
+     * 无 WHERE 时在 FROM 子句后新增 WHERE。注入后的参数占位符顺序为 [start, end, ...原参数]。
+     * <p>包级可见以便单元测试。</p>
+     *
+     * @param sql      原 SQL（QUERY_CURSOR / QUERY / QUERY_COUNT）
+     * @param splitKey 分片键（白名单校验后拼接，防注入）
+     * @param start    区间起点（含）
+     * @param end      区间终点（不含）
+     * @return 注入后的 SQL
+     */
+    String injectRangeCondition(String sql, String splitKey, long start, long end) {
+        return injectRangeCondition(sql, splitKey, start, end, false, false);
+    }
+
+    /**
+     * Wave30：分片范围条件（Wave32 起 start/end 支持任意可比较类型 Object）。
+     * <ul>
+     *     <li>{@code includeNullRows}：MIN/MAX 忽略 NULL，且 {@code >= / <} 对 NULL 求值为 UNKNOWN，
+     *         旧实现会 100% 丢掉分片键为 NULL 的行；第一片显式加 {@code IS NULL} 分支兜住。</li>
+     *     <li>{@code inclusiveEnd}：值域上界为 {@code Long.MAX_VALUE}（value）或最后一片（sample 用探测 MAX）
+     *         时改用闭区间 {@code <= ?}，否则该行读不到。</li>
+     * </ul>
+     * 两个分支都保持 2 个绑定参数（【start, end】），与 executeSlice 的 rangePrefix 一一对应。
+     * start/end 仅决定占位符个数，不进入 SQL 文本（恒以 {@code ?} 绑定原值），对字符串/uuid/日期安全。
+     */
+    String injectRangeCondition(String sql, String splitKey, Object start, Object end,
+                                boolean includeNullRows, boolean inclusiveEnd) {
+        SqlIdentifierValidator.validateIdentifier(splitKey);
+        String upperOp = inclusiveEnd ? " <= ?" : " < ?";
+        String range = "(" + splitKey + " >= ? AND " + splitKey + upperOp + ")";
+        if (includeNullRows) {
+            range = "(" + splitKey + " IS NULL OR (" + splitKey + " >= ? AND " + splitKey + upperOp + "))";
+        }
+        String upper = sql.toUpperCase();
+        int whereIdx = upper.indexOf(" WHERE ");
+        if (whereIdx >= 0) {
+            return sql.substring(0, whereIdx + " WHERE ".length())
+                    + range + " AND "
+                    + sql.substring(whereIdx + " WHERE ".length());
+        }
+        // 无 WHERE：在 FROM 子句后（ORDER BY / LIMIT 之前）插入 WHERE
+        int orderIdx = upper.indexOf(" ORDER BY ");
+        int limitIdx = upper.indexOf(" LIMIT ");
+        int insertPos;
+        if (orderIdx >= 0) {
+            insertPos = orderIdx;
+        } else if (limitIdx >= 0) {
+            insertPos = limitIdx;
+        } else {
+            return sql + " WHERE " + range;
+        }
+        return sql.substring(0, insertPos) + " WHERE " + range + sql.substring(insertPos);
+    }
+
+    /**
+     * 把 [min, max] 值域切分为 count 个左闭右开区间 [start, end)。
+     * end 为开区间，最后一片取 max+1 以覆盖最大值。count &lt;= 0 或空值域返回空数组。
+     * <p>包级可见以便单元测试。</p>
+     */
+    static long[][] splitHalfOpenRange(long min, long max, int count) {
+        if (max < min || count <= 0) {
+            return new long[0][];
+        }
+        int n = Math.max(1, count);
+        // Wave30：max-min+1 在极大值域会溢出为负，用 BigInteger 算步长；加法同样按上界饱和。
+        java.math.BigInteger span = java.math.BigInteger.valueOf(max)
+                .subtract(java.math.BigInteger.valueOf(min)).add(java.math.BigInteger.ONE);
+        java.math.BigInteger stepBig = span.divide(java.math.BigInteger.valueOf(n));
+        long step = stepBig.compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE)) > 0
+                ? Long.MAX_VALUE : Math.max(1L, stepBig.longValue());
+        java.util.List<long[]> ranges = new ArrayList<>(n);
+        long start = min;
+        for (int i = 0; i < n && start <= max; i++) {
+            long end;
+            if (i == n - 1) {
+                // end == Long.MAX_VALUE 时由 injectRangeCondition 改用 <= 闭区间
+                end = max == Long.MAX_VALUE ? max : max + 1;
+            } else {
+                long raw = start + step;
+                end = raw < start ? max : raw;
+                if (end > max) {
+                    end = max;
+                }
+                if (end <= start) {
+                    end = start == Long.MAX_VALUE ? max : start + 1;
+                }
+            }
+            ranges.add(new long[]{start, end});
+            if (end <= start) {
+                break;
+            }
+            start = end;
+        }
+        return ranges.toArray(new long[0][]);
+    }
+
+    /** 分片值域结果（左闭右闭） */
+    private static final class FullyQualifiedSplitRange {
+        private final long min;
+        private final long max;
+
+        private FullyQualifiedSplitRange(long min, long max) {
+            this.min = min;
+            this.max = max;
+        }
+    }
+
+    /**
+     * 分片区间边界值对象（Wave32：采样均分引入）。
+     * <p>承载「参数化绑定值」语义，不再强制 long：
+     * <ul>
+     *     <li>value 模式：lower/upper 均为 {@link Long}，行为与 Wave4 完全一致（bounds 串 {@code start~end} 不变）；</li>
+     *     <li>sample 模式：lower/upper 为 uuid/字符串/日期等原值（{@code ORDER BY 采样断点}），JDBC 按类型绑定；
+     *         boundaryUpper 为 {@code null} 表示最后一片开到 +∞（上限由 probe 的 MAX 值承载，见 {@link #buildSampleIntervals}）。</li>
+     * </ul>
+     * bounds 字符串由 {@link #intervalBoundsValue(Object, Object)} 生成，保持 {@code start~end} 形式，
+     * 与 Wave31 断点持久化兼容（数值模式 {@code start~end} 完全不变）。
+     * <p>包级可见以便单元测试。</p>
+     */
+    static final class SplitBound {
+        /** 区间起点（含），可为 null 表示无下界（理论不出现，见 executeSlice includeNullRows 第一片） */
+        private final Object lower;
+        /** 区间终点（不含），null 表示无上界（仅最后一片） */
+        private final Object upper;
+
+        private SplitBound(Object lower, Object upper) {
+            this.lower = lower;
+            this.upper = upper;
+        }
+
+        Object getLower() {
+            return lower;
+        }
+
+        Object getUpper() {
+            return upper;
+        }
+    }
+
+    /**
+     * 采样均分断点结果：探测出的行分位值 + 是否成功。
+     */
+    private static final class SampleBoundsResult {
+        private final Object[] bounds; // [0..n-2] 为断点值（升序），可为 null 表示失败
+        private final int count;
+
+        private SampleBoundsResult(Object[] bounds, int count) {
+            this.bounds = bounds;
+            this.count = count;
+        }
+    }
+
+    /**
+     * 分片边界字符串（兼容 Wave31）：{@code String.valueOf(lower)~String.valueOf(upper)}。
+     * upper 为 null（最后一片无上界）时直接拼 {@code lower~}，由 {@link TableSyncProgress#setBounds} 兜底。
+     */
+    static String intervalBoundsValue(Object lower, Object upper) {
+        return String.valueOf(lower) + "~" + (upper == null ? "" : String.valueOf(upper));
+    }
+
+    /**
+     * 原全量同步主流程（单游标串行，逻辑与原 execute 一致，供分片降级与默认路径使用）。
+     */
+    private void executeCommon(Task task, Mapping mapping, TableGroup group, Map<String, String> command,
+                               List<FieldMapping> fieldMapping, Executor executor, MigrationRateLimiter limiter) {
+        final String metaId = task.getId();
+        final String sourceConnectorId = mapping.getSourceConnectorId();
+        final String targetConnectorId = mapping.getTargetConnectorId();
+        final String sTableName = group.getSourceTable().getName();
+        final String tTableName = group.getTargetTable().getName();
         Assert.notEmpty(fieldMapping, String.format("数据源表[%s]同步到目标源表[%s], 映射关系不能为空.", sTableName, tTableName));
         // 获取同步字段
         Picker picker = new Picker(group);
@@ -199,6 +1083,10 @@ public class ParserComponentImpl implements ParserComponent {
                 break;
             }
 
+            // 批次级限速：读取后、写入前申请本秒「记录数 + 估算字节数」配额（默认 0 时零开销、不改执行顺序）
+            // Wave30：未启用限速时绝不能先算 estimateBytes（逐行 Map.toString，宽行下比数据本身还贵）
+            limiter.acquire(source.size(), limiter.isEnabled() ? estimateBytes(source) : 0L);
+
             // 2、映射字段
             List<Map> target = picker.pickTargetData(source);
 
@@ -216,7 +1104,7 @@ public class ParserComponentImpl implements ParserComponent {
             // 6、更新结果
             task.setPageIndex(task.getPageIndex() + 1);
             task.setCursors(PrimaryKeyUtil.getLastCursors(source, primaryKeys));
-            result.setTableGroupId(tableGroup.getId());
+            result.setTableGroupId(group.getId());
             result.setTargetTableGroupName(tTableName);
             flush(task, result, targetConnector.getSchemaResolver(), targetFieldMap);
 
@@ -233,6 +1121,24 @@ public class ParserComponentImpl implements ParserComponent {
         }
     }
 
+    /**
+     * 粗略估算一批数据的字节数：逐行累加 {@code Map.toString().length()}（复刻 engine/Record.estimateBytes 思路）。
+     * <p>仅用于限速字节维度，估算失败返回 0（该维度不累加），绝不影响主链路。</p>
+     */
+    private static long estimateBytes(List<Map> source) {
+        try {
+            long size = 0;
+            for (Map row : source) {
+                if (row != null) {
+                    size += row.toString().length();
+                }
+            }
+            return size;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     @Override
     public Result writeBatch(PluginContext context, Executor executor) {
         Result result = new Result();
@@ -245,39 +1151,101 @@ public class ParserComponentImpl implements ParserComponent {
         int batchSize = context.getBatchSize();
         List<Map> targetList = context.getTargetList();
         int total = targetList.size();
-        // 单次任务
+        // Wave24：线程池线程不继承 ThreadLocal，捕获父线程任务 ID 后在子任务内显式 set/clear
+        final String taskId = org.dbdatasync.sdk.context.TaskContextHolder.currentTaskId();
+        final org.dbdatasync.sdk.checkpoint.CheckpointRecord pendingCheckpoint =
+                org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.current();
+        // 单次任务（当前线程，Holder 已由分发方设置）
         if (total <= batchSize) {
             return connectorFactory.writer(context);
         }
 
-        // 批量任务, 拆分
-        int taskSize = (total + batchSize - 1) / batchSize;
-        CountDownLatch latch = new CountDownLatch(taskSize);
-        TaskSplitUtil.split(targetList, batchSize, batch -> {
+        // Wave30：先固定子批引用，超时/提交被拒时才能把「未写出的行」准确计入失败明细
+        final List<List<Map>> batches = new ArrayList<>();
+        TaskSplitUtil.split(targetList, batchSize, batches::add);
+        final int taskSize = batches.size();
+        final CountDownLatch latch = new CountDownLatch(taskSize);
+        final AtomicBoolean[] done = new AtomicBoolean[taskSize];
+        for (int i = 0; i < taskSize; i++) {
+            done[i] = new AtomicBoolean(false);
+        }
+        for (int i = 0; i < taskSize; i++) {
+            final int idx = i;
+            final List<Map> batch = batches.get(idx);
             try {
                 PluginContext tmpContext = (PluginContext) context.clone();
                 tmpContext.setTargetList(batch);
                 executor.execute(() -> {
+                    // Wave24：把任务上下文带进线程池子任务，慢 SQL 观察点才能拿到 taskId
+                    if (taskId != null) {
+                        org.dbdatasync.sdk.context.TaskContextHolder.set(taskId);
+                    }
+                    // Wave24：待提交位点随子任务透传，保证大事务也在目标库事务内写位点表
+                    if (pendingCheckpoint != null) {
+                        org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.begin(pendingCheckpoint);
+                    }
                     try {
                         Result w = connectorFactory.writer(tmpContext);
-                        result.addSuccessData(w.getSuccessData());
-                        result.addFailData(w.getFailData());
-                        result.getError().append(w.getError());
+                        // Wave30：Result 内部是普通 List/StringBuffer/Map，多子批并发合并会丢数据甚至 CME
+                        synchronized (result) {
+                            result.addSuccessData(w.getSuccessData());
+                            result.addFailData(w.getFailData());
+                            result.getError().append(w.getError());
+                            // Wave24：逐行失败分类必须随子批结果合并，否则大事务路径分类丢失
+                            result.getRowFailures().putAll(w.getRowFailures());
+                        }
                     } catch (Exception e) {
-                        logger.error(e.getMessage());
+                        logger.error(e.getMessage(), e);
+                        // 子批整体异常时旧实现只打日志，整批既不进 successData 也不进 failData，
+                        // 数据会静默丢失且无法进入失败队列。这里按失败明细兜底，保证可观测、可重推。
+                        synchronized (result) {
+                            result.addFailData(batch);
+                            result.getError().append("[BATCH_FAILED] ").append(e.getMessage())
+                                    .append(" ").append(org.dbdatasync.sdk.retry.WriteFailureTag.describe(e))
+                                    .append(System.lineSeparator());
+                        }
                     } finally {
+                        org.dbdatasync.sdk.context.TaskContextHolder.clear();
+                        org.dbdatasync.sdk.checkpoint.TargetTxCheckpoint.end();
+                        done[idx].set(true);
                         latch.countDown();
                     }
                 });
-            } catch (CloneNotSupportedException e) {
-                logger.error(e.getMessage(), e);
+            } catch (Throwable e) {
+                // Wave30：clone 失败之外，线程池 shutdown / RejectedExecutionException 也必须 countDown，
+                // 否则 latch 永远等不到 0（旧实现只捕获 CloneNotSupportedException）。
+                logger.error("写批子任务提交失败: {}", e.getMessage(), e);
+                synchronized (result) {
+                    result.addFailData(batch);
+                    result.getError().append("[BATCH_SUBMIT_FAILED] ").append(e.getMessage())
+                            .append(System.lineSeparator());
+                }
+                done[idx].set(true);
                 latch.countDown();
             }
-        });
+        }
+        boolean completed;
         try {
-            latch.await();
+            completed = latch.await(WRITE_BATCH_AWAIT_MINUTES, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
-            logger.error(e.getMessage());
+            Thread.currentThread().interrupt();
+            completed = false;
+            logger.error("写批等待被中断");
+        }
+        if (!completed) {
+            synchronized (result) {
+                int pending = 0;
+                for (int i = 0; i < taskSize; i++) {
+                    if (!done[i].get()) {
+                        result.addFailData(batches.get(i));
+                        pending++;
+                    }
+                }
+                result.getError().append("[BATCH_AWAIT_TIMEOUT] 写批等待超时，")
+                        .append(pending).append(" 个未完成子批已计入失败明细")
+                        .append(System.lineSeparator());
+            }
+            logger.error("写批等待超时（{} 分钟），未完成子批已计入失败明细", WRITE_BATCH_AWAIT_MINUTES);
         }
         return result;
     }

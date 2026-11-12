@@ -189,6 +189,10 @@ public class FileListener extends AbstractListener<FileConnectorInstance> {
                 int size = list.size();
                 for (int i = 0; i < size; i++) {
                     RowChangedEvent event = new RowChangedEvent(fileName, ConnectorConstant.OPERTION_INSERT, list.get(i), null, null);
+                    // Wave24：源文件最后修改时间作为源端事件时间；路径不可用（0）时保持估算
+                    org.dbdatasync.sdk.model.SourceEventTime.apply(event,
+                            new java.io.File(fileName).lastModified(),
+                            org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_SOURCE);
                     if (i == size - 1) {
                         event.setNextFileName(filePosKey);
                         event.setPosition(raf.getFilePointer());

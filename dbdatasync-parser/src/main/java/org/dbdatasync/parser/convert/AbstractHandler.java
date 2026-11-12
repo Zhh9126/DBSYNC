@@ -41,7 +41,7 @@ public abstract class AbstractHandler implements Handler {
             while (offset < len && (read = is.read(bytes, offset, len - offset)) >= 0) {
                 offset += read;
             }
-            return new String(bytes);
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new ParserException(e.getMessage());
         } finally {

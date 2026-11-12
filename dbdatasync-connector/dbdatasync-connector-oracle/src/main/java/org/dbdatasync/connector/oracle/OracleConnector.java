@@ -7,6 +7,7 @@ import org.dbdatasync.common.model.Result;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.oracle.cdc.OracleListener;
+import org.dbdatasync.connector.oracle.cdc.trigger.OracleTriggerLogListener;
 import org.dbdatasync.connector.oracle.schema.OracleSchemaResolver;
 import org.dbdatasync.connector.oracle.validator.OracleConfigValidator;
 import org.dbdatasync.sdk.config.DDLConfig;
@@ -74,6 +75,11 @@ public class OracleConnector extends AbstractDatabaseConnector {
 
         if (ListenerTypeEnum.isLog(listenerType)) {
             return new OracleListener();
+        }
+
+        // Wave28: Trigger CDC fallback capture (no archive mode / native log required)
+        if (ListenerTypeEnum.isTrigger(listenerType)) {
+            return new OracleTriggerLogListener();
         }
         return null;
     }
@@ -546,6 +552,23 @@ public class OracleConnector extends AbstractDatabaseConnector {
         List<String> sFieldNames = new ArrayList<>();
         context.fieldNames.forEach(f -> sFieldNames.add("s." + f));
         sql.append(StringUtil.join(sFieldNames, StringUtil.COMMA)).append(")");
+    }
+
+    @Override
+    public String buildAddColumnsSql(DatabaseConnectorInstance targetInstance, String targetTableName,
+                                      String qualifiedName, List<Field> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return StringUtil.EMPTY;
+        }
+        // Oracle 方言: ALTER TABLE t ADD (c1 t1, c2 t2)
+        StringBuilder clauses = new StringBuilder();
+        for (Field field : fields) {
+            if (clauses.length() > 0) {
+                clauses.append(", ");
+            }
+            clauses.append(buildWithQuotation(field.getName())).append(" ").append(formatPhysicalType(field));
+        }
+        return "ALTER TABLE " + qualifiedName + " ADD (" + clauses + ")";
     }
 
     @Override

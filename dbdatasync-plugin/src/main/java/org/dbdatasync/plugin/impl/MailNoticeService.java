@@ -146,6 +146,28 @@ public final class MailNoticeService extends AbstractNoticeService {
             TestNoticeContent meta = (TestNoticeContent) noticeContent;
             return meta.getContent();
         }
+
+        // 实时链路健康告警（Wave22）
+        if (noticeContent instanceof org.dbdatasync.plugin.model.ReplicationHealthContent) {
+            org.dbdatasync.plugin.model.ReplicationHealthContent c =
+                    (org.dbdatasync.plugin.model.ReplicationHealthContent) noticeContent;
+            if (c.getErrorItems() == null || c.getErrorItems().isEmpty()) {
+                return null;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < c.getErrorItems().size(); i++) {
+                org.dbdatasync.plugin.model.ReplicationHealthContent.ErrorItem item = c.getErrorItems().get(i);
+                sb.append("<p>").append(i + 1).append(". ").append(item.getName())
+                        .append("(").append(item.getMetaId()).append(") 等级:").append(item.getLevel())
+                        .append(" 停滞:").append(item.getStallSeconds()).append("s")
+                        .append("/阈值:").append(item.getThresholdSeconds()).append("s")
+                        .append(" 失败率:").append(String.format("%.2f%%", item.getFailRate()))
+                        .append(" 死信:").append(item.getDeadLetters())
+                        .append(" 原因:").append(item.getReason() == null ? "" : item.getReason())
+                        .append("</p>");
+            }
+            return sb.toString();
+        }
         return null;
     }
 

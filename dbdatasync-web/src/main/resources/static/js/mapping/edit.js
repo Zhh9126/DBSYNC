@@ -26,6 +26,52 @@ function bindSyncModeChange() {
     $(document).on('change', 'input[name="syncMode"]', writeMode);
 }
 
+// 全量分片并发读：同步 fullSplitKey / fullSplitCount / fullSplitMode / fullSplitSampleCap 到 hidden params input（DataX splitPk 对标能力）
+function bindFullSplitChange() {
+    var writeSplit = function() {
+        var splitKey = $.trim($('#fullSplitKey').val() || '');
+        var splitCount = $.trim($('#fullSplitCount').val() || '');
+        var splitMode = $.trim($('#fullSplitMode').val() || 'value');
+        var splitSampleCap = $.trim($('#fullSplitSampleCap').val() || '');
+        var p = {};
+        try { p = JSON.parse($('#mappingParams').val() || '{}'); } catch (e) { p = {}; }
+        if (splitKey === '' || splitCount === '' || parseInt(splitCount, 10) <= 0) {
+            delete p.fullSplitKey;
+            delete p.fullSplitCount;
+            delete p.fullSplitMode;
+            delete p.fullSplitSampleCap;
+        } else {
+            p.fullSplitKey = splitKey;
+            p.fullSplitCount = parseInt(splitCount, 10);
+            p.fullSplitMode = (splitMode === 'sample') ? 'sample' : 'value';
+            if (splitSampleCap !== '' && parseInt(splitSampleCap, 10) >= 2) {
+                p.fullSplitSampleCap = parseInt(splitSampleCap, 10);
+            } else {
+                delete p.fullSplitSampleCap;
+            }
+        }
+        $('#mappingParams').val(JSON.stringify(p));
+    };
+    // 回显已有配置
+    (function show() {
+        var p = {};
+        try { p = JSON.parse($('#mappingParams').val() || '{}'); } catch (e) { p = {}; }
+        if (p.fullSplitKey) {
+            $('#fullSplitKey').val(p.fullSplitKey);
+        }
+        if (p.fullSplitCount) {
+            $('#fullSplitCount').val(p.fullSplitCount);
+        }
+        if (p.fullSplitMode) {
+            $('#fullSplitMode').val(p.fullSplitMode);
+        }
+        if (p.fullSplitSampleCap) {
+            $('#fullSplitSampleCap').val(p.fullSplitSampleCap);
+        }
+    })();
+    $(document).on('change blur keyup', '#fullSplitKey, #fullSplitCount, #fullSplitMode, #fullSplitSampleCap', writeSplit);
+}
+
 // 绑定全量+增量切换事件
 function bindMappingModelChange() {
     const mappingModel = $('#mapping_model').radioGroup({
@@ -234,6 +280,8 @@ $(function () {
     bindMappingModelChange();
     // 绑定执行模式（同步/异步）切换事件，同步写入 hidden params
     bindSyncModeChange();
+    // 绑定全量分片并发读配置
+    bindFullSplitChange();
     // 绑定日志+定时切换事件
     bindIncrementConfigChange();
     // 绑定增量点配置编辑事件

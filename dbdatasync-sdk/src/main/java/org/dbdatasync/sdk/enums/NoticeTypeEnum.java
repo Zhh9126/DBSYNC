@@ -42,7 +42,11 @@ public enum NoticeTypeEnum {
     /**
      * 授权已过期
      */
-    LICENSE_EXPIRED(7);
+    LICENSE_EXPIRED(7),
+    /**
+     * 实时链路健康异常（停滞 / 失败率超阈值 / 死信堆积）
+     */
+    REPLICATION_HEALTH(8);
 
     private final int code;
 

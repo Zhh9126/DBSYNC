@@ -261,6 +261,8 @@ public class SqlServerListener extends AbstractDatabaseListener {
 
     private void pull(Lsn stopLsn) {
         Lsn startLsn = queryAndMap(GET_INCREMENT_LSN, statement->statement.setBytes(1, lastLsn.getBinary()), rs->Lsn.valueOf(rs.getBytes(1)));
+        // Wave24：从 CDC 事务时间映射表取本批变更的源端提交时间（真实 lag 基准）
+        final long batchSourceTime = queryLsnCommitTime(startLsn, stopLsn);
         changeTables.forEach(changeTable-> {
             final String query = GET_ALL_CHANGES_FOR_TABLE.replace(STATEMENTS_PLACEHOLDER, changeTable.getCaptureInstance());
             List<CDCEvent> list = queryAndMapList(query, statement-> {
@@ -280,7 +282,7 @@ public class SqlServerListener extends AbstractDatabaseListener {
                     for (int i = OFFSET_COLUMNS + 1; i <= columnCount; i++) {
                         row.add(rs.getObject(i));
                     }
-                    data.add(new CDCEvent(changeTable.getTableName(), operation, row));
+                    data.add(new CDCEvent(changeTable.getTableName(), operation, row, batchSourceTime));
                 }
                 return data;
             });
@@ -289,6 +291,23 @@ public class SqlServerListener extends AbstractDatabaseListener {
                 parseEvent(list, stopLsn);
             }
         });
+    }
+
+    /** 读取 CDC 事务提交时间；无映射表或无匹配 LSN 时返回 0，由事件退化为估算。 */
+    private long queryLsnCommitTime(Lsn startLsn, Lsn stopLsn) {
+        try {
+            java.sql.Timestamp ts = queryAndMap(
+                    "select max(tran_end_time) from cdc.lsn_time_mapping where start_lsn >= ? and start_lsn <= ?",
+                    statement -> {
+                        statement.setBytes(1, startLsn.getBinary());
+                        statement.setBytes(2, stopLsn.getBinary());
+                    },
+                    rs -> rs.getTimestamp(1));
+            return ts == null ? 0L : ts.getTime();
+        } catch (Exception e) {
+            logger.warn("read cdc.lsn_time_mapping failed, lag falls back to estimated: {}", e.getMessage());
+            return 0L;
+        }
     }
 
     private void trySendEvent(RowChangedEvent event) {
@@ -312,19 +331,28 @@ public class SqlServerListener extends AbstractDatabaseListener {
             boolean isEnd = i == size - 1;
             CDCEvent event = list.get(i);
             if (TableOperationEnum.isUpdateAfter(event.getCode())) {
-                trySendEvent(new RowChangedEvent(event.getTableName(), ConnectorConstant.OPERTION_UPDATE, event.getRow(), null, (isEnd ? stopLsn : null)));
+                sendRowEvent(event, ConnectorConstant.OPERTION_UPDATE, isEnd ? stopLsn : null);
                 continue;
             }
 
             if (TableOperationEnum.isInsert(event.getCode())) {
-                trySendEvent(new RowChangedEvent(event.getTableName(), ConnectorConstant.OPERTION_INSERT, event.getRow(), null, (isEnd ? stopLsn : null)));
+                sendRowEvent(event, ConnectorConstant.OPERTION_INSERT, isEnd ? stopLsn : null);
                 continue;
             }
 
             if (TableOperationEnum.isDelete(event.getCode())) {
-                trySendEvent(new RowChangedEvent(event.getTableName(), ConnectorConstant.OPERTION_DELETE, event.getRow(), null, (isEnd ? stopLsn : null)));
+                sendRowEvent(event, ConnectorConstant.OPERTION_DELETE, isEnd ? stopLsn : null);
             }
         }
+    }
+
+    /** Wave24：把 CDC 事务提交时间写入事件位点后再投递，供真实端到端 lag 计算。 */
+    private void sendRowEvent(CDCEvent cdcEvent, String operation, Lsn position) {
+        RowChangedEvent rowEvent = new RowChangedEvent(cdcEvent.getTableName(), operation,
+                cdcEvent.getRow(), null, position);
+        org.dbdatasync.sdk.model.SourceEventTime.apply(rowEvent, cdcEvent.getSourceTimeMillis(),
+                org.dbdatasync.sdk.model.ChangedOffset.EVENT_TIME_SOURCE);
+        trySendEvent(rowEvent);
     }
 
     private interface ResultSetMapper<T> {

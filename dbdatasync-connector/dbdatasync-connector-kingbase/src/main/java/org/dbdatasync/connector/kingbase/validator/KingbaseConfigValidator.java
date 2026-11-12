@@ -25,8 +25,14 @@ public final class KingbaseConfigValidator extends PostgreSQLConfigValidator {
             connectorConfig.setDriverClassName("com.kingbase8.Driver");
         }
         String pluginName = params.get(KingbaseConfigConstant.PLUGIN_NAME);
-        if (StringUtil.isBlank(pluginName) || "pgoutput".equalsIgnoreCase(pluginName)) {
-            connectorConfig.getExtInfo().put(KingbaseConfigConstant.PLUGIN_NAME, KingbaseConfigConstant.DEFAULT_PLUGIN);
+        if (StringUtil.isBlank(pluginName)) {
+            // 编辑/复制场景下表单可能不提交 pluginName，优先保留已还原的 extInfo
+            pluginName = connectorConfig.getExtInfo().getProperty(KingbaseConfigConstant.PLUGIN_NAME);
         }
+        if (StringUtil.isBlank(pluginName) || "pgoutput".equalsIgnoreCase(pluginName)) {
+            // KES V9 内置逻辑解码插件为 syslogical_output，test_decoding 默认不存在
+            pluginName = KingbaseConfigConstant.DEFAULT_PLUGIN;
+        }
+        connectorConfig.getExtInfo().put(KingbaseConfigConstant.PLUGIN_NAME, pluginName);
     }
 }

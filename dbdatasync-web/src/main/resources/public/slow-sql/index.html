@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+
+<!-- 慢 SQL 采集控制台（Wave17 运行时接线） -->
+<div class="form-container">
+    <div class="card-header">
+        <h3 class="card-title text-center">慢 SQL 采集</h3>
+    </div>
+    <div class="card-body">
+        <div class="tip-box mb-3">
+            <i class="fa fa-info-circle"></i>
+            引擎/驱动将 SQL 执行耗时回调至采集器（环形缓冲），可查看 <strong>avg / max / p95 / topN</strong> 统计并运行时调整口径。
+            <br><span class="text-tertiary">纯内存实现，重启后清空；阈值口径同样供 SlowSqlJdbcWrapper 插桩使用。</span>
+        </div>
+
+        <!-- 采集口径配置 -->
+        <h4 class="mb-2 font-medium text-sm"><i class="fa fa-sliders text-primary"></i> 采集口径配置</h4>
+        <div class="grid grid-cols-3 gap-4 mb-3">
+            <div>
+                <label class="form-label">慢 SQL 阈值（毫秒）</label>
+                <input id="cfgThreshold" class="form-input" type="number" min="1" placeholder="1000">
+            </div>
+            <div>
+                <label class="form-label">最大记录数</label>
+                <input id="cfgMaxRecords" class="form-input" type="number" min="1" placeholder="1000">
+            </div>
+            <div>
+                <label class="form-label">采样率（0~1）</label>
+                <input id="cfgSampleRate" class="form-input" type="number" step="0.1" min="0" max="1" placeholder="1.0">
+            </div>
+        </div>
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doConfig()"><i class="fa fa-check"></i> 应用口径</button>
+            <span class="text-xs text-tertiary ml-2">留空的项保持当前值不变</span>
+        </div>
+        <div id="cfgResult" style="display:none;" class="mb-4"></div>
+
+        <!-- 采集录入（测试挂钩） -->
+        <h4 class="mb-2 font-medium text-sm"><i class="fa fa-plus-circle text-primary"></i> 手工采集一条记录</h4>
+        <div class="grid grid-cols-2 gap-4 mb-3">
+            <div>
+                <label class="form-label">SQL</label>
+                <textarea id="recSql" class="form-input" rows="3"
+                          placeholder="SELECT * FROM big_table WHERE id > 100"
+                          style="font-family: Consolas, Menlo, monospace; font-size: 13px;"></textarea>
+            </div>
+            <div>
+                <label class="form-label">来源标识</label>
+                <input id="recSource" class="form-input mb-2" placeholder="task-1">
+                <label class="form-label">耗时（毫秒）</label>
+                <input id="recMillis" class="form-input mb-2" type="number" placeholder="1500">
+                <label class="form-label">行数</label>
+                <input id="recRows" class="form-input" type="number" placeholder="0">
+            </div>
+        </div>
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doCollect()"><i class="fa fa-download"></i> 采集</button>
+        </div>
+
+        <!-- 统计报告 -->
+        <h4 class="mb-2 font-medium text-sm"><i class="fa fa-bar-chart text-primary"></i> 统计报告</h4>
+        <div class="grid grid-cols-2 gap-4 mb-3">
+            <div>
+                <label class="form-label">报告阈值（毫秒，可选）</label>
+                <input id="rptThreshold" class="form-input" type="number" placeholder="当前口径">
+            </div>
+            <div>
+                <label class="form-label">TopN</label>
+                <input id="rptTopN" class="form-input" type="number" placeholder="10">
+            </div>
+        </div>
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doReport()"><i class="fa fa-line-chart"></i> 生成报告</button>
+            <button class="btn btn-secondary" onclick="doRecords()"><i class="fa fa-list"></i> 查看快照</button>
+            <span class="text-xs text-tertiary ml-2">按任务过滤：</span>
+            <input id="rptTaskId" class="form-input" style="width:180px;display:inline-block;" type="text"
+                   placeholder="任务 ID / <unknown>">
+        </div>
+        <div id="rptResult" style="display:none;" class="mb-2"></div>
+        <div style="max-height:360px;overflow:auto;">
+            <table class="table" id="rptTable" style="display:none;">
+                <thead>
+                <tr>
+                    <th>SQL</th>
+                    <th style="width:110px;">来源</th>
+                    <th style="width:110px;">任务</th>
+                    <th style="width:100px;">耗时(ms)</th>
+                    <th style="width:90px;">行数</th>
+                    <th style="width:170px;">采集时间</th>
+                    <th style="width:90px;">超阈值</th>
+                </tr>
+                </thead>
+                <tbody id="rptTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- Wave25：任务级聚合 -->
+        <h4 class="mb-2 font-medium text-sm mt-4"><i class="fa fa-tasks text-primary"></i> 任务级聚合（Wave24/25）</h4>
+        <div class="mb-3">
+            <button class="btn btn-primary" onclick="doTaskReport()"><i class="fa fa-refresh"></i> 刷新聚合</button>
+            <span class="text-xs text-tertiary ml-2">按同步任务聚合 count / avg / max / p95；无任务上下文的记录归入 &lt;unknown&gt;</span>
+        </div>
+        <div style="max-height:300px;overflow:auto;">
+            <table class="table" id="taskTable" style="display:none;">
+                <thead>
+                <tr>
+                    <th>任务 ID</th>
+                    <th style="width:90px;">条数</th>
+                    <th style="width:110px;">avg(ms)</th>
+                    <th style="width:110px;">max(ms)</th>
+                    <th style="width:110px;">p95(ms)</th>
+                </tr>
+                </thead>
+                <tbody id="taskTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    function doConfig() {
+        const params = {};
+        const t = document.getElementById('cfgThreshold').value.trim();
+        const m = document.getElementById('cfgMaxRecords').value.trim();
+        const s = document.getElementById('cfgSampleRate').value.trim();
+        if (t) { params.thresholdMillis = t; }
+        if (m) { params.maxRecords = m; }
+        if (s) { params.sampleRate = s; }
+        if (!params.thresholdMillis && !params.maxRecords && !params.sampleRate) {
+            bootGrowl('请至少填写一项口径', 'warning');
+            return;
+        }
+        doPoster('/slow-sql/config', params, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '配置失败', 'danger');
+                return;
+            }
+            const box = document.getElementById('cfgResult');
+            box.style.display = 'block';
+            box.innerHTML = '<span class="badge badge-success">口径已应用</span> '
+                + '<span class="text-xs text-tertiary">当前阈值：' + escapeHtml(JSON.stringify(response.data)) + '</span>';
+            bootGrowl('采集口径已应用', 'success');
+        });
+    }
+
+    function doCollect() {
+        const sql = document.getElementById('recSql').value.trim();
+        if (!sql) {
+            bootGrowl('请填写 SQL', 'warning');
+            return;
+        }
+        doPoster('/slow-sql/collect', {
+            sql: sql,
+            source: document.getElementById('recSource').value.trim(),
+            executeMillis: document.getElementById('recMillis').value.trim() || '0',
+            rows: document.getElementById('recRows').value.trim() || '0'
+        }, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '采集失败', 'danger');
+                return;
+            }
+            bootGrowl('已采集入环形缓冲', 'success');
+            document.getElementById('recSql').value = '';
+        });
+    }
+
+    function doReport() {
+        const params = {};
+        const t = document.getElementById('rptThreshold').value.trim();
+        const n = document.getElementById('rptTopN').value.trim();
+        if (t) { params.thresholdMillis = t; }
+        if (n) { params.topN = n; }
+        doPoster('/slow-sql/report', params, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '报告生成失败', 'danger');
+                return;
+            }
+            renderReport(response.data);
+        });
+    }
+
+    function doRecords() {
+        const taskId = document.getElementById('rptTaskId').value.trim();
+        doPoster('/slow-sql/records', taskId ? {taskId: taskId} : {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '快照获取失败', 'danger');
+                return;
+            }
+            renderRows(response.data || []);
+        });
+    }
+
+    function doTaskReport() {
+        doPoster('/slow-sql/taskReport', {}, function (response) {
+            if (!response.success) {
+                bootGrowl(response.message || '聚合失败', 'danger');
+                return;
+            }
+            const data = response.data || {};
+            const keys = Object.keys(data);
+            const table = document.getElementById('taskTable');
+            const body = document.getElementById('taskTableBody');
+            body.innerHTML = '';
+            if (!keys.length) {
+                table.style.display = 'none';
+                bootGrowl('暂无采集记录', 'info');
+                return;
+            }
+            table.style.display = 'table';
+            keys.forEach(function (k) {
+                const v = data[k] || {};
+                const tr = document.createElement('tr');
+                tr.innerHTML = ''
+                    + '<td class="text-xs">' + escapeHtml(k) + '</td>'
+                    + '<td class="text-xs">' + (v.count || 0) + '</td>'
+                    + '<td class="text-xs">' + (v.avgMillis || 0) + '</td>'
+                    + '<td class="text-xs">' + (v.maxMillis || 0) + '</td>'
+                    + '<td class="text-xs">' + (v.p95Millis || 0) + '</td>';
+                body.appendChild(tr);
+            });
+        });
+    }
+
+    function renderReport(d) {
+        const box = document.getElementById('rptResult');
+        box.style.display = 'block';
+        box.innerHTML = ''
+            + '<span class="badge badge-primary">总记录 ' + (d.totalCount || 0) + '</span> '
+            + '<span class="badge badge-warning">慢 SQL ' + (d.slowCount || 0) + '</span> '
+            + '<span class="text-xs text-secondary ml-2">avg ' + (d.avgMillis || 0) + 'ms · '
+            + 'max ' + (d.maxMillis || 0) + 'ms · '
+            + 'p95 ' + (d.p95Millis || 0) + 'ms</span>';
+        renderRows(d.topSlowest || []);
+    }
+
+    function renderRows(rows) {
+        const table = document.getElementById('rptTable');
+        const body = document.getElementById('rptTableBody');
+        body.innerHTML = '';
+        if (!rows.length) {
+            table.style.display = 'none';
+            bootGrowl('当前缓冲为空', 'info');
+            return;
+        }
+        table.style.display = 'table';
+        rows.forEach(function (r) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = ''
+                + '<td class="text-xs" style="word-break:break-all;">' + escapeHtml(r.sql || '') + '</td>'
+                + '<td class="text-xs text-tertiary">' + escapeHtml(r.source || '') + '</td>'
+                + '<td class="text-xs text-tertiary">' + escapeHtml(r.taskId || '-') + '</td>'
+                + '<td class="text-xs">' + (r.executeMillis || 0) + '</td>'
+                + '<td class="text-xs">' + (r.rows || 0) + '</td>'
+                + '<td class="text-xs text-tertiary">' + (r.capturedAt ? new Date(r.capturedAt).toLocaleString() : '-') + '</td>'
+                + '<td>' + (r.thresholdExceeded
+                    ? '<span class="badge badge-warning">是</span>'
+                    : '<span class="badge badge-info">否</span>') + '</td>';
+            body.appendChild(tr);
+        });
+    }
+</script>

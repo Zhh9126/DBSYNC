@@ -39,7 +39,14 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
     private static final LocalDateTime PG_EPOCH = LocalDateTime.of(2000, 1, 1, 0, 0, 0);
     private static final String GET_TABLE_SCHEMA = "select t.oid,t.relname as tableName from pg_class t inner join (select ns.oid as nspoid, ns.nspname from pg_namespace ns where ns.nspname = '%s') as n on n.nspoid = t.relnamespace where relkind = 'r'";
     private static final Map<Integer, TableId> tables = new ConcurrentHashMap<>();
+    /** Wave24：最近一次 BEGIN/COMMIT 的源端事务时间（epoch millis），供真实 lag 计算 */
+    private volatile long lastSourceEventTimeMillis;
     private ConnectorService connectorService;
+
+    @Override
+    public long lastSourceEventTimeMillis() {
+        return lastSourceEventTimeMillis;
+    }
     private DatabaseConnectorInstance connectorInstance;
 
     @Override
@@ -67,6 +74,8 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
             case BEGIN:
                 long beginLsn = buffer.getLong();
                 long beginTs = buffer.getLong();
+                // Wave24：pgoutput BEGIN 携带源端事务开始时间（PostgreSQL epoch 微秒）
+                lastSourceEventTimeMillis = org.dbdatasync.sdk.model.SourceEventTime.pgMicrosToEpochMillis(beginTs);
                 long xid = buffer.getInt();
                 logger.info("Begin LSN {}, timestamp {}, xid {} - {}", beginLsn, PG_EPOCH.plusNanos(beginTs * 1000L), xid, beginTs);
                 break;
@@ -76,6 +85,8 @@ public class PgOutputMessageDecoder extends AbstractMessageDecoder {
                 long commitLsn = buffer.getLong();
                 long commitEndLsn = buffer.getLong();
                 long commitTs = buffer.getLong();
+                // Wave24：COMMIT 时间比 BEGIN 更接近「源端已提交」语义，优先作为端到端 lag 基准
+                lastSourceEventTimeMillis = org.dbdatasync.sdk.model.SourceEventTime.pgMicrosToEpochMillis(commitTs);
                 logger.info("Commit: LSN {}, end LSN {}, ts {}", commitLsn, commitEndLsn, PG_EPOCH.plusNanos(commitTs * 1000L));
                 break;
 

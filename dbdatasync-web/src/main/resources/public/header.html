@@ -2,10 +2,33 @@
 <html xmlns="http://www.w3.org/1999/xhtml"
       xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 
-<!-- 顶部导航栏 -->
-<header th:fragment="header" class="h-14 border-b border-gray-200 flex items-center justify-end">
-    <div class="flex items-center">
-        <div class="dropdown flex items-center m-2">
+<!-- 顶部导航栏 · DataX Web 明亮顶栏 -->
+<header th:fragment="header" class="h-14 border-b border-gray-200 flex items-center justify-between">
+    <!-- 左侧：面包屑 + 页面标题 -->
+    <div class="topbar-left">
+        <div class="topbar-crumb">
+            <i class="fa fa-home"></i>
+            <span>工作台</span>
+            <i class="fa fa-angle-right crumb-sep"></i>
+            <span id="pageCrumb">仪表盘</span>
+        </div>
+        <span class="topbar-divider"></span>
+        <span class="topbar-heading">数据集成控制台</span>
+    </div>
+
+    <!-- 右侧：状态 / 日期 / 快捷操作 / 用户 -->
+    <div class="topbar-right">
+        <span class="topbar-status" title="控制台服务运行中">
+            <span class="status-dot"></span>服务运行正常
+        </span>
+        <span class="topbar-date" id="topbarDate"></span>
+        <button class="topbar-icon-btn" type="button" onclick="uiRefreshCurrent()" title="刷新当前页面">
+            <i class="fa fa-refresh"></i>
+        </button>
+        <button id="themeToggleBtn" class="theme-toggle" type="button" title="切换深色/浅色主题">
+            <i class="fa fa-moon-o"></i><i class="fa fa-sun-o"></i>
+        </button>
+        <div class="dropdown flex items-center">
             <button class="flex items-center text-gray-500" data-toggle>
                 <i class="fa fa-user-circle user-avatar badge-primary"></i>
                 <span id="currentUser" class="md:inline font-medium ml-2"></span>
@@ -19,6 +42,8 @@
             </ul>
         </div>
     </div>
+    <!-- Wave24：严格安全模式下自动注入 CSRF 请求头（存量页面零改造） -->
+    <script th:src="@{/js/security-headers.js}"></script>
 </header>
 
 </html>

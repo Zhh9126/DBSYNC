@@ -28,6 +28,12 @@ public abstract class BatchTaskUtil {
     private static final int DEFAULT_TIMEOUT_SECONDS = 300;
 
     /**
+     * Wave30：单表全量同步可能持续数小时，等待批次时不能用 300 秒误杀。
+     * 默认 60 分钟，可通过 -Ddbdatasync.batch.awaitMinutes 调整。
+     */
+    private static final long AWAIT_TIMEOUT_MINUTES = Long.getLong("dbdatasync.batch.awaitMinutes", 60L);
+
+    /**
      * 默认线程队列大小
      */
     private static final int DEFAULT_QUEUE_SIZE = 1024;
@@ -216,6 +222,9 @@ public abstract class BatchTaskUtil {
                     function.execute(slice, executor);
                 } catch (Throwable e) {
                     logger.error("任务执行异常", e);
+                    // Wave30：失败必须上抛，否则上层（FullPuller.doTask）会把失败批次当成功
+                    // 并清空全部断点，造成缺表却无法续传。
+                    throw new IllegalStateException("批量任务执行失败: " + e.getMessage(), e);
                 }
             });
         } finally {
@@ -225,29 +234,31 @@ public abstract class BatchTaskUtil {
 
     public static <T> void executeWithAwait(List<T> rows, ExecutorService executor, Consumer<T> consumer, Logger logger) {
         List<Future<?>> futures = new ArrayList<>();
-        // 提交所有任务
+        // 提交所有任务：异常保留在 Future 中，由下面的 get 统一暴露给调用方
         for (T data : rows) {
-            futures.add(executor.submit(() -> {
-                try {
-                    consumer.accept(data);
-                } catch (Throwable e) {
-                    logger.error("任务执行异常", e);
-                }
-            }));
+            futures.add(executor.submit(() -> consumer.accept(data)));
         }
         try {
-            // 等待所有任务完成
             for (Future<?> future : futures) {
-                future.get();
+                future.get(AWAIT_TIMEOUT_MINUTES, TimeUnit.MINUTES);
             }
-        } catch (Exception e) {
-            // 线程被中断，优雅处理
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            // 取消所有未完成的任务
-            for (Future<?> f : futures) {
-                if (!f.isDone()) {
-                    f.cancel(true);
-                }
+            cancelPending(futures);
+            throw new IllegalStateException("批量任务等待被中断", e);
+        } catch (Exception e) {
+            // ExecutionException / TimeoutException：取消未完成任务并上抛，绝不静默当成功
+            cancelPending(futures);
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            logger.error("批量任务执行失败", cause);
+            throw new IllegalStateException("批量任务执行失败: " + cause.getMessage(), cause);
+        }
+    }
+
+    private static void cancelPending(List<Future<?>> futures) {
+        for (Future<?> f : futures) {
+            if (!f.isDone()) {
+                f.cancel(true);
             }
         }
     }

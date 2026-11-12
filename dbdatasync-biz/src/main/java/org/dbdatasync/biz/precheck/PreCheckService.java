@@ -69,6 +69,9 @@ public class PreCheckService {
 
     @Resource
     private ProfileComponent profileComponent;
+    @Resource
+    private org.dbdatasync.connector.base.ConnectorFactory connectorFactory;
+
 
     @Resource
     private TableGroupProfile tableGroupProfile;
@@ -229,8 +232,61 @@ public class PreCheckService {
         }
     }
 
+    /**
+     * Oracle 源增量任务前置条件检查(实测高频坑):
+     * 1. 数据库必须为 ARCHIVELOG 模式(NOARCHIVELOG 下 redo 切换后变更永久不可挖);
+     * 2. 必须开启补充日志(最小 + 主键), 否则 DML 无法归属表/owner, CDC 事件不可见。
+     * 检查失败为 ERROR(阻断启动); 无法检查(权限/连接)降级为 WARN。
+     */
+    private void checkOracleCdcPrerequisites(Context ctx, List<PreCheckIssue> issues) {
+        if (!"Oracle".equalsIgnoreCase(ctx.sourceDbType) || StringUtil.isBlank(ctx.sourceConnectorId)) {
+            return;
+        }
+        String instanceId = "precheck-" + ctx.sourceConnectorId;
+        try {
+            Connector connector = profileComponent.getConnector(ctx.sourceConnectorId);
+            if (connector == null || connector.getConfig() == null) {
+                return;
+            }
+            org.dbdatasync.sdk.connector.ConnectorInstance instance =
+                    connectorFactory.connect(instanceId, connector.getConfig(), ctx.sourceDatabase, ctx.sourceSchema);
+            if (!(instance instanceof org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance)) {
+                return;
+            }
+            org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance db =
+                    (org.dbdatasync.sdk.connector.database.DatabaseConnectorInstance) instance;
+            java.util.List<java.util.Map<String, Object>> rows = db.execute(template ->
+                    template.queryForList("SELECT LOG_MODE, SUPPLEMENTAL_LOG_DATA_MIN, SUPPLEMENTAL_LOG_DATA_PK FROM V$DATABASE"));
+            connectorFactory.disconnect(instanceId);
+            if (CollectionUtils.isEmpty(rows)) {
+                return;
+            }
+            Object logMode = rows.get(0).get("LOG_MODE");
+            Object suppMin = rows.get(0).get("SUPPLEMENTAL_LOG_DATA_MIN");
+            Object suppPk = rows.get(0).get("SUPPLEMENTAL_LOG_DATA_PK");
+            if (!"ARCHIVELOG".equalsIgnoreCase(String.valueOf(logMode))) {
+                issues.add(PreCheckIssue.error("PC120", "Oracle 归档模式未开启", ctx.taskName, "", "", "",
+                        "源库 LOG_MODE=" + logMode + "，NOARCHIVELOG 下 redo 切换后变更将永久不可挖掘",
+                        "执行: SHUTDOWN IMMEDIATE; STARTUP MOUNT; ALTER DATABASE ARCHIVELOG; ALTER DATABASE OPEN;"));
+            }
+            if (!"YES".equalsIgnoreCase(String.valueOf(suppMin)) || !"YES".equalsIgnoreCase(String.valueOf(suppPk))) {
+                issues.add(PreCheckIssue.error("PC121", "Oracle 补充日志未开启", ctx.taskName, "", "", "",
+                        "SUPPLEMENTAL_LOG_DATA_MIN=" + suppMin + "，补充日志未开启时 CDC 无法正确捕获 DML 变更",
+                        "执行: ALTER DATABASE ADD SUPPLEMENTAL LOG DATA; ALTER DATABASE ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS; 并切换一次日志"));
+            }
+        } catch (Exception e) {
+            issues.add(PreCheckIssue.warn("PC122", "Oracle CDC 前置条件无法检查", ctx.taskName, "", "", "",
+                    "检查异常: " + e.getMessage(), "请手动确认 ARCHIVELOG 与补充日志已开启(参考用户手册)"));
+            try {
+                connectorFactory.disconnect(instanceId);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     private List<PreCheckIssue> check(Context ctx) {
         List<PreCheckIssue> issues = new ArrayList<>();
+        checkOracleCdcPrerequisites(ctx, issues);
         if (CollectionUtils.isEmpty(ctx.groups)) {
             issues.add(PreCheckIssue.error("PC107", "表映射为空", ctx.taskName, "", "", "",
                     "任务未配置任何表映射，无法执行", "请先添加表映射"));

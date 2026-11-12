@@ -45,8 +45,9 @@ public enum DatabaseMigrationDetailTypeEnum {
      * 结构阶段是否已结束（含跳过）；已进入数据阶段视为结构已完成。
      */
     public boolean isSchemaPhaseDone(int status) {
+        // Wave30：失败表（status=READY）不能再算「结构阶段已完成」，否则整库迁移进度虚高
         if (this == ROW_DATA) {
-            return true;
+            return CommonTaskStatusEnum.isDone(status);
         }
         return this == TABLE_SCHEMA && CommonTaskStatusEnum.isDone(status);
     }

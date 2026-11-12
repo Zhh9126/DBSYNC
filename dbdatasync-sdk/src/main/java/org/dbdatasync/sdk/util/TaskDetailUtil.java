@@ -21,6 +21,10 @@ import java.util.stream.Collectors;
 /**
  * 任务执行明细分表(DBDataSync_task_detail)工具。
  * <p>校验/迁移结果展示字段来自连表：table_group(关联列) + meta(指标) + task_detail(载荷)。
+ * <p>超限内容外置：若已安装 {@link org.dbdatasync.sdk.storage.TaskDetailContentStore}，
+ * {@code serializeContent} 在超过 {@link #MAX_DATA_BYTES} 时把整个结构化载荷作为
+ * JSON 文本交给 store 分块外置，返回 {@code DBDS-REF:} 引用串存入 DATA 列（完整保留，
+ * 取代截断）；读取端 {@link #deserializeContent} 识别引用串并反解。未安装时保持既有截断行为。</p>
  *
  * @author 穿云
  * @version 1.0.0
@@ -38,7 +42,11 @@ public abstract class TaskDetailUtil {
 
     /**
      * 结构化内容序列化为 DATA blob 字节
-     * <p>超过 {@link #MAX_DATA_BYTES} 时优先截断 {@code content} 字段，尽量保持 JSON 可解析。
+     * <p>超过 {@link #MAX_DATA_BYTES} 时：若安装了
+     * {@link org.dbdatasync.sdk.storage.TaskDetailContentStore}，
+     * 将整个结构化载荷序列化为 JSON 文本交给 store 分块外置（返回引用串，
+     * 完整保留内容），引用串本身远小于上限直接内联；否则走既有截断路径
+     * （优先截断 {@code content} 字段，尽量保持 JSON 可解析）。</p>
      *
      * @param content 结构化字段
      * @return blob 字节，内容为空时返回 null
@@ -51,7 +59,14 @@ public abstract class TaskDetailUtil {
         if (bytes.length <= MAX_DATA_BYTES) {
             return bytes;
         }
-        // 优先截断载荷字段，保证入库且尽量可反序列化
+        org.dbdatasync.sdk.storage.TaskDetailContentStore store =
+                org.dbdatasync.sdk.storage.TaskDetailContentStore.current();
+        if (store != null) {
+            // 整体外置：JSON 文本分块入 store，DATA 列存引用串
+            String ref = store.store(toJson(content));
+            return ref.getBytes(StandardCharsets.UTF_8);
+        }
+        // 未安装 store：走既有截断路径（优先截断载荷字段，保证入库且尽量可反序列化）
         Map<String, Object> copy = new HashMap<>(content);
         Object raw = copy.get(ConfigConstant.TASK_CONTENT);
         if (raw instanceof String && StringUtil.isNotBlank((String) raw)) {
@@ -66,6 +81,10 @@ public abstract class TaskDetailUtil {
         }
         // 兜底：按字节硬截断（可能破坏 JSON，反序列化失败时返回空 Map）
         return truncateBytes(bytes, MAX_DATA_BYTES);
+    }
+
+    private static String toJson(Map<String, Object> content) {
+        return JsonUtil.objToJsonSafe(content);
     }
 
     private static byte[] toUtf8Bytes(Map<String, Object> content) {
@@ -106,6 +125,9 @@ public abstract class TaskDetailUtil {
 
     /**
      * 将 DATA blob 反序列化为结构化内容 Map
+     * <p>若安装有 {@link org.dbdatasync.sdk.storage.TaskDetailContentStore}，
+     * 且 DATA 值本身为外置引用串（{@code DBDS-REF:...}，即整条明细载荷作为
+     * 超大 JSON 被外置），先反解为完整 JSON 文本再解析。</p>
      *
      * @param dataBlob 明细 DATA 列值(byte[] 或 String)
      * @return 结构化字段，异常或为空时返回空 Map
@@ -122,6 +144,17 @@ public abstract class TaskDetailUtil {
         }
         if (json == null || json.isEmpty()) {
             return new HashMap<>();
+        }
+        // 整条载荷为外置引用串时先反解为完整 JSON 文本
+        if (json.startsWith(org.dbdatasync.sdk.storage.TaskDetailContentStore.REF_PREFIX)) {
+            org.dbdatasync.sdk.storage.TaskDetailContentStore store =
+                    org.dbdatasync.sdk.storage.TaskDetailContentStore.current();
+            if (store != null) {
+                String resolved = store.resolve(json);
+                if (resolved != null && !resolved.startsWith(org.dbdatasync.sdk.storage.TaskDetailContentStore.REF_PREFIX)) {
+                    json = resolved;
+                }
+            }
         }
         try {
             Map<String, Object> map = JsonUtil.parseMap(json);

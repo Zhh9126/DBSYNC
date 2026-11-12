@@ -176,7 +176,14 @@ public class MySQLListener extends AbstractDatabaseListener {
         snapshot.put(binlogPositionKey, String.valueOf(nextPosition));
     }
 
+    /** Wave23：当前 binlog event 的源端提交时间（epoch millis），由 InnerEventListener 写入 */
+    private volatile long currentSourceEventTimeMillis;
+
     private void trySendEvent(ChangedEvent event) {
+        // Wave23：把源端 binlog timestamp 打到位点上，供端到端复制延迟计算
+        if (event != null && currentSourceEventTimeMillis > 0 && event.getChangedOffset() != null) {
+            event.getChangedOffset().markSourceEventTime(currentSourceEventTimeMillis);
+        }
         try {
             // 如果消费事件失败，重试
             while (client.isConnected()) {
@@ -237,6 +244,13 @@ public class MySQLListener extends AbstractDatabaseListener {
         public void onEvent(Event event) {
             // ROTATE > FORMAT_DESCRIPTION > TABLE_MAP > WRITE_ROWS > UPDATE_ROWS > DELETE_ROWS > XID
             EventHeader header = event.getHeader();
+            // Wave23：binlog event header 自带源端提交时间（秒），是端到端 lag 的权威来源
+            if (header instanceof EventHeaderV4) {
+                long seconds = ((EventHeaderV4) header).getTimestamp();
+                currentSourceEventTimeMillis = seconds > 0 ? seconds * 1000L : 0L;
+            } else {
+                currentSourceEventTimeMillis = 0L;
+            }
             if (header.getEventType() == EventType.XID) {
                 refresh(header);
                 return;
