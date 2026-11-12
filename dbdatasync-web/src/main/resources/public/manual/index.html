@@ -52,7 +52,7 @@
     <div class="manual-header">
         <h1><i class="fa fa-book"></i> DBDataSync 数据同步工具 · 用户操作手册</h1>
         <p>通用数据同步中间件 · 数据迁移 / 全量同步 / 增量同步 / 整库迁移 / 数据校验订正 / 实时链路可观测 一体化平台</p>
-        <div class="meta">适用版本 <b>v2.2.1 及以上</b> ｜ 文档基线 <b>Wave31</b> ｜ 更新日期 <b>2026-11-10</b> ｜ 随功能实时同步 ｜ 本手册内置离线查看，无需联网</div>
+        <div class="meta">适用版本 <b>v2.2.1 及以上</b> ｜ 文档基线 <b>Wave31</b> ｜ 更新日期 <b>2026-11-12</b> ｜ 含 14 库型真机逐步实操（第 19 章）｜ 本手册内置离线查看，无需联网</div>
     </div>
 
     <div class="manual-wrap">
@@ -96,6 +96,17 @@
             <a href="#manual-h16">16. 常见问题 FAQ</a>
             <a href="#manual-h17">17. 离线部署、构建与升级</a>
             <a href="#manual-h18">18. 文档基线、变更记录与维护约定</a>
+            <a href="#manual-h19">19. 全功能逐步实操指引 <span class="badge-new">NEW</span></a>
+            <a class="lv2" href="#manual-h19-1">19.1 通用准备</a>
+            <a class="lv2" href="#manual-h19-2">19.2 数据同步（表级）</a>
+            <a class="lv2" href="#manual-h19-3">19.3 整库迁移</a>
+            <a class="lv2" href="#manual-h19-4">19.4 数据对比</a>
+            <a class="lv2" href="#manual-h19-5">19.5 数据血缘</a>
+            <a class="lv2" href="#manual-h19-6">19.6 迁移评估六页面逐个使用</a>
+            <a class="lv2" href="#manual-h19-7">19.7 链路健康 / 结构变更 / 告警通知</a>
+            <a class="lv2" href="#manual-h19-8">19.8 记录在哪看</a>
+            <a class="lv2" href="#manual-h19-9">19.9 记录形态边界</a>
+            <a class="lv2" href="#manual-h19-10">19.10 已知问题与规避</a>
         </div>
 
         <!-- 正文 -->
@@ -295,7 +306,7 @@
                     <li>点击任务名称进入详情，查看每张表的迁移状态（成功/失败/耗时）；</li>
                     <li>迁移完成后可用「一键数据对比」创建对比任务，全量校验一致性。</li>
                 </ol>
-                <div class="warn"><b>注意：</b>整库迁移会在目标库创建表；若目标库已存在同名表，预检测/运行时会按提示处理（遇结构冲突建议先在目标库删除旧表）。</div>
+                <div class="warn"><b>注意：</b>整库迁移会在目标库创建表；若目标库已存在同名表，预检测/运行时会按提示处理（遇结构冲突建议先在目标库删除旧表）。<b>异构迁移（如 MySQL → PG / 金仓 / Oracle / 达梦）请先手动预建目标表、只勾「同步数据」</b>：2026-11-12 真机发现「复制表结构」会生成嵌套 DDL 而失败，详见 19.3 与 19.10。</div>
 
                 <h3 id="manual-h6-1">6.1 大数据量迁移行为与调优（Wave30/31）</h3>
                 <ul>
@@ -324,11 +335,13 @@
                     <li>整库迁移任务完成后，可在【整库迁移】列表点击「一键数据对比」，按迁移任务的全部映射自动创建对比任务。</li>
                 </ol>
                 <div class="tip"><b>Wave30 大数据量行为：</b>「导出对账报告」改为<b>流式分页写出</b>：不再先把全任务明细装进内存，也不再按单条明细 200 条 / 全任务 5000 行截断；差异明细有多少条就导出多少条。反向扫描在目标表超过上限时会输出一条可见的「已跳过反向扫描」提示，结论不会被误判为一致；开启自动删除后按本页实际删除数回退翻页位置，避免边删边翻页漏行。结果分页参数已夹紧（每页最大 200 行），OFFSET 使用长整型，深分页不会溢出。</div>
+                <div class="tip"><b>快速复用（2026-11-12 实测）：</b>创建对比任务时传入 <code>mappingId</code>（同步任务）或 <code>databaseSyncTaskId</code>（整库迁移任务），平台自动复制该任务的表组，无需重新逐表配置；未配表映射直接启动会提示「任务未配置表映射，无法启动」。查看明细列表的参数是 <b><code>taskId</code></b> 而不是 <code>id</code>。逐步操作见 19.4。</div>
             </section>
 
             <section id="manual-h8">
                 <h2><i class="fa fa-sitemap"></i> 8. 数据血缘</h2>
                 <p>路径：【数据同步 → 数据血缘】。展示 表 → 表 的同步链路关系图（源库 → 源表 → 目标库 → 目标表），用于梳理数据流向、评估变更影响。任务建立/修改后自动采集，可按连接、库、表过滤查询。</p>
+                <p>点击表级连线可下钻字段映射（需 <code>mappingId + sourceTable + targetTable</code>），显示源/目标列名、类型与主键标记。血缘是配置级关系、不连业务库；2026-11-12 真机 14 个连接器自动产生 37 条边。逐步操作见 19.5。</p>
             </section>
 
             <section id="manual-h9">
@@ -343,6 +356,7 @@
                     <tr><td>超大内容外置</td><td>超过 65535 字节的内容外置为 <code>DBDS-REF</code> 引用串，支持存/取/删；块存储可在内存与文件持久化之间切换（文件方式跨重启可恢复）；Wave31 起文件存储的过期引用目录按保留期（默认 30 天，<code>dbdatasync.contentOffload.retentionDays</code>）每 6 小时自动回收，防止目录无限膨胀</td><td><code>/content-offload/store</code>、<code>/content-offload/resolve</code>、<code>/content-offload/storeConfig</code></td></tr>
                     <tr><td>DBLink 查询</td><td>探测源库 <code>all_db_links</code>，执行带 <code>@dblink</code> 的只读查询（SELECT/WITH 白名单、maxRows 限行、截断标记）</td><td><code>/dblink/links</code>、<code>/dblink/query</code></td></tr>
                 </table>
+                <p><b>六个页面逐个怎么单独用</b>（入口、必填参数、完整操作顺序、预期结果、记录位置）见 <a href="#manual-h19-6">19.6 节</a>；记录形态（哪些落 H2、哪些落文件、哪些只在内存、哪些按设计没有历史）见 <a href="#manual-h19-9">19.9 节</a>。</p>
                 <div class="warn"><b>边界：</b>切流编排给出的是状态权威与回滚预案。Wave26 起 <code>STOP_INCREMENT</code> / <code>RESUME_INCREMENT</code> 已接线真实驱动启停（<code>MappingService.start/stop</code>，幂等），<code>VERIFY_TARGET</code> 支持传 <code>connectorId + targetSql</code> 在目标库真实执行校验 SQL；但<b>流量切换（FLIP_TRAFFIC_TO_TARGET）等外部编排动作仍需部署方注入处理器或人工执行，系统不会自动切换生产流量</b>；SQL 兼容扫描是离线静态扫描，不等于真库执行结果；DBLink 查询为只读白名单通道。</div>
             </section>
 
@@ -358,7 +372,10 @@
                     <li>路径：【监控告警 → 告警通知】；支持任务失败、连接离线、任务停止、校验失败以及<b>链路健康异常</b>等类型，可配置邮件、企微、钉钉、HTTP WebHook 等渠道；</li>
                     <li><b>链路健康告警</b>由 <code>enableReplicationAlarm</code> 控制，按 <code>lagWarnSeconds</code> / <code>lagCriticalSeconds</code> / <code>failRateWarnPercent</code> 判定，同链路按 <code>healthAlarmCooldownSeconds</code>（默认 600 秒）冷却，避免告警风暴；后台每 60 秒评估一次；</li>
                     <li>配置通知渠道后在任务编辑页关联启用，异常发生时按渠道推送。</li>
+                    <li><b>渠道开关是复选框语义</b>：「参数出现即启用」。要关闭某渠道，保存表单时不要提交该 <code>enableXxx</code>；传 <code>enableHttp=false</code> 字符串仍会被判为启用，若同时 <code>httpUrl</code> 为空会报「回调HTTP地址不能为空」；</li>
+                    <li><b>离线自测</b>：在本机起一个 HTTP 接收服务（如 <code>http://127.0.0.1:18999/notify</code>），把「HTTP 回调地址」指向它，保存后点「测试」，接收端应收到 <code>{"title":"手动测试消息","content":"告警通知配置成功"}</code>；无需公网与 SMTP。仅配置落库，测试发送不写历史记录。</li>
                 </ul>
+                <div class="tip">逐步操作、渠道参数清单与离线验证方法见 <a href="#manual-h19-7">19.7.3 告警通知</a>。</div>
             </section>
 
             <section id="manual-h11">
@@ -406,6 +423,7 @@
                     <tr><td><code>POST /slow-sql/taskReport</code></td><td>慢 SQL 按任务聚合（count/avg/max/p95，Wave24）</td></tr>
                     <tr><td><code>POST /slow-sql/records</code></td><td>慢 SQL 快照（Wave25 起支持 taskId 过滤）</td></tr>
                 </table>
+                <div class="tip"><b>单独使用与记录形态：</b>打开 <code>/link-health</code> 即实时聚合，无需先建任务再「触发检测」；报告取数于 H2 任务级 Meta + 进程内观察点计数，<b>不写新记录</b>，运行时累计量重启后重新计数。死信明细来自已持久化的失败明细。逐步操作与集群/结构变更入口见 <a href="#manual-h19-7">19.7</a>。</div>
             </section>
 
             <section id="manual-h12">
@@ -707,7 +725,7 @@
                     <tr><th>项</th><th>值</th></tr>
                     <tr><td>适用版本</td><td>v2.2.1 及以上</td></tr>
                     <tr><td>功能基线</td><td><b>Wave31</b>（2026-11-10）</td></tr>
-                    <tr><td>手册更新日期</td><td>2026-11-10</td></tr>
+                    <tr><td>手册更新日期</td><td>2026-11-12</td></tr>
                     <tr><td>手册位置</td><td><code>public/manual/index.html</code>，菜单【系统管理 → 操作手册】，路径 <code>/manual</code></td></tr>
                     <tr><td>同步校验</td><td><code>python tools/check_manual_sync.py</code>（CI 的 docs-sync 任务自动执行）</td></tr>
                 </table>
@@ -727,6 +745,7 @@
                     <tr><td>Wave29</td><td>2026-11-10</td><td>离线交付包重打并补齐可运行性：启动脚本默认小堆（<code>DBS_HEAP_MIN/DBS_HEAP_MAX</code> 128m/768m 可覆盖）替代固定 3g / 3.8g、去掉强制 G1 16m region 与 verbose GC、<code>startup.sh</code> 先切到安装目录保证 H2 <code>./data</code> 落位、统一 <code>LOG_HOME</code> 与 Java 8 平台守卫；新增 <code>README-OFFLINE.md</code> 与 <code>tools/package_offline.py</code>（内嵌 JRE 8、SHA256、手册基线与关键类入包校验）；交付 <code>offline-win64</code> / <code>offline-portable</code> 两类离线包，并在全新目录用包内 JRE 实启验证登录页与内置手册；第 13.1 / 17 章同步</td></tr>
                     <tr><td>Wave31</td><td>2026-11-10</td><td>Wave30 未完成项续做与真实验证：① 分片断点隔离——分片并发读断点按 <code>组ID#s+下标</code> 分键、各分片游标/页码互不覆盖，恢复时按分片边界校验值域漂移，已完成分片跳过、未完成分片续传（见 6.1）；② JDBC 读侧默认 fetchSize 1000（<code>dbdatasync.jdbc.fetchSize</code>），大表读取不再整结果集逐行拉取；③ 外置内容块（DBDS-REF 文件存储）按保留期（<code>dbdatasync.contentOffload.retentionDays</code>，默认 30 天）每 6 小时自动回收；④ 18686 运行服务以 Wave30/31 产物重启并实测登录页/手册/链路健康/整库迁移新增页全部 200。新增回归：分片断点 5 例、过期清理 4 例、fetchSize 3 例；第 6.1 / 9 / 13.1 章同步；⑤ 发行脚本端口三重防御——根因定位为 Spring Boot relaxed binding 将工作台注入的 <code>SERVER__PORT</code>（双下划线，随机会话端口）也映射为 <code>server.port</code> 且环境变量优先级高于 conf，导致 bat 启动改绑随机端口、页面反复提示会话失效；启动脚本现自动清理 <code>SERVER_PORT</code>/<code>SERVER__PORT</code>、以命令行参数 <code>--server.port</code> 显式传入 conf 端口、端口被占自动 +1 避让（≤20 次）并打印实际端口；页面「会话过期」提示改为「登录状态已失效」并注明三种来头（服务重启 / 30 分钟超时 / 并发登录被踢），第 17.2 章同步；⑥ 匿名鉴权漏洞修复——RBAC 入口 <code>RbacPolicy.check</code> 原先仅校验 <code>isAuthenticated()</code>，而 Spring 匿名 Token 该值恒为 true，实测假 JSESSIONID 可调用任意业务接口；现显式拒绝匿名 Token，未登录访问业务接口统一 302 至登录页，会话失效检测回归正确语义（新增回归 4 例）</td></tr>
                     <tr><td>Wave30</td><td>2026-11-10</td><td>迁移链路大数据量缺陷盘点与修复：「同步数据」开关真正生效（关闭后仅结构迁移、不灌数据）、<code>threadNum</code> 接入表级并发与分片读上限并在【整库迁移 → 迁移策略】页新增 <code>readNum/batchNum/threadNum</code> 可调项；写批 latch 拒绝 / 超时兜底与结果并发合并、批量异常上抛并保留断点、游标位点结构化编码 <code>DBDS-CURSOR-V2</code>、分片 NULL 行与超大值域不漏行、整库迁移异常收尾与进度计数不再被覆盖；对账报告改流式分页导出（取消 200 条 / 5000 行截断）、反向扫描跳过可见化与删行翻页回退、切流改为「动作成功才推进相位」；Oracle BLOB/CLOB 完整读取、DBLink 连接归还、慢 SQL 有界回放、外置块 refId 改 UUID、明细队列满改限时背压；新增三项 JVM 等待参数；第 6.1 / 7 / 12.6 / 13.1 章同步</td></tr>
+                    <tr><td>Wave31 实操补充</td><td>2026-11-12</td><td>基于 14 个真实数据库端点（MySQL / PG / Kingbase / Oracle / Dameng / MongoDB / Redis，含主备与只读实例）完成全功能真机验证并同步手册：① 新增<b>第 19 章「全功能逐步实操指引」</b>——每个功能单独可照做的入口、前置条件、必填参数、完整操作顺序、预期结果，以及 19.8「记录在哪看」（同步任务 16 / 同步记录 16 / 整库迁移 12 / 数据对比 1 / 血缘 37 边 / 操作日志 635 / 链路健康 16 链路等实测条数）；② 补充 19.9 记录形态边界（H2 持久化 / 文件持久化 / 进程内存 / 按设计不产生历史）与 19.10 六项已知问题（异构自动建表嵌套 DDL、MongoDB 端到端 0 行、Redis 不支持全量读取、Oracle 物理备库不可读、重试明细页无参 500、增量 DDL 转换失败且未落账本）；③ 第 6/7/8/9/10/11 章补齐异构迁移规避、对比任务复用 <code>mappingId</code> 与 <code>taskId</code> 参数、血缘字段下钻、六页面逐步入口、告警复选框语义与离线 HTTP 自测、链路健康记录形态；④ <b>13.1 配置速查表无变化</b>——本批次未新增或修改任何系统配置项、侧边栏菜单与 REST 端点，故配置字段仍为 47/47、菜单 22/22；⑤ 文档基线保持 Wave31（未虚报新 Wave），仅更新手册日期与实操章节</td></tr>
                 </table>
                 <h3>维护约定（强制）</h3>
                 <ol>
@@ -735,7 +754,169 @@
                     <li><b>自动阻断</b>：CI 的 <code>docs-sync</code> 任务执行 <code>python tools/check_manual_sync.py</code>，检查系统配置字段、菜单项、最新 Wave 基线与报告日期是否都已写入手册；未同步即失败；</li>
                     <li><b>本地自查</b>：提交前在仓库根目录运行一次上述脚本，输出 <code>OK</code> 才算文档同步完成。</li>
                 </ol>
-                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.2.1+，文档基线 Wave31，2026-11-10 更新）—</p>
+                <p style="margin-top:14px;color:var(--text-tertiary,#94a3b8);font-size:12.5px;">— DBDataSync · 用户操作手册（v2.2.1+，文档基线 Wave31，2026-11-12 更新）—</p>
+            </section>
+
+            <section id="manual-h19">
+                <h2><i class="fa fa-check-circle"></i> 19. 全功能逐步实操指引（2026-11-12 真机验证）</h2>
+                <p>本章按「<b>一个功能单独走一遍</b>」组织，所有参数与结论均来自 14 个真实数据库端点（MySQL / PostgreSQL / Kingbase / Oracle / Dameng / MongoDB / Redis，含主备与只读实例）的实跑结果。照做即可复现，<b>不需要调用任何接口调试工具</b>——页面表单等价于下列参数；文末给出「记录在哪看」，便于核对每一步确已落库。</p>
+
+                <h3 id="manual-h19-1">19.1 通用准备（每个功能都从这里开始）</h3>
+                <ol>
+                    <li>浏览器打开平台地址（默认 <code>http://&lt;主机&gt;:18686/login.html</code>），用管理员账号登录；</li>
+                    <li>先到【连接管理 → <code>/connector/list</code>】建好源端与目标端连接器，点「连接测试」。<span class="uibox">注意</span>连接健康状态由后台每 10 秒刷新一次，刚新增就测试可能显示失败，等 10 秒或点「枚举数据库」实时验证即可；</li>
+                    <li><b>目标库的表要预先存在</b>：表级同步和异构整库迁移都不会替你凭空建表（见 19.10 已知问题）。建议先在目标库手动建好与源端同结构的空表，含主键；</li>
+                    <li>库型语义：MySQL 用「库名」；PG / 金仓用「库名 + <code>public</code> Schema」；Oracle / 达梦用「Schema（大写）」，表名也是大写；</li>
+                    <li>统一验证载荷（示例）：<code>t_order</code> 5 行中文订单、金额合计 <code>1666.60</code>，<code>t_user</code> 3 行。同步/迁移完成后直接查目标库行数与中文值，<b>不要只看平台状态</b>。</li>
+                </ol>
+                <div class="warn"><b>实测踩坑（务必看）：</b>MySQL 作为源端时，<b>不要</b>给源端填 <code>sourceSchema=public</code>。实测误填后平台生成 <code>SELECT ... FROM `public`.`t_order`</code>，MySQL 报 <code>Unknown database 'public'</code>，任务能启动但 0 行落地且不显眼。<code>targetSchema</code> 只在目标是 PG / 金仓 / Oracle / 达梦时填写。</div>
+
+                <h3 id="manual-h19-2">19.2 数据同步（表级）单独使用</h3>
+                <ol>
+                    <li>【数据同步 → <code>/mapping/list</code>】点「添加」：填驱动名称、选源连接器 + 源库、目标连接器 + 目标库；PostgreSQL / 金仓目标填 <code>targetSchema=public</code>；</li>
+                    <li>点「刷新驱动表」，源/目标表清单应出现 <code>t_order</code>、<code>t_user</code>（Oracle / 达梦显示大写 <code>T_ORDER</code>、<code>T_USER</code>）；</li>
+                    <li>「添加表映射」：源表选 <code>t_order</code>、目标表选 <code>t_order</code>，字段映射按 <code>源列|目标列</code> 逗号分隔，例如 <code>id|id,name|name,amount|amount,created_at|created_at</code>；Oracle / 达梦目标列用大写，如 <code>id|ID,name|NAME,amount|AMOUNT,created_at|CREATED_AT</code>；主键填 <code>id</code>（目标是 <code>ID</code> 就填 ID）；</li>
+                    <li>点「预检测」：<code>0</code> 条问题再继续；若报 <code>PC107 表映射为空</code> 说明上一步没配对；若报 <code>TableName not found.</code> 说明目标库里没有这张表，回去建表再刷新；</li>
+                    <li>点「启动」，到【数据同步记录 → <code>/sync-record/list</code>】看进度；用数据库客户端核对目标表 5 行、合计 1666.60、首行「订单-甲」。</li>
+                </ol>
+                <div class="tip"><b>真机结论：</b>MySQL170 → MySQL170 / PG170 / PG171 / 金仓170 / 金仓171 / Oracle171 / 达梦主库 共 7 条链路全部通过；MySQL171 只读从库作为源真实读出 500 行并落地 500 行；达梦备库（STANDBY 只读）作为源真实读出中文数据并落地。备库不能作为写入目标。</div>
+
+                <h3 id="manual-h19-3">19.3 整库迁移单独使用</h3>
+                <ol>
+                    <li>【数据同步 → 整库迁移 → <code>/database-sync/list</code>】点「添加」，填任务名称；</li>
+                    <li>添加「库映射」：源连接 + 源库、目标连接 + 目标库，并在表映射里逐张选表（异构库注意大小写，如目标 <code>T_ORDER</code>）；</li>
+                    <li>迁移策略勾选「同步数据」（<code>enableCopyData=1</code>）。<b>同构 MySQL→MySQL</b> 可同时勾「复制表结构」让平台自动建表；<b>异构（MySQL→PG / 金仓 / Oracle / 达梦）</b>请先手动建好目标表，只勾「同步数据」，原因见 19.10；</li>
+                    <li>可调 <code>readNum</code>（单次读取行数）、<code>batchNum</code>（写批大小）、<code>threadNum</code>（表级并发）；</li>
+                    <li>点「预检测」→「启动」；列表实时显示进度、已完成/总表数、错误数；点任务名进详情看逐表状态；</li>
+                    <li>完成后到目标库硬核对数据，再到 19.4 做数据对比。</li>
+                </ol>
+                <div class="tip"><b>真机结论：</b>7 个库型整库迁移全部 <code>100% / 2 张表 / 0 错误</code>，中文与金额一致。预检出现 <code>PC107 整库同步表组未配置字段映射…按同名字段自动生成</code> 属 warn 级提示，不影响同构/同名字段场景。</div>
+
+                <h3 id="manual-h19-4">19.4 数据对比单独使用</h3>
+                <ol>
+                    <li>【数据对比 → 对比任务 → <code>/validate-sync/list</code>】点「添加」；</li>
+                    <li><b>最快方式</b>：在新建表单里关联已有同步任务（<code>mappingId</code>）或整库迁移任务（<code>databaseSyncTaskId</code>），平台会自动把该任务的表组复制过来，省去重新配表映射；也可手工选源/目标连接与库；</li>
+                    <li>对比模式选 <code>full</code>（全量逐行，精确定位差异）或 <code>sample</code>（抽样快检）；</li>
+                    <li>点「启动」，再点「结果」查看每表 <code>sourceTotal / targetTotal / diffTotal / state</code>；结果明细列表用的参数是 <b><code>taskId</code></b>（不是 <code>id</code>），传错会提示「任务ID不能为空」；</li>
+                    <li>差异明细自带修复 SQL，可人工订正或开启自动订正（默认关，谨慎）。</li>
+                </ol>
+                <div class="tip"><b>真机结论：</b>复用同步任务表组后一次启动成功，<code>t_user</code> 源 3 / 目标 3 / <b>差异 0</b>，<code>t_order</code> 源 5 / 目标 5 / 差异 0。</div>
+
+                <h3 id="manual-h19-5">19.5 数据血缘单独使用</h3>
+                <ol>
+                    <li>【数据同步 → 数据血缘 → <code>/lineage/list</code>】打开即自动渲染血缘图，<b>无需手动采集</b>：每次新建/编辑同步任务或表映射时平台自动写入血缘边；</li>
+                    <li>图上的节点是连接器（库级），连线是库级 / 表级血缘；点击某条表级边可「字段下钻」，查看 <code>sourceName / sourceType / sourcePk / targetName / targetType / targetPk</code>；</li>
+                    <li>下钻需三个参数：<code>mappingId</code>、<code>sourceTable</code>、<code>targetTable</code>，页面点击时自动带出。</li>
+                </ol>
+                <div class="tip"><b>真机结论：</b>14 个连接器、37 条血缘边自动产生，字段下钻返回 4 个字段映射且主键标记正确。血缘是配置级关系，不连业务库，删除/修改任务后会重采。</div>
+
+                <h3 id="manual-h19-6">19.6 迁移评估六个页面：逐个单独使用</h3>
+                <h4>19.6.1 SQL 兼容扫描 <code>/sql-scan</code></h4>
+                <ol>
+                    <li>贴入源端 SQL 或 <code>CREATE TABLE</code> DDL，选择「源方言 / 目标方言」（如 MySQL → PostgreSQL），点「扫描」，得到语句数、风险分级与改写建议；</li>
+                    <li>「DDL 建表草稿」把源方言 DDL 转成目标方言草稿；「DDL 变更辅助」贴 <code>ALTER TABLE ...</code> 生成变更单元；</li>
+                    <li>三者都是<b>离线静态扫描</b>，不连库、不执行 DDL、<b>不产生历史记录</b>，结果只在当次页面显示。要留档请自行复制结果。</li>
+                </ol>
+                <h4>19.6.2 慢 SQL 采集 <code>/slow-sql</code></h4>
+                <ol>
+                    <li>先在「采集口径」设 <code>thresholdMillis</code>（阈值）、<code>maxRecords</code>（容量）、<code>sampleRate</code>（采样率）；<b>注意此操作会清空旧缓冲</b>，所以先配置再采集；</li>
+                    <li>采集单条 SQL：填 <code>sql</code>、<code>executeMillis</code>、<code>rows</code>，<code>source</code> 可写 <code>业务名|task=&lt;同步任务ID&gt;</code> 把慢 SQL 归属到任务；</li>
+                    <li>查看「记录」列表（可按 <code>taskId</code> 过滤）、「统计报告」（avg/max/p95/TopN）、「按任务聚合报告」；</li>
+                    <li>记录<b>追加落盘</b>到 <code>data/runtime/slow-sql.log</code>，重启后回放——这是本组里少数有持久历史的功能。</li>
+                </ol>
+                <h4>19.6.3 逻辑导入导出 <code>/logical-io</code></h4>
+                <ol>
+                    <li>行数据格式必须是 <code>rows[].columns</code>（列名数组）+ <code>rows[].values</code>（值数组），例如 <code>{"columns":["id","name"],"values":["1","订单-甲"]}</code>；直接塞 JSON 对象会报「行数据必须包含 columns 与 values 数组」；</li>
+                    <li>「导出 CSV」得 RFC4180 文本；「导入 CSV」把 CSV 解析回行数据；「导出 INSERT」再按 <code>mysql / oracle / pg</code> 方言生成 INSERT 脚本（可指定 <code>table</code>、<code>batchSize</code>）；</li>
+                    <li>推荐闭环：导出 CSV → 导入回环 → 再导出 INSERT，中文不乱码即正确。纯文本转换，<b>不连库、不落记录</b>。</li>
+                </ol>
+                <h4>19.6.4 切流编排 <code>/cutover</code></h4>
+                <ol>
+                    <li>选一个已跑完全量的同步任务，点「创建切流会话」，初始相位 <code>INIT</code>；</li>
+                    <li>按业务进度推进相位，合法顺序：<code>FULL_SYNC_DONE → INCREMENT_SYNCING → SHADOW_WRITING → VERIFYING → SWITCHING → SWITCHED</code>；也可从 <code>SHADOW_WRITING</code> 转 <code>ROLLING_BACK / FAILED</code>；非法跳转会被拒绝且状态不变；</li>
+                    <li>影子写阶段可登记配对（<code>table</code> + <code>pk</code> + 源/影子 JSON），再点「flipSafe 判定」看 <code>pairedCount / mismatchCount</code>；</li>
+                    <li>「状态」页看完整相位历史，「执行台账」看动作结果，「回滚预案」看当前相位的可回滚步骤；</li>
+                    <li>不要勾 <code>autoExecute</code> 除非已接入动作处理器：未接入时平台会明确标记 <code>simulated</code>，<b>不会真的切生产流量</b>；</li>
+                    <li>记录为<b>进程内存</b>：状态历史与执行台账重启后清空，需要留档请导出/截图。</li>
+                </ol>
+                <h4>19.6.5 超大内容外置 <code>/content-offload</code></h4>
+                <ol>
+                    <li>「存储配置」查看当前模式（<code>file</code> 文件 / <code>memory</code> 内存）与内联阈值 <code>maxInlineBytes</code>；</li>
+                    <li>「存储」贴入超阈值内容，返回 <code>DBDS-REF:&lt;refId&gt;</code> 引用串与 <code>offloaded=true</code>；</li>
+                    <li>「反解」贴回引用串逐字还原原文（中文需完全一致）；「删除」清理外置块；</li>
+                    <li>文件模式落盘在 <code>data/runtime/chunks/&lt;refId&gt;/&lt;index&gt;.chunk</code>，跨重启可恢复；<code>refId</code> 含末尾 <code>-N</code>，核对目录时用完整串，不要截断；无列表页，靠引用串反解。</li>
+                </ol>
+                <h4>19.6.6 DBLink 查询 <code>/dblink</code></h4>
+                <ol>
+                    <li>选连接器 → 点「探测 DBLink」列出 <code>all_db_links</code>（Oracle 支持；MySQL 无默认库时会提示 <code>No database selected</code>，改用带库名的 SQL 查询即可）；</li>
+                    <li>「查询」输入只读 <code>SELECT / WITH</code> 并设 <code>maxRows</code>（不传默认 500）；非只读语句会被拒绝；</li>
+                    <li>结果仅当次响应，<b>不落历史记录</b>。</li>
+                </ol>
+
+                <h3 id="manual-h19-7">19.7 链路健康 / 结构变更 / 告警通知单独使用</h3>
+                <h4>19.7.1 链路健康 <code>/link-health</code></h4>
+                <ol>
+                    <li>打开页面即自动加载健康报告（<code>totalLinks / healthyLinks / healthScore / eventsTotal / maxLagSeconds</code>）与逐链路清单；页面定时刷新；</li>
+                    <li>「死信明细」按 <code>status / event</code> 过滤失败记录，可对单条做「重放」（需 operator 及以上）；</li>
+                    <li>「集群状态」看 STANDALONE / leader / 租约；<code>/link-health/prometheus</code> 输出文本指标供抓取（受登录保护，勿直接暴露公网）；</li>
+                    <li>本页是<b>实时聚合</b>：数据来自 H2 任务级 Meta + 进程内观察点计数，<b>不写新记录</b>，运行时累计量重启后重新计数。</li>
+                </ol>
+                <h4>19.7.2 结构变更 <code>/schema-history</code></h4>
+                <ol>
+                    <li>打开「清单 / 汇总」查看表级 DDL 账本（<code>total / applied / pending / confirmed / failed / persistent / suspendedDml</code>）；</li>
+                    <li>记录的产生条件是：<b>增量（日志）同步运行中，源端发生表级 DDL</b>。全量同步不会产生记录；</li>
+                    <li>对 <code>NEEDS_TARGET_SQL</code> 的条目填目标方言 SQL 后点「确认」应用；对阻塞的表可「解除 DML 阻塞」；确认不存在的 ID 会如实提示「记录不存在或已应用」；</li>
+                    <li>账本落 <code>data/schema-history/schema-history.log</code>（JSON Lines，目录不可写时退化为内存）。</li>
+                </ol>
+                <div class="warn"><b>2026-11-12 真机发现（未修复，请注意）：</b>在 MySQL170 上以 <code>model=fullIncrement + incrementStrategy=log + enableDDL=1</code> 启动探针并执行真实 <code>ALTER TABLE ... ADD COLUMN</code>，日志证明平台<b>已捕获 DDL</b>（<code>DDLParserImpl parse</code>），但转换出的目标 SQL 错用了源库名前缀且 <code>VARCHAR (64)</code> 带多余空格，执行报 <code>bad SQL grammar</code>；异常路径也<b>没有写入结构变更账本</b>，页面仍为 0 条。异构 DDL 自动同步当前不可依赖，请人工在目标端执行 DDL。</div>
+                <h4>19.7.3 告警通知 <code>/notice</code></h4>
+                <ol>
+                    <li>勾选要启用的渠道并填必填项：HTTP 渠道填 <code>httpUrl</code>；邮件填 <code>mailAccount</code> + <code>mailCode</code>（授权码，需可达 SMTP）；企微 / 钉钉填各自 <code>webhookUrl</code>（可选 atAll / atMobiles）；</li>
+                    <li>点「保存」，再点「测试」：平台会向已启用渠道发送标题「手动测试消息」、内容「告警通知配置成功」；</li>
+                    <li><b>离线环境自测方法</b>：在本机起一个 HTTP 接收服务（如 <code>http://127.0.0.1:18999/notify</code>），把 <code>httpUrl</code> 指向它，点「测试」后接收端应收到上述 JSON；无需公网、无需 SMTP；</li>
+                    <li><b>复选框语义（重要）</b>：渠道开关是「参数出现即启用」，不是布尔串。要关闭某渠道，保存时<b>不要提交该 <code>enableXxx</code> 参数</b>；传 <code>enableHttp=false</code> 这个字符串仍会被判为启用，且此时若 <code>httpUrl</code> 为空会报「回调HTTP地址不能为空」；</li>
+                    <li>仅<b>配置</b>落 H2；「测试发送」动作本身不写历史记录，页面也没有发送历史列表。</li>
+                </ol>
+
+                <h3 id="manual-h19-8">19.8 记录在哪看（2026-11-12 真机条数）</h3>
+                <table>
+                    <tr><th>功能</th><th>页面</th><th>记录 API</th><th>实测条数</th></tr>
+                    <tr><td>连接管理</td><td><code>/connector/list</code></td><td><code>POST /connector/search</code></td><td>14</td></tr>
+                    <tr><td>数据同步任务</td><td><code>/mapping/list</code></td><td><code>POST /mapping/search</code></td><td>16</td></tr>
+                    <tr><td>数据同步记录</td><td><code>/sync-record/list</code></td><td><code>POST /sync-record/search</code></td><td>16</td></tr>
+                    <tr><td>整库迁移</td><td><code>/database-sync/list</code></td><td><code>POST /database-sync/search</code></td><td>12</td></tr>
+                    <tr><td>数据对比</td><td><code>/validate-sync/list</code></td><td><code>POST /validate-sync/search</code></td><td>1</td></tr>
+                    <tr><td>数据血缘</td><td><code>/lineage/list</code></td><td><code>GET /lineage/query</code></td><td>37 条边</td></tr>
+                    <tr><td>监控操作日志</td><td><code>/monitor</code></td><td><code>POST /monitor/queryLog</code></td><td>635</td></tr>
+                    <tr><td>运行指标</td><td><code>/monitor/page/data</code></td><td><code>POST /monitor/queryMeta</code></td><td>16</td></tr>
+                    <tr><td>链路健康</td><td><code>/link-health</code></td><td><code>POST /link-health/report</code></td><td>16 条链路</td></tr>
+                    <tr><td>慢 SQL 采集</td><td><code>/slow-sql</code></td><td><code>POST /slow-sql/records</code></td><td>4（落文件）</td></tr>
+                    <tr><td>切流编排</td><td><code>/cutover</code></td><td><code>POST /cutover/state</code></td><td>6 步相位历史</td></tr>
+                    <tr><td>结构变更</td><td><code>/schema-history</code></td><td><code>POST /schema-history/list</code></td><td>0（见 19.7.2 警示）</td></tr>
+                    <tr><td>告警通知</td><td><code>/notice</code></td><td>配置表单</td><td>配置 1 份、测试投递 1 次</td></tr>
+                </table>
+                <p>底层 H2 元库实测行数：<code>DBDATASYNC_TASK=30 / LINEAGE=39 / LOG=631 / TABLE_GROUP=49 / CONNECTOR=14 / META=79</code>。任务、表映射、血缘、操作日志都是持久化的，重启不会丢。</p>
+
+                <h3 id="manual-h19-9">19.9 记录形态边界（避免用户误以为「记录丢了」）</h3>
+                <table>
+                    <tr><th>形态</th><th>功能</th><th>重启后</th></tr>
+                    <tr><td>H2 持久化</td><td>同步任务 / 同步记录 / 整库迁移 / 数据对比 / 数据血缘 / 连接器 / 操作日志 / 告警配置</td><td>保留</td></tr>
+                    <tr><td>文件持久化</td><td>慢 SQL <code>data/runtime/slow-sql.log</code>、内容外置块 <code>data/runtime/chunks/</code>、结构变更 <code>data/schema-history/schema-history.log</code></td><td>保留</td></tr>
+                    <tr><td>进程内存</td><td>切流编排相位历史与执行台账、链路健康运行时计数器</td><td><b>清空</b></td></tr>
+                    <tr><td>不产生历史（按设计）</td><td>SQL 兼容扫描、逻辑导入导出、DBLink 查询、告警发送动作、链路健康实时报告</td><td>不适用（结果仅当次页面显示）</td></tr>
+                </table>
+
+                <h3 id="manual-h19-10">19.10 已知问题与规避（真机实测，未修复）</h3>
+                <table>
+                    <tr><th>现象</th><th>原因</th><th>规避 / 建议</th></tr>
+                    <tr><td>异构整库迁移勾「复制表结构」后自动建表失败，日志出现嵌套 <code>CREATE TABLE ... (CREATE TABLE ...)</code></td><td>目标方言把源端 <code>SHOW CREATE TABLE</code> 完整 DDL 当成列定义再包一层（PG / 金仓 / Oracle / 达梦 / H2 / DuckDB / ClickHouse / SqlServer 共 7 处）</td><td>目标库<b>手动预建表</b>，只勾「同步数据」(<code>enableCopyData=1</code>)；数据搬运链路本身已实测 7/7 通过</td></tr>
+                    <tr><td>MongoDB 同步任务启动成功但 0 行落地</td><td>半结构化（SEMI）集合可枚举、可建表映射，但端到端读取未取到数据</td><td>暂按「连接与集合枚举可用、数据同步未打通」使用；不要据此认为数据已同步</td></tr>
+                    <tr><td>Redis 无法做表级同步</td><td>连接器 <code>getTable()</code> 返回空列表，<code>reader()</code> 明确抛「Redis暂不支持全量读取」</td><td>Redis 仅用于连接管理与键值读写验证，不纳入同步/迁移链路</td></tr>
+                    <tr><td>Oracle 物理备库连接测试失败 / 读不到业务数据</td><td>备库处于 <code>MOUNTED / PHYSICAL STANDBY</code>，普通查询报 <code>ORA-01033 / ORA-01219</code>；<code>sys as sysdba</code> 只能读固定视图</td><td>属正常 DG 状态，不要作为同步源/目标；如必须只读使用，需 DBA 以 READ ONLY 打开并评估对日志应用的影响</td></tr>
+                    <tr><td>【性能监控 → 重试明细】直接点菜单报 500</td><td>页面需要 <code>metaId</code> + <code>messageId</code>，无参访问抛 <code>The meta is null.</code></td><td>从运行指标/失败明细行内带参数进入；带真实 <code>metaId</code> 访问可正常打开</td></tr>
+                    <tr><td>增量 DDL 捕获后目标端执行失败、结构变更账本仍 0 条</td><td>见 19.7.2 警示：目标 DDL 方言转换缺陷且异常路径未落账本</td><td>人工在目标端执行 DDL；不要用自动 DDL 同步承载异构变更</td></tr>
+                </table>
+                <div class="tip"><b>验证原则：</b>平台状态为「成功」不等于数据正确。每次同步/迁移后，用数据库客户端直查目标表行数、金额合计与中文值；数据对比任务可自动完成这一步。本章所有「真机结论」均按此口径核对。</div>
             </section>
 
         </div>
