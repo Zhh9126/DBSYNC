@@ -109,6 +109,13 @@ public class MonitorController extends BaseController {
 
     @GetMapping("/page/retry")
     public String page(ModelMap model, String metaId, String messageId) {
+        // Wave32：菜单/直接访问该页时没有 metaId，原实现 Assert.notNull 抛 500。
+        // 改为返回带明确指引的页面，不再让缺少参数变成服务端错误。
+        if (StringUtil.isBlank(metaId)) {
+            model.put("invalidReason",
+                    "缺少 metaId / messageId：请从「同步结果详情 → 查看事件明细」列表行的重试入口进入，不要直接访问本页。");
+            return "monitor/retry.html";
+        }
         MetaVO metaVo = monitorService.getMetaVo(metaId);
         model.put("meta", metaVo);
         model.put("mapping", mappingService.getMapping(metaVo.getTaskId()));

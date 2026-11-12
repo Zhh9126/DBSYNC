@@ -64,6 +64,12 @@ public class PersistentSlowSqlStore extends RingBufferSlowSqlStore {
     }
 
     private void append(SlowSqlRecord record) {
+        // Wave32：同一条记录同时进 H2 运行态账本（文件日志保留，双写互不影响）。
+        if (org.dbdatasync.common.ledger.RuntimeLedger.isReady()) {
+            org.dbdatasync.common.ledger.RuntimeLedger.append(
+                    org.dbdatasync.common.ledger.RuntimeLedger.KIND_SLOW_SQL,
+                    "slow-sql", encode(record));
+        }
         BufferedWriter writer = null;
         try {
             writer = new BufferedWriter(new OutputStreamWriter(

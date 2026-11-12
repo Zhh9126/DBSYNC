@@ -482,6 +482,33 @@ public class MappingServiceImpl extends BaseServiceImpl implements MappingServic
         boolean isSource = !"target".equals(type);
         List<Table> tables = getMappingTables(mapping, isSource);
 
+        // Wave32：统计任务只把行数回写到 tableGroup，mapping 级表元数据从未同步，
+        // 表清单的「预计行数」因此恒为 0（实际同步量以 /mapping/searchResult 的 successTotal 为准）。
+        // 这里用已统计的表组计数回填本次返回视图，不写库、不改同步主链路。
+        if (isSource) {
+            Map<String, Long> counted = new HashMap<>();
+            tableGroupProfile.pageScanTableGroups(id, ConfigConstant.PAGE_SIZE, page -> {
+                if (CollectionUtils.isEmpty(page)) {
+                    return;
+                }
+                for (TableGroup g : page) {
+                    if (g == null || g.getSourceTable() == null) {
+                        continue;
+                    }
+                    Table t = g.getSourceTable();
+                    if (StringUtil.isNotBlank(t.getName()) && t.getCount() > 0) {
+                        counted.put(t.getName(), t.getCount());
+                    }
+                }
+            });
+            for (Table t : tables) {
+                Long c = t == null ? null : counted.get(t.getName());
+                if (c != null) {
+                    t.setCount(c);
+                }
+            }
+        }
+
         // 3. 已映射表名集合（需要排除的）
         Set<String> mappedTableNames;
         if (excludeMapped) {

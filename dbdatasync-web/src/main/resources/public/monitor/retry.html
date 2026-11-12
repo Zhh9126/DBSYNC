@@ -7,6 +7,12 @@ xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
         <h3 class="card-title text-center">[[${meta?.mappingName}]]</h3>
     </div>
     <div class="card-body">
+        <!-- Wave32：无 metaId 直接访问本页时给出明确原因，不再是 500 或空白 -->
+        <div th:if="${invalidReason != null}" class="alert alert-warning"
+             style="margin-bottom:16px;padding:12px;border:1px solid #f0c36d;border-radius:6px;background:#fff8e6;">
+            <i class="fa fa-exclamation-triangle"></i>
+            <span th:text="${invalidReason}"></span>
+        </div>
         <!-- 驱动同步关系 -->
         <div class="grid grid-cols-3">
             <div class="flex items-center">

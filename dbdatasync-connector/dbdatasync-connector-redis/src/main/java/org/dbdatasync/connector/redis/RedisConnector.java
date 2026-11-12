@@ -109,7 +109,19 @@ public class RedisConnector extends AbstractConnector implements ConnectorServic
 
     @Override
     public List<Table> getTable(RedisConnectorInstance connectorInstance, ConnectorServiceContext context) {
-        return new ArrayList<>();
+        // Wave32：此前返回空表列表，Redis 无法作为同步源。这里把键值空间抽象为
+        // 一张半结构化表 redis_kv（redis_key 为主键），供表映射与全量读取使用。
+        Table table = new Table();
+        table.setName("redis_kv");
+        table.setType(TableTypeEnum.SEMI.getCode());
+        List<Field> fields = new ArrayList<>();
+        fields.add(new Field("redis_key", "varchar", 0, true));
+        fields.add(new Field("redis_type", "varchar", 0, false));
+        fields.add(new Field("redis_value", "text", 0, false));
+        table.setColumn(fields);
+        List<Table> tables = new ArrayList<>();
+        tables.add(table);
+        return tables;
     }
 
     @Override
@@ -128,12 +140,84 @@ public class RedisConnector extends AbstractConnector implements ConnectorServic
 
     @Override
     public long getCount(RedisConnectorInstance connectorInstance, MetaContext metaContext) {
-        return 0;
+        Jedis jedis = null;
+        try {
+            jedis = connectorInstance.borrowJedis();
+            return jedis.dbSize();
+        } catch (Exception e) {
+            throw new RedisException(e);
+        } finally {
+            RedisUtil.returnResource(connectorInstance.getConnection(), jedis);
+        }
     }
 
     @Override
     public Result reader(RedisConnectorInstance connectorInstance, ReaderContext context) {
-        throw new RedisException("Redis暂不支持全量读取");
+        // Wave32：实现零安装的全量读取（SCAN 游标 + 按类型取值），不再抛
+        // "Redis暂不支持全量读取"。按 pageIndex/pageSize 分页，不支持游标断点，
+        // 但不会把整个 keyspace 读进内存。
+        int pageSize = Math.max(context.getPageSize(), 1);
+        int pageIndex = Math.max(context.getPageIndex(), 1);
+        int from = (pageIndex - 1) * pageSize;
+        Map<String, String> command = context.getCommand();
+        String keyPrefix = command == null ? null : command.get(RedisConstant.KEY_PREFIX);
+        redis.clients.jedis.ScanParams params =
+                new redis.clients.jedis.ScanParams().count(Math.max(pageSize * 10, 100));
+        if (StringUtil.isNotBlank(keyPrefix)) {
+            params.match(keyPrefix.endsWith("*") ? keyPrefix : keyPrefix + "*");
+        }
+        List<Map<String, Object>> rows = new ArrayList<>(pageSize);
+        Jedis jedis = null;
+        try {
+            jedis = connectorInstance.borrowJedis();
+            String cursor = "0";
+            long seen = 0L;
+            do {
+                redis.clients.jedis.ScanResult<String> scan = jedis.scan(cursor, params);
+                cursor = scan.getCursor();
+                for (String key : scan.getResult()) {
+                    if (seen++ < from) {
+                        continue;
+                    }
+                    if (rows.size() >= pageSize) {
+                        break;
+                    }
+                    Map<String, Object> row = new HashMap<>();
+                    row.put("redis_key", key);
+                    row.put("redis_type", jedis.type(key));
+                    row.put("redis_value", readValue(jedis, key));
+                    rows.add(row);
+                }
+            } while (!"0".equals(cursor) && rows.size() < pageSize);
+            return new Result(rows);
+        } catch (Exception e) {
+            throw new RedisException(e);
+        } finally {
+            RedisUtil.returnResource(connectorInstance.getConnection(), jedis);
+        }
+    }
+
+    /** 按 Redis 数据类型读取值；非 string 类型序列化为 JSON 文本，单 key 失败不影响整批。 */
+    private String readValue(Jedis jedis, String key) {
+        try {
+            String type = jedis.type(key);
+            if ("hash".equals(type)) {
+                return JsonUtil.objToJson(jedis.hgetAll(key));
+            }
+            if ("list".equals(type)) {
+                return JsonUtil.objToJson(jedis.lrange(key, 0, -1));
+            }
+            if ("set".equals(type)) {
+                return JsonUtil.objToJson(jedis.smembers(key));
+            }
+            if ("zset".equals(type)) {
+                return JsonUtil.objToJson(jedis.zrange(key, 0, -1));
+            }
+            return jedis.get(key);
+        } catch (Exception e) {
+            logger.warn("read redis value failed, key={}: {}", key, e.getMessage());
+            return null;
+        }
     }
 
     @Override

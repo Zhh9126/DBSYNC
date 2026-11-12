@@ -66,6 +66,12 @@ public class FileChunkStore implements ChunkStore {
         if (payload == null) {
             throw new IllegalArgumentException("payload must not be null");
         }
+        // Wave32：外置块内容同时进 H2 运行态账本，payload 首行为块序号。
+        if (org.dbdatasync.common.ledger.RuntimeLedger.isReady()) {
+            org.dbdatasync.common.ledger.RuntimeLedger.append(
+                    org.dbdatasync.common.ledger.RuntimeLedger.KIND_CONTENT_CHUNK,
+                    refId, index + "\n" + payload);
+        }
         File dir = refDir(refId);
         if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
             throw new IllegalStateException("cannot create chunk dir: " + dir.getAbsolutePath());

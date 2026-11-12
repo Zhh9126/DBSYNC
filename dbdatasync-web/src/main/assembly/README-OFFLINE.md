@@ -12,7 +12,7 @@ DBDataSync-2.1.4/
 ├── lib/         全部运行依赖与各数据库 JDBC 驱动（MySQL/PG/Oracle/SQLServer/达梦/H2/SQLite/ClickHouse/Mongo/Kafka 等）
 ├── jre8/        （仅 offline-win64 包）内嵌 Windows 64 位 JRE 8，无需目标机安装 Java
 ├── logs/        首次启动自动创建：info.log / warn.log / error.log
-├── data/        首次启动自动创建：H2 元数据库、运行时持久化目录
+├── data/        首次启动自动创建：SQLite 元数据库 DBDataSync.db（含 -wal/-shm）、运行时持久化目录
 └── README-OFFLINE.md
 ```
 
@@ -42,16 +42,16 @@ DBDataSync-2.1.4/
 | `DBS_DIRECT_MEM` | `256m` | 堆外内存上限 |
 | `DBS_JAVA_OPTS` | 空 | 追加 JVM 参数，如 `-XX:+UseG1GC -verbose:gc` |
 | `JRE_HOME` | 自动发现 `jre8/` | 显式指定 JRE 8 目录 |
-| `DBDATASYNC_H2_PASSWORD` | 空 | H2 元数据库口令；仅在**首次建库前**设置，已有库不要中途修改 |
+| `DBDATASYNC_H2_PASSWORD` | 空 | 仅当回退使用 `type=h2` 时有效；SQLite 无口令，默认部署不用设置 |
 | `DBDATASYNC_SSL_KEYSTORE_PASSWORD` | `DBDataSync` | 启用 SSL 时的证书口令 |
 
-修改 `conf/application.properties` 可切换元数据库（默认本地 H2，无需外部数据库）、端口、线程池等；
-修改后重启生效。集群 HA、checkpoint 等需要共享目录的能力，按需按手册第 12 章配置。
+修改 `conf/application.properties` 可切换元数据库（**默认本地 SQLite** `data/DBDataSync.db`，无需外部数据库；可回退 `h2` / 切换 `mysql`）、端口、线程池等；修改后重启生效。
+**从旧版 H2 升级必须先停服并运行 `bash tools/h2_to_sqlite.sh` 做一次性数据迁移**，否则新库为空（详见手册 19.11）。集群 HA、checkpoint 等需要共享目录的能力，按需按手册第 12 章配置。
 
 ## 5. 升级与备份
 
 1. 停止服务；
-2. 备份整个 `data/` 目录与 `conf/application.properties`；
+2. **停服后**备份整个 `data/` 目录与 `conf/application.properties`（SQLite WAL 模式下需确保 `.db` / `.db-wal` / `.db-shm` 一起备份）；
 3. 解压新包到新目录，把备份的 `data/` 与 `conf/application.properties` 覆盖回去；
 4. 启动并到【配置管理】核对配置、【监控告警 → 链路健康】确认链路正常。
 

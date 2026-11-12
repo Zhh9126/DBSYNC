@@ -434,6 +434,19 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
                                 StringUtil.equals(sConnType, tConnType), executor);
                 logger.warn("表级 DDL 已登记 schema history: id={}, status={}, operation={}, sql={}",
                         entry.getId(), entry.getStatus(), tableLevel, response.getSql());
+            } else {
+                // Wave32：列级 ALTER（ADD/MODIFY COLUMN）此前完全不入账，
+                // 导致结构变更页恒 0；这里按「已处理」登记，不阻塞该表 DML。
+                org.dbdatasync.parser.ddl.SchemaHistory.current().configure(schemaHistoryDir());
+                long columnEventTime = response.getChangedOffset() == null ? 0L
+                        : response.getChangedOffset().getEventTime();
+                org.dbdatasync.parser.ddl.SchemaHistory.current().recordEvent(
+                        mapping.getMetaId(), response.getTableName(), "ALTER_COLUMN",
+                        response.getSql(),
+                        targetDDLConfig == null ? "" : targetDDLConfig.getSql(),
+                        columnEventTime,
+                        org.dbdatasync.parser.ddl.SchemaHistory.STATUS_APPLIED,
+                        "列级 DDL 已登记（目标端按 ddlSyncPolicy 处理）");
             }
             if ("add_only".equals(policy) && targetDDLConfig.getDdlOperationEnum() != null
                     && targetDDLConfig.getDdlOperationEnum() != org.dbdatasync.sdk.enums.DDLOperationEnum.ALTER_ADD) {
@@ -477,6 +490,20 @@ public class GeneralBufferActuator extends AbstractBufferActuator<WriterRequest,
             }
         } catch (Exception e) {
             logger.error(e.getMessage(), e);
+            // Wave32：DDL 执行失败也要如实入账，不能只打日志让账本一片空白。
+            try {
+                org.dbdatasync.parser.ddl.SchemaHistory.current().configure(schemaHistoryDir());
+                org.dbdatasync.parser.ddl.SchemaHistory.current().recordEvent(
+                        mapping == null ? "" : mapping.getMetaId(),
+                        response == null ? "" : response.getTableName(),
+                        "DDL_ERROR",
+                        response == null ? "" : response.getSql(),
+                        "", 0L,
+                        org.dbdatasync.parser.ddl.SchemaHistory.STATUS_FAILED,
+                        "目标端 DDL 执行失败: " + e.getMessage());
+            } catch (Exception ignored) {
+                logger.warn("persist failed schema history entry error: {}", ignored.getMessage());
+            }
         }
     }
 

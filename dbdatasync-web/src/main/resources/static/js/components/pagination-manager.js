@@ -191,11 +191,26 @@
             searchParams.pageNum = targetPage;
             searchParams.pageSize = config.pageSize;
             const pagination = this;
+            // Wave32：列表加载前先给可见占位，避免会话失效/接口异常时整片空白
+            // 被误判为「数据丢失」。
+            const $body = $(config.tableBodySelector);
+            if ($body.length && $body.children().length === 0) {
+                const cols = $body.closest('table').find('thead th').length || 5;
+                $body.html('<tr><td colspan="' + cols + '" class="text-center text-gray-400">'
+                    + '正在加载数据…</td></tr>');
+            }
             window.doPoster(config.requestUrl, searchParams, function(data) {
                 if (data.success === true) {
                     pagination.refreshPagination(data, searchParams);
                 } else {
                     window.bootGrowl('搜索异常，请重试', 'danger');
+                    const $errBody = $(config.tableBodySelector);
+                    if ($errBody.length) {
+                        const cols = $errBody.closest('table').find('thead th').length || 5;
+                        const msg = String(data.message || '请刷新页面或重新登录').replace(/[<>&"]/g, '');
+                        $errBody.html('<tr><td colspan="' + cols + '" class="text-center text-danger">'
+                            + '加载失败：' + msg + '</td></tr>');
+                    }
                 }
             });
         };

@@ -205,7 +205,77 @@ public final class SchemaHistory {
         return e;
     }
 
+    /**
+     * Wave32：登记一条「已处理完毕」的 DDL 事件（列级 ALTER / 执行失败都记账，
+     * 但不阻塞该表 DML）。此前只有 CREATE/DROP/TRUNCATE 等表级 DDL 会入账，
+     * 最常见的 ALTER TABLE ADD COLUMN 完全不留痕，结构变更页恒 0。
+     */
+    public synchronized Entry recordEvent(String metaId, String tableName, String operation,
+                                          String sourceSql, String targetSql, long sourceEventTime,
+                                          String status, String message) {
+        Entry e = new Entry();
+        e.seq = sequence.incrementAndGet();
+        e.id = "ddl-" + e.seq;
+        e.metaId = metaId == null ? "" : metaId;
+        e.tableName = tableName == null ? "" : tableName;
+        e.operation = operation == null ? "" : operation;
+        e.sourceSql = sourceSql == null ? "" : sourceSql;
+        e.targetSql = targetSql == null ? "" : targetSql;
+        e.sourceEventTime = sourceEventTime;
+        e.status = status == null ? STATUS_APPLIED : status;
+        e.message = message == null ? "" : message;
+        entries.add(e);
+        if (!STATUS_APPLIED.equals(e.status) && !STATUS_CONFIRMED.equals(e.status)) {
+            blockedTables.add(e.tableName);
+        }
+        persist(e);
+        return e;
+    }
+
+    /** Wave32：结构变更账本优先从 H2 统一账本回放（原有文件日志保持兼容）。 */
+    private volatile boolean ledgerLoaded;
+
+    private synchronized void ensureLedgerLoaded() {
+        if (ledgerLoaded) {
+            return;
+        }
+        ledgerLoaded = true;
+        if (!org.dbdatasync.common.ledger.RuntimeLedger.isReady()) {
+            return;
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        synchronized (entries) {
+            for (Entry e : entries) {
+                seen.add(e.id);
+            }
+        }
+        List<org.dbdatasync.common.ledger.RuntimeLedger.Entry> rows =
+                org.dbdatasync.common.ledger.RuntimeLedger.list(
+                        org.dbdatasync.common.ledger.RuntimeLedger.KIND_SCHEMA_HISTORY, null, 1000);
+        for (int i = rows.size() - 1; i >= 0; i--) {
+            try {
+                Map<String, Object> parsed = JsonUtil.parseMap(rows.get(i).getPayload());
+                if (parsed == null) {
+                    continue;
+                }
+                Entry e = Entry.fromMap(parsed);
+                if (e == null || seen.contains(e.id)) {
+                    continue;
+                }
+                seen.add(e.id);
+                entries.add(e);
+                sequence.accumulateAndGet(e.seq, Math::max);
+                if (!STATUS_APPLIED.equals(e.status)) {
+                    blockedTables.add(e.tableName);
+                }
+            } catch (Exception ignored) {
+                logger.warn("skip malformed runtime ledger schema history row");
+            }
+        }
+    }
+
     public List<Entry> list() {
+        ensureLedgerLoaded();
         synchronized (entries) {
             return new ArrayList<>(entries);
         }
@@ -294,13 +364,21 @@ public final class SchemaHistory {
 
     /** 追加写（每行一条完整快照，重启回放以最后一条为准） */
     private void persist(Entry e) {
+        String json = JsonUtil.objToJson(e.toMap());
+        // Wave32：结构变更统一进 H2 运行态账本；即使 historyFile 尚未配置
+        // （例如从未发生表级 DDL），也保证「所有数据都在数据库里」。
+        if (org.dbdatasync.common.ledger.RuntimeLedger.isReady()) {
+            org.dbdatasync.common.ledger.RuntimeLedger.append(
+                    org.dbdatasync.common.ledger.RuntimeLedger.KIND_SCHEMA_HISTORY,
+                    e.tableName, json);
+        }
         File file = historyFile;
         if (file == null) {
             return;
         }
         try (Writer writer = new OutputStreamWriter(
                 new FileOutputStream(file, true), StandardCharsets.UTF_8)) {
-            writer.write(JsonUtil.objToJson(e.toMap()));
+            writer.write(json);
             writer.write('\n');
         } catch (Exception ex) {
             logger.warn("persist schema history failed: {}", ex.getMessage());

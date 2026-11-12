@@ -3,11 +3,16 @@
  */
 package org.dbdatasync.biz.runtime;
 
+import org.dbdatasync.biz.cutover.CutoverManagerService;
+import org.dbdatasync.biz.health.ReplicationHealthTracker;
 import org.dbdatasync.biz.slowsql.SlowSqlService;
 import org.dbdatasync.biz.storage.OversizedContentService;
+import org.dbdatasync.common.ledger.RuntimeLedger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
@@ -37,8 +42,31 @@ public class RuntimePersistenceConfig {
     @Value("${dbdatasync.runtime.persistDir:data/runtime}")
     private String persistDir;
 
+    @Value("${dbdatasync.storage.h2.url:}")
+    private String h2Url;
+
+    @Value("${dbdatasync.storage.h2.username:sa}")
+    private String h2User;
+
+    @Value("${dbdatasync.storage.h2.password:}")
+    private String h2Password;
+
+    @Value("${dbdatasync.storage.type:h2}")
+    private String storageType;
+
+    @Value("${dbdatasync.storage.sqlite.url:}")
+    private String sqliteUrl;
+
     @PostConstruct
     public void init() {
+        // Wave32：把慢 SQL / 内容外置块 / 结构变更 / 切流编排 / 链路健康统一落到
+        // 平台当前元库（SQLite 或 H2），避免「文件分散 + 进程内存重启即丢」。
+        boolean sqlite = storageType != null && "sqlite".equalsIgnoreCase(storageType.trim());
+        String ledgerUrl = sqlite ? sqliteUrl : h2Url;
+        String ledgerUser = sqlite ? "" : h2User;
+        String ledgerPassword = sqlite ? "" : h2Password;
+        logger.info("runtime ledger target: type={}, url={}", storageType, ledgerUrl);
+        RuntimeLedger.init(ledgerUrl, ledgerUser, ledgerPassword);
         if (!persist) {
             logger.info("runtime persistence disabled (memory mode)");
             return;
@@ -52,6 +80,43 @@ public class RuntimePersistenceConfig {
         } catch (Exception e) {
             // 目录不可写时保留内存实现，不影响主流程
             logger.warn("runtime persistence unavailable, fallback to memory: {}", e.getMessage());
+        }
+    }
+
+    // Wave32：切流编排与链路健康原本只存在进程内存，重启即清空。这里按状态变化
+    // 定期把快照写入同一 H2 元库，保证运行轨迹可追溯、不随重启消失。
+    @Autowired(required = false)
+    private CutoverManagerService cutoverManagerService;
+
+    @Autowired(required = false)
+    private ReplicationHealthTracker replicationHealthTracker;
+
+    private volatile String lastSignature = "";
+
+    @Scheduled(fixedRate = 60000)
+    public void snapshotRuntimeState() {
+        if (!RuntimeLedger.isReady()) {
+            return;
+        }
+        try {
+            int sessions = cutoverManagerService == null ? 0 : cutoverManagerService.sessionCount();
+            int links = replicationHealthTracker == null ? 0 : replicationHealthTracker.allCounters().size();
+            String signature = sessions + ":" + links;
+            if (signature.equals(lastSignature)) {
+                return;
+            }
+            lastSignature = signature;
+            String payload = "{\"ts\":" + System.currentTimeMillis()
+                    + ",\"cutoverSessions\":" + sessions
+                    + ",\"healthLinks\":" + links + "}";
+            if (cutoverManagerService != null) {
+                RuntimeLedger.append(RuntimeLedger.KIND_CUTOVER, "snapshot", payload);
+            }
+            if (replicationHealthTracker != null) {
+                RuntimeLedger.append(RuntimeLedger.KIND_LINK_HEALTH, "snapshot", payload);
+            }
+        } catch (Exception e) {
+            logger.warn("runtime ledger snapshot failed: {}", e.getMessage());
         }
     }
 }

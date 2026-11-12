@@ -6,6 +6,7 @@ package org.dbdatasync.connector.sqlite;
 import org.dbdatasync.common.util.CollectionUtils;
 import org.dbdatasync.common.util.StringUtil;
 import org.dbdatasync.connector.sqlite.schema.SQLiteSchemaResolver;
+import org.dbdatasync.connector.sqlite.storage.SqliteStorageService;
 import org.dbdatasync.connector.sqlite.validator.SQLiteConfigValidator;
 import org.dbdatasync.sdk.config.DatabaseConfig;
 import org.dbdatasync.sdk.config.SqlBuilderConfig;
@@ -25,6 +26,7 @@ import org.dbdatasync.sdk.model.Table;
 import org.dbdatasync.sdk.model.ValidateSyncTask;
 import org.dbdatasync.sdk.plugin.ReaderContext;
 import org.dbdatasync.sdk.schema.SchemaResolver;
+import org.dbdatasync.sdk.storage.StorageService;
 import org.dbdatasync.sdk.util.PrimaryKeyUtil;
 
 import java.util.ArrayList;
@@ -51,6 +53,16 @@ public final class SQLiteConnector extends AbstractDatabaseConnector {
     @Override
     public String getConnectorType() {
         return "SQLite";
+    }
+
+    /**
+     * Wave32：让 dbdatasync.storage.type=sqlite 真正使用 SQLite 元库。
+     * 未覆盖时 ConnectorService 默认返回 null，StorageSupportConfiguration 会静默
+     * 回落到 H2StorageService，出现「配置切了、其实还在写 H2 文件」的假象。
+     */
+    @Override
+    public StorageService getStorageService() {
+        return new SqliteStorageService();
     }
 
     @Override

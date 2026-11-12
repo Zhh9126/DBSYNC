@@ -41,8 +41,10 @@ public class SystemConfig extends ConfigModel {
 
     /**
      * 是否记录同步成功数据（false-关闭; true-开启）
+     * Wave32：默认改为开启。此前默认 false 导致「同步结果有成功数、事件明细却暂无数据」，
+     * 用户误以为数据丢失；实际是成功明细从未写入 DBDataSync_task_detail 分表。
      */
-    private boolean enableStorageWriteSuccess;
+    private boolean enableStorageWriteSuccess = true;
 
     /**
      * 是否记录同步失败数据（false-关闭; true-开启）
@@ -56,8 +58,9 @@ public class SystemConfig extends ConfigModel {
 
     /**
      * 是否记录全量数据（false-关闭; true-开启）
+     * Wave32：默认改为开启，保证全量同步的逐行事件同样落 H2 分表。
      */
-    private boolean enableStorageWriteFull;
+    private boolean enableStorageWriteFull = true;
 
     /**
      * 是否启用水印
